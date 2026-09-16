@@ -220,6 +220,7 @@ typedef struct {
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
     // per opptegning.
     HPEN   penGrid, penUp, penDown, penCross;
+    HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brUp, brDown, brBox, brBoxEdge;
 
     // Blandede farger avhenger av fade-nivaet, sa de bygges bare naar
@@ -1392,6 +1393,64 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     SelectObject(hdc, GetStockObject(BLACK_PEN));
     SelectObject(hdc, GetStockObject(NULL_BRUSH));
 
+    // --- Siste pris: stiplet linje + aksestempel ---
+    // Staar HER med vilje: over lysene og rutenettet, under traadkorset og
+    // overlayet. Og for den tidlige returen i crosshair-blokka nedenfor -
+    // uten hover skal linja fortsatt tegnes.
+    //
+    // Fargen folger fortegnet til den momentane endringen, dP = P_t - P_t-1,
+    // altsaa siste lukkekurs mot den forrige. Det er en annen regel enn
+    // lysenes egen (close mot open i SAMME lys), og de kan derfor peke hver
+    // sin vei: et gront lys som fortsatt ligger under forrige lukkekurs gir
+    // en rod linje. Det er tilsiktet - linja svarer paa "hvor staar vi mot
+    // forrige lukking", ikke "hvordan gaar dette lyset".
+    {
+        const Candle* lastC = &ctx->candles[n - 1];
+        double lastP = lastC->close;
+        double prevP = (n >= 2) ? ctx->candles[n - 2].close : lastC->open;
+        BOOL   lastUp = (lastP >= prevP);
+
+        int yLast = top + (int)(((maxP - lastP) / range) * ch);
+
+        // Utenfor synlig prisomraade tegnes ingenting. Et stempel klemt mot
+        // kanten ville plassert prisen et sted den ikke er.
+        if (yLast >= top && yLast <= bottom) {
+            int xLast = left + (int)(slot * (vc - 1) + slot / 2.0);
+            if (xLast < left)  xLast = left;
+            if (xLast > right) xLast = right;
+
+            HPEN penLast = lastUp ? ctx->penLastUp : ctx->penLastDown;
+            HPEN hOld2 = (HPEN)SelectObject(hdc, penLast);
+            MoveToEx(hdc, xLast, yLast, NULL);
+            LineTo(hdc, right, yLast);
+            SelectObject(hdc, hOld2);
+
+            // Aksestempelet overskriver rutenettetiketten paa denne hoyden,
+            // slik at det ikke staar to tall oppi hverandre.
+            RECT rcPill = { right + 1, yLast - 8, W - 1, yLast + 8 };
+            FillRect(hdc, &rcPill, lastUp ? ctx->brUp : ctx->brDown);
+
+            // "Presis verditekst": to desimaler der de faar plass, ellers
+            // samme oppslosning som aksen. Bredden maales paa den ferdig
+            // formaterte strengen - feil #5 igjen.
+            SelectObject(hdc, ctx->hFontSmall);
+            int pillDec = 2;
+            swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
+            SIZE psz = { 0, 0 };
+            int pillAvail = (W - 1) - (right + 4) - 2;
+            if (GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &psz) &&
+                psz.cx > pillAvail) {
+                pillDec = PriceDecimals(range / 4.0);
+                swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
+            }
+
+            // Mork tekst paa den mettede flaten - CLR_TEXT ville druknet.
+            SetTextColor(hdc, CLR_BG);
+            RECT rcPillTxt = { right + 4, yLast - 8, W - 2, yLast + 8 };
+            DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+    }
+
     // --- Crosshair + hover-boks ---
     int rel = ctx->hoverIdx - vs;
     if (ctx->hoverIdx < 0 || rel < 0 || rel >= vc) return;
@@ -2265,6 +2324,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.penUp     = CreatePen(PS_SOLID, 1, CLR_UP);
     g_Ctx.penDown   = CreatePen(PS_SOLID, 1, CLR_DOWN);
     g_Ctx.penCross  = CreatePen(PS_DOT,   1, CLR_CROSS);
+    // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
+    // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
+    g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
+    g_Ctx.penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
     g_Ctx.brBg      = CreateSolidBrush(CLR_BG);
     g_Ctx.brUp      = CreateSolidBrush(CLR_UP);
     g_Ctx.brDown    = CreateSolidBrush(CLR_DOWN);
@@ -2307,6 +2370,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brUp);
     DeleteObject(g_Ctx.brDown);   DeleteObject(g_Ctx.brBox);
     DeleteObject(g_Ctx.brBoxEdge);
+    DeleteObject(g_Ctx.penLastUp);   DeleteObject(g_Ctx.penLastDown);
     if (g_Ctx.penDim)   DeleteObject(g_Ctx.penDim);
     if (g_Ctx.penX)     DeleteObject(g_Ctx.penX);
     if (g_Ctx.brDim)    DeleteObject(g_Ctx.brDim);
