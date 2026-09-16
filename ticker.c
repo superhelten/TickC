@@ -1065,6 +1065,18 @@ static int ButtonHit(const RECT* btns, int x, int y) {
     return -1;
 }
 
+// Knapperadens samlede rektangel. Avledet av ButtonLayout, ikke regnet ut paa
+// nytt - fallgruve 14 gjelder her ogsaa: invaliderer vi et annet felt enn det
+// vi tegner, blir en knapp staaende uoppdatert.
+static void ButtonStrip(int W, RECT* out) {
+    RECT b[BTN_COUNT];
+    ButtonLayout(W, b);
+    out->left   = b[0].left;
+    out->top    = b[0].top;
+    out->right  = b[BTN_COUNT - 1].right;
+    out->bottom = b[0].bottom;
+}
+
 // Felles geometri for tegning og muse-treff.
 static ChartRect ChartGeometry(int W, int H) {
     ChartRect g;
@@ -1818,6 +1830,51 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     GetClientRect(hwnd, &rc);
     int W = rc.right, H = rc.bottom;
 
+    // Hurtigsti: er ALT det skitne innenfor knapperaden, trenger vi verken
+    // DrawChart eller DrawOverlay. En hover-endring invaliderer nettopp det
+    // rektangelet; uten denne grenen ville den kostet en full opptegning, og
+    // den inkrementelle invalideringen ville bare spart den siste blitten.
+    //
+    // Overlayet er unntatt: det dimmer HELE klientflaten, headeren inkludert,
+    // saa en strimmel tegnet for seg ville faatt udimmede knapper. Og en
+    // samtidig InvalidateRect(NULL) fra animasjonsklokka unionerer med
+    // stripa, saa rcPaint blir hele flaten og vi faller ned i den trege
+    // stien av oss selv.
+    RECT strip;
+    ButtonStrip(W, &strip);
+    if (!ctx->overlayOpen &&
+        ps.rcPaint.left   >= strip.left  && ps.rcPaint.top    >= strip.top &&
+        ps.rcPaint.right  <= strip.right && ps.rcPaint.bottom <= strip.bottom) {
+
+        int sw = strip.right - strip.left, sh = strip.bottom - strip.top;
+        HDC     sDC  = CreateCompatibleDC(hdcDst);
+        HBITMAP sBmp = CreateCompatibleBitmap(hdcDst, sw, sh);
+        HBITMAP sOld = (HBITMAP)SelectObject(sDC, sBmp);
+
+        // Bakgrunnen hentes fra vannmerkebitmapen, ikke fra FillRect: da er
+        // den GARANTERT identisk med det den trege stien ville lagt der, uten
+        // at vi trenger aa vite at vannmerketeksten aldri naar opp i headeren.
+        SetViewportOrgEx(sDC, -strip.left, -strip.top, NULL);
+        if (ctx->wmValid) {
+            BitBlt(sDC, strip.left, strip.top, sw, sh,
+                   ctx->wmDC, strip.left, strip.top, SRCCOPY);
+        } else {
+            FillRect(sDC, &strip, ctx->brBg);
+        }
+        DrawButtons(ctx, sDC, W, IsZoomed(hwnd));
+        // Nullstilles for blitten: ellers ville kildepunktet (0,0) blitt
+        // tolket logisk og lest feil sted i bitmapen.
+        SetViewportOrgEx(sDC, 0, 0, NULL);
+
+        BitBlt(hdcDst, strip.left, strip.top, sw, sh, sDC, 0, 0, SRCCOPY);
+
+        SelectObject(sDC, sOld);
+        DeleteObject(sBmp);
+        DeleteDC(sDC);
+        EndPaint(hwnd, &ps);
+        return;
+    }
+
     // Dobbeltbuffer: tegn alt i minnet, blit en gang -> ingen flimmer
     HDC hdcMem = CreateCompatibleDC(hdcDst);
     HBITMAP hbm = CreateCompatibleBitmap(hdcDst, W, H);
@@ -2047,7 +2104,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                          ? -1 : ButtonHit(btns, mx, my);
                 if (bh != g_Ctx.btnHot) {
                     g_Ctx.btnHot = bh;
-                    InvalidateRect(hwnd, NULL, FALSE);
+                    // Kun knapperaden er skitten. PaintPopup har en hurtigsti
+                    // for nettopp dette rektangelet - uten den ville
+                    // invalideringen bare klippet den siste blitten, mens
+                    // hele bufferet ble bygget og grafen tegnet om.
+                    RECT strip;
+                    ButtonStrip(rc.right, &strip);
+                    InvalidateRect(hwnd, &strip, FALSE);
                 }
             }
 
