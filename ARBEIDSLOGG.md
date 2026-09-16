@@ -133,10 +133,17 @@ dekket oppgavelinja med 55 px, og krysset lå 7 px utenfor skjermkanten.
 selv. `ptMaxPosition` er relativ til *skjermens* hjørne, ikke til skrivebordet.
 Etterpå treffer maksimert vindu `rcWork` eksakt.
 
-> **Uverifisert på sekundærskjerm.** Alt er målt på en maskin med én skjerm,
-> der `rcWork` starter i `0,0` — så subtraksjonen `rcWork − rcMonitor` var
-> null og ble aldri satt på prøve. Har du to skjermer: dra panelet til den
-> andre og trykk `□` én gang. Forventet er den skjermens `rcWork` eksakt.
+> **To grener er uverifisert, begge fordi maskinen har én skjerm.** Har du
+> flere, tar disse to sjekkene et minutt til sammen:
+>
+> 1. **`ptMaxPosition` på sekundærskjerm.** `rcWork` starter i `0,0` her, så
+>    subtraksjonen `rcWork − rcMonitor` var null og ble aldri satt på prøve.
+>    Dra panelet til den andre skjermen og trykk `□`. Forventet: den
+>    skjermens `rcWork` eksakt.
+> 2. **Vernet mot frakoblet skjerm.** Faller den gjenopprettede rekta utenfor
+>    alle tilkoblede skjermer, skal `❐`-knappen sentrere vinduet i stedet for
+>    å gjenopprette det ut i intet. Maksimer på den andre skjermen, koble den
+>    fra, og trykk `❐`. Forventet: 1280×720 sentrert på den som er igjen.
 
 > `ptMaxTrackSize` settes **ikke**. Den ville klemt *manuell* skalering til én
 > skjerms arbeidsområde, så panelet ikke lenger kunne strekkes over to
@@ -216,6 +223,12 @@ To unntak, begge målt:
 |---|---|---|
 | Overlayet åpent | det dimmer **hele** klientflaten, headeren inkludert | betingelsen sjekker `!overlayOpen`, så vi tar den trege stien |
 | Animasjonsklokka går | dens `InvalidateRect(NULL)` unionerer med stripa | `rcPaint` blir hele flaten, og vi faller til den trege stien av oss selv |
+
+**Hurtigstien dekker ikke alle hover-overganger.** Knapp → knapp og knapp →
+mellomrom går gjennom den. Knapp → *ledig headerflate* gjør det ikke: den går
+via `WM_MOUSELEAVE`, som nullstiller `hoverIdx` og `overlayHot` i samme
+melding — og de påvirker chart-flaten, så full opptegning er riktig der.
+`InvalidateRect(NULL)` står altså igjen i `WM_MOUSELEAVE` med vilje.
 
 #### Pekeren under panorering
 
@@ -947,10 +960,16 @@ Hover-opptegningen er altså **16× billigere** enn før. Den andre raden er
 beviset på at animasjonsunionen virker: med klokka i gang blir `rcPaint` hele
 klientflaten, og vi faller til den trege stien av oss selv.
 
-**Hurtigstien gir piksel-identisk resultat.** Hele knapperaden (110×18 =
-1980 piksler) lest etter en tvunget full opptegning, deretter 24 hurtigsti-
-opptegninger, så lest igjen: **0 avvik av 1980**. En hurtigsti som tegner
-*nesten* likt er verre enn ingen.
+**Hurtigstien gir piksel-identisk resultat, i begge vindustilstander.** Hele
+knapperaden (110×18 = 1980 piksler) lest etter en tvunget full opptegning,
+deretter 24–32 hurtigsti-opptegninger, så lest igjen: **0 avvik av 1980** både
+ved 1280×720 (stripe `1162..1272`) og maksimert ved 3840×1552 (stripe
+`3722..3832`, der vannmerkebitmapen nettopp er bygget om). En hurtigsti som
+tegner *nesten* likt er verre enn ingen.
+
+Og hurtigstien tegner riktig glyf: hover på minimer-knappen mens vinduet er
+maksimert ga `❐` i maksimer-knappen, ikke `□`, med minimer lyst opp i
+`#161D27`.
 
 **Glyfen**, som pikselrutenett rundt knappesenteret `(W−49, 15)`:
 
@@ -1002,9 +1021,6 @@ skalering — alle grønne.
   fast, og prisen i stor font trenger resten. `POPUP_MIN_W` er 260, så det
   går an å dra panelet smalt nok til at `$75 953.38` og `+0,12 % (5t)`
   møtes. `DrawTextW` klipper, så det er trygt — bare stygt.
-- **Vernet mot frakoblet skjerm er uverifisert.** Faller den gjenopprettede
-  rekta utenfor alle tilkoblede skjermer, sentrerer `□`-knappen vinduet i
-  stedet. Maskinen har én skjerm, så grenen er aldri kjørt.
 - **Kontrollknappene har ingen tastatursnarvei** ut over `Ctrl`+`0`, `ESC`
   og `Win`+piltast. Det finnes ingen systemmeny (`Alt`+mellomrom), fordi
   vinduet ikke har `WS_SYSMENU`.
