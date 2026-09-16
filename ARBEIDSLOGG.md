@@ -10,14 +10,18 @@ kontrollknapper og nativ `HTCAPTION`-flytting. **Fase 5** la til
 tilstandsavhengig gjenopprettingsglyf, inkrementell hover-opptegning og
 firevegspeker under panorering. **Fase 6** strammet klippingen av grafen til
 `rcChart` og flyttet gjenopprettingsglyfen til 2 px forskyvning. **Fase 7**
-måler headerteksten og hever minstestørrelsen til 400×250. Se **Vinduet** under. Planer:
-`docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md` og
-`docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`. Design:
+måler headerteksten og hever minstestørrelsen til 400×250. **Fase 8** bytter
+`[ ↺ ]` mot `[ + ]`, som starter en ny instans, flytter nullstilling av zoom og
+panorering til dobbeltklikk, `R` og `ESC`, og fjerner single-instance-mutexen.
+Se **Vinduet** under. Planer:
+`docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
+`docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md` og
+`docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-Alt ligger i **én fil**, `ticker.c` (~2980 linjer). Ingen eksterne avhengigheter
+Alt ligger i **én fil**, `ticker.c` (~3150 linjer). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
 ---
@@ -30,8 +34,9 @@ cl /nologo /W4 /O2 ticker.c /link /SUBSYSTEM:WINDOWS /OUT:ticker.exe
 ```
 
 Bygger **rent på `/W4`** — hold det sånn. Målarkitektur er **x86** (matcher
-den opprinnelige exe-en). Prosessen kjører single-instance via en navngitt
-mutex, så **stopp den kjørende instansen før linking**, ellers feiler
+den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
+**stopp alle kjørende instanser før linking** — også duplikater startet med
+`[ + ]` — ellers feiler
 `LNK1104: cannot open file 'ticker.exe'`.
 
 Fotavtrykk: ~3,6 MB private bytes, ~164 KB exe. (Panelet er 1280×720 nå, mot
@@ -163,7 +168,7 @@ kant. `ButtonLayout(W, out[4])` er **eneste sannhetskilde** — tegning,
 
 | Knapp | Handling |
 |---|---|
-| `↺` | `ResetToDefaultView` — 1280×720 sentrert |
+| `+` | `SpawnInstance` — ny prosess med samme symbol, intervall og størrelse, +30, +30 px (fase 8) |
 | `–` | `ShowWindow(SW_MINIMIZE)` |
 | `□` / `❑` | `SW_MAXIMIZE` / `SW_RESTORE` etter `IsZoomed`. **Glyfen folger tilstanden:** maksimert vindu viser to overlappende rektangler |
 | `×` | `WM_CLOSE` → skjuler til systemstatusfeltet |
@@ -191,7 +196,7 @@ langt mer enn fire `LineTo`, og ville vært avhengig av at fonten *har* glyfen
 
 **Ingen fade.** Fargen skifter momentant på hover, og treffet henger på
 `btnHot`, ikke på noe fade-nivå (fallgruve 12). Hvile: glyf `#6E7681` på
-panelbakgrunn, ingen knappebakgrunn. Hover: `#161D27` bak `↺ – □`, `#C02A3E`
+panelbakgrunn, ingen knappebakgrunn. Hover: `#161D27` bak `+ – □`, `#C02A3E`
 bak `×`, med hvit glyf.
 
 **Tegnes fra `PaintPopup`, ikke fra `DrawChart`.** `DrawChart` returnerer
@@ -255,8 +260,10 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 |---|---|
 | «Avslutt Ticker» i tray-menyen | avslutter programmet |
 | Tray-klikk | fremme og aktivt → skjul; ellers vis, gjenopprett og gi fokus |
-| `Ctrl` + `0` / «Standardvisning» / `↺` | sentrer 1280×720 på skjermen vinduet står på |
-| `ESC` | skjuler til systemstatusfeltet |
+| `Ctrl` + `0` / «Standardvisning» | sentrer 1280×720 på skjermen vinduet står på |
+| Dobbeltklikk på grafen eller prisaksen | nullstiller zoom og panorering (eases) |
+| `R` | nullstiller zoom og panorering (ikke mens overlayet er åpent) |
+| `ESC` | lagvis: lukk overlayet → nullstill utsnittet → skjul til systemstatusfeltet (duplikat: avslutt) |
 | Dobbeltklikk i ledig headerflate | maksimerer / gjenoppretter |
 | `Win` + `↑` / `↓` / `←` | maksimer / gjenopprett / snap — virker uten `WS_SYSMENU` |
 
@@ -1140,13 +1147,128 @@ Tallene er fra andre gjennomløp:
 
 `/W4` rent, x86, 169 KB exe.
 
+### Fase 8 — `[ + ]`, flere instanser og nullstilling på dobbeltklikk
+
+Plan og avklarte tolkninger: `docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`.
+
+**`[ ↺ ]` er borte.** Den satte *vindusgeometrien* tilbake — det gjør
+`Ctrl`+`0` og tray-menyen fortsatt. Plassen er overtatt av `[ + ]` i samme
+enum-posisjon (`BTN_RESET` → `BTN_NEW`), så `ButtonLayout`, `ButtonHit`,
+`ButtonStrip`, `WM_NCHITTEST` og hover leser de samme fire rektanglene som
+før. Glyfen er et 7×7 plusstegn, to `LineTo` med eksklusivt sluttpunkt
+(`cx−3 → cx+4`), mot `Arc` og tre streker før.
+
+**Nullstilling av zoom og panorering** er `ResetView`: de siste 300 lysene,
+festet til høyre kant, `followLive`. Den rører ikke `dispValid`, så utsnittet
+eases tilbake som ved hjulzoom. `TogglePopup` bruker samme funksjon og setter
+`dispValid = FALSE` selv, for snap ved åpning. Tre veier inn:
+
+- **Dobbeltklikk** i `[g.left, W) × [g.top, g.bottom]` — grafen og aksemargen.
+  Krever `CS_DBLCLKS` på `BTCPopupClass`. Alt annet — knappene, og hele panelet
+  mens overlayet er åpent — faller gjennom til `WM_LBUTTONDOWN`, så andre klikk
+  i et raskt dobbeltklikk på `–`/`□`/`×` oppfører seg som før. Knappeklikket
+  er derfor trukket ut i `OnButtonClick`. Ledig headerflate er `HTCAPTION` og
+  maksimerer fortsatt.
+- **`R`**, ikke mens overlayet er åpent.
+- **`ESC`, lagvis:** overlay åpent → lukk. Ellers, `!ViewIsDefault` →
+  nullstill. Ellers → `HidePanel`.
+
+**Flere instanser.** Mutexen er fjernet. `SpawnInstance` leser
+`GetWindowRect` (eller `rcNormalPosition` når maksimert), legger til 30 px og
+starter `ticker.exe --dup x y w h sym iv` med `CreateProcessW`. Kommandolinja
+ligger i et skrivbart buffer. Går vinduet ut over arbeidsområdets høyre eller
+nedre kant, kaskaderer det tilbake til hjørnet — ellers ville knapperaden
+etter noen klikk havnet utenfor skjermen. Barnet validerer argumentene med
+samme grenser som `LoadConfig`, setter `g_isDuplicate` og åpner panelet selv
+etter at låsen og hendelsene finnes. Et **duplikat** skriver ingenting til
+registret (`SaveConfig` og `SaveGeometry` returnerer tidlig) og avslutter
+prosessen via tray-menyens egen sti når panelet lukkes (`HidePanel`).
+
+**Avvik under utførelse: første åpning viste 8 lys, ikke 300.** Funnet fordi
+proben brukte nyåpnet panel som fasit. `TogglePopup` setter `viewCount = 0`
+når bufferet er tomt, og `MergeCandles` kalte `ClampView`, som klemmer 0 opp
+til `MIN_VIEW` = 8, *før* `WorkerFetchKlines` rakk sin egen «0 →
+`DEFAULT_VIEW`». Gammelt bygg (`75da78c`) viste også «(8m)» ved første
+åpning, og det samme gjaldt etter symbolbytte. Feilen er fra fase 1, men hvert
+duplikat åpner nettopp før det har data. Rettet i `MergeCandles`: når
+utsnittet følger live og ikke er satt, blir det standardutsnittet der, før
+klemmingen. Egen commit.
+
+**Verifisert** med en probe som driver den ekte pekeren og leser med
+`PrintWindow`, med panelet satt `HWND_TOPMOST` (fallgruve 30). Tre fulle
+gjennomløp: 26/31 (før rettelsen av 8-lys-feilen, med feil fasit), 30/31 og
+29/31. Alle røde i de to siste er hover-bilder som kom for sent i normal
+tilstand rett etter åpning — se latensmålingen under tabellen. Hver påstand er
+grønn i minst ett fullt gjennomløp, og de omstridte er kjørt isolert:
+
+| Test | Resultat |
+|---|---|
+| Hover på hver kantpiksel av alle fire knapper, og én utenfor hver kant | 32/32 normal (1037×678), 32/32 maksimert (3840×1552) |
+| Hurtigsti mot full opptegning, 5 hover-tilstander × 6 runder | **0 avvik** i 30 par (1980 px hver) |
+| Glyf i hvile og hover | 13 piksler, eksakt symmetrisk 7×7, begge tilstander |
+| Ekte dobbeltklikk på grafen / på prisaksen, `R`, `ESC` lag 2 | utsnittet tilbake, **0,00 %** avvik mot fasit (zoomet: 6,45 %) |
+| `ESC` lag 1 / lag 3 | lukker overlay og beholder zoom / skjuler panelet |
+| `WM_LBUTTONDBLCLK` på `–` | minimerer fortsatt |
+| Ekte dobbeltklikk i ledig header | maksimerer fortsatt |
+| Ekte klikk på `[ + ]` | ny prosess med synlig panel på **~285 ms**, nøyaktig +30, +30, samme størrelse, i forgrunnen |
+| `×` i duplikatet | prosessen avsluttes, registret **uendret**, hovedinstansen lever |
+| `[ + ]` nær nedre høyre hjørne | duplikatet havner i arbeidsområdets hjørne (0, 0) |
+| `ESC` i standardvisning i et duplikat | prosessen avsluttes |
+| Håndtak i hvile | GDI 31 / USER 14, som gammelt bygg målt på samme måte |
+
+> **De røde var forsinkelse, ikke tegnefeil.** Hurtigsti-sammenlikningen
+> avvek to ganger med nøyaktig 468 px = én hel knapp: de to bildene hadde
+> ulik hover-tilstand, ikke ulike piksler. Isolert, med tilstanden sjekket i
+> begge bildene, ga samme test 0 avvik i 30 par (fallgruve 31). Glyftesten i
+> hover feilet én gang av samme grunn.
+>
+> **Latens fra `SetCursorPos` til riktig hover-bilde**, 40 skifter per
+> kjøring, gammelt og nytt bygg vekselvis, 2,5 s etter åpning:
+>
+> | Bygg | Median | Utfall (> 100 ms) |
+> |---|---|---|
+> | gammelt (`75da78c`) | 24 ms | **6 av 40**, alle ~2 s, feil tilstand ved tidsgrensen |
+> | nytt | 29 ms | 0 |
+> | gammelt | 25 ms | 0 |
+> | nytt | 24 ms | 1 av 40, 1,76 s, riktig til slutt |
+>
+> Utfallene finnes i begge bygg og er ikke innført i fase 8. Årsaken er ikke
+> undersøkt. Kandidater er `PrintWindow`/DWM og at den ekte pekeren konkurrerer
+> med `TrackMouseEvent` (fallgruve 35).
+
+**Opptegning.** QPC rundt `DrawButtons` i begge stier, rundt hele
+hurtigstien (DC, bitmap, blit og knapper, uten `BeginPaint`/`EndPaint`) og
+rundt headerteksten i `DrawChart`. Samme markører satt inn med skript i
+gammel (`75da78c`) og ny kode. Tre runder, gammel og ny vekselvis, 1037×678,
+hver runde 5 s hover-jiggling og 5 s `RedrawWindow`, ingen skjermfangst
+underveis:
+
+| | Før, median | **Etter, median** | Etter, min | Etter, p90 |
+|---|---|---|---|---|
+| `DrawButtons`, hover-hurtigsti | 0,0292 ms | **0,0210 ms** | 0,0124 ms | 0,0237 ms |
+| `DrawButtons`, full opptegning | 0,0252 ms | **0,0168 ms** | 0,0115 ms | 0,0252 ms |
+| Hurtigsti totalt | 0,0958 ms | **0,0835 ms** | 0,0419 ms | 0,0968 ms |
+| Headertekst | 0,1686 ms | 0,1402 ms | 0,0743 ms | 0,2129 ms |
+| **Hele headeren** (tekst + knapper, samme bilde) | 0,1956 ms | **0,1586 ms** | 0,0896 ms | 0,2295 ms |
+
+> **Mandatets budsjett var < 0,02 ms for hele headeren. Det holdes ikke, og
+> det holdt heller ikke før endringen.** Bare vektortegningen alene ligger
+> rundt budsjettet: median 0,017–0,021 ms. Plusstegnet sparte ~8 µs mot
+> sirkelpilen, konsekvent i alle tre runder. Headerteksten er uendret kode;
+> forskjellen i den raden er støy mellom runder (rundemedianer 107–239 µs).
+> Hurtigstien domineres av `CreateCompatibleDC`/`CreateCompatibleBitmap` og
+> blitten, ikke av knappene. Se «Forhåndstegnet knapperad» under
+> *Avviste forslag* for hva et bokstavelig budsjett ville krevd.
+
+`/W4` rent, x86, 174 KB exe.
+
 ---
 
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
   tråden har hentet. Alle senere åpninger har data fra bufferet umiddelbart.
-- **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0`, `↺` og
+- **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0` og
   tray-menyens «Standardvisning» setter tilbake til **1280×720** sentrert,
   klemt til arbeidsområdet om skjermen er mindre.
 - **Opptegningen holder ikke 0,46 ms, og har ikke gjort det siden panelet
@@ -1157,6 +1279,18 @@ Tallene er fra andre gjennomløp:
 - **Symbollinjas ellipse er ikke sett i drift.** Selv den lengste formen,
   med «frakoblet Ns», får plass ved 400 px. Grenen er der for DPI-skalering
   og framtidige lengre etiketter.
+- **Flere instanser deler registret.** Duplikater skriver ingenting, men
+  startes flere *hovedinstanser* for hånd (to ganger `ticker.exe`), vinner den
+  som lukkes sist. Hver instans har også sitt eget tray-ikon — et duplikat
+  forsvinner når panelet lukkes, en hovedinstans blir liggende til
+  «Avslutt Ticker».
+- **Et duplikat som skjules fra sitt eget tray-ikon blir liggende skjult**
+  (tray-klikk på et aktivt panel skjuler det, som for hovedinstansen). Det
+  avsluttes med krysset, `ESC` eller tray-menyen.
+- **`[ + ]` har ingen tastatursnarvei.**
+- **Hover-opptegningen uteblir av og til i opptil ~2 s** i en probe som flytter
+  den ekte pekeren og leser med `PrintWindow`. Sett i gammelt og nytt bygg
+  (fase 8). Ikke sett for hånd, og årsaken er ikke undersøkt.
 - **Kontrollknappene har ingen tastatursnarvei** ut over `Ctrl`+`0`, `ESC`
   og `Win`+piltast. Det finnes ingen systemmeny (`Alt`+mellomrom), fordi
   vinduet ikke har `WS_SYSMENU`.
@@ -1228,10 +1362,12 @@ Tallene er fra andre gjennomløp:
    hentingen fortsetter å lykkes. Skal du bryte linja på en app som *allerede
    kjører*, må du blokkere IP-en i brannmuren. Hosts-fila virker bare hvis du
    starter appen etterpå.
-10. **Én navngitt mutex, ett vindusklassenavn.** Skal du kjøre et
-    instrumentert testbygg side om side med den ekte appen, må du endre både
-    mutexnavnet og vindusklassen — ellers avslutter testbygget seg selv, eller
-    `FindWindow` treffer feil prosess.
+10. **Flere prosesser deler vindusklassenavn.** Mutexen er borte (fase 8),
+    så et testbygg starter fint side om side med den ekte appen. Men alle
+    instanser har `BTCPopupClass` og `BTCTickerWindowClass`, og de deler
+    registernøkkelen. Filtrer vinduer på prosess-id
+    (`GetWindowThreadProcessId`), aldri bare på klassenavn. Fase 7 og eldre
+    nevner «eget mutexnavn» — det gjaldt før fase 8.
 11. **Les `GetWindowRect` rett før du fanger skjermbildet.** Vinduet kan ha
     flyttet eller endret størrelse siden sist. (Auto-skjul-problemet som
     gjorde dette til en plage i fase 2 er borte med OS-rammen — `pinned`
@@ -1347,6 +1483,26 @@ Tallene er fra andre gjennomløp:
     hele bildet ~0,85 ms, og maksimert ~9,5 ms. Mål alltid før og etter i
     samme kjøring, vekselvis, og ikke mens en probe tar skjermbilder
     samtidig: `PrintWindow` gjorde hver runde merkbart tregere.
+38. **`WM_LBUTTONDBLCLK` kommer aldri uten `CS_DBLCLKS`** på vindusklassen —
+    stille. Og når den *er* satt, blir andre klikk i hvert raske dobbeltklikk
+    en `DBLCLK` i stedet for `WM_LBUTTONDOWN`, overalt i klientflaten. Alt som
+    reagerer på klikk, og som ikke skal nullstille visningen, må få
+    dobbeltklikket også — ellers spiser knappene annethvert raske klikk.
+39. **`viewCount == 0` er ikke «vis alt» etter `ClampView`.** `GetView` tolker
+    0 som hele bufferet, men `ClampView` klemmer 0 opp til `MIN_VIEW`. Et
+    utsnitt som skal bli standard når data kommer, må settes *før* klemmingen.
+    Se fase 8.
+40. **Et nyåpnet panel er ingen fasit for standardvisning.** Ta referansen
+    etter en eksplisitt nullstilling, og se på bildet før du tror på et avvik
+    i prosent: 5 % forskjell i grafflaten var 8 lys mot 300.
+41. **Bash-verktøyets heredoc spiser backslash** i dette oppsettet, også med
+    `<<'EOF'`. `'\\'` ble én backslash, og en `rep()` som skulle matche
+    `L"Global\\..."` fant ingenting. Skriv skript med Write-verktøyet og kjør
+    fila.
+42. **`rcNormalPosition` er arbeidsområde-koordinater, ikke skjerm.** De er
+    like så lenge oppgavelinja står nederst eller til høyre. `SpawnInstance`
+    bruker `GetWindowRect` for et vanlig vindu og faller til
+    `rcNormalPosition` bare når vinduet er maksimert.
 
 ---
 
