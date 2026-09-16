@@ -1,6 +1,6 @@
 # BTC Ticker — arbeidslogg
 
-Status per 16.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
+Status per 17.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
 del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
 indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
@@ -13,15 +13,19 @@ firevegspeker under panorering. **Fase 6** strammet klippingen av grafen til
 måler headerteksten og hever minstestørrelsen til 400×250. **Fase 8** bytter
 `[ ↺ ]` mot `[ + ]`, som starter en ny instans, flytter nullstilling av zoom og
 panorering til dobbeltklikk, `R` og `ESC`, og fjerner single-instance-mutexen.
+**Fase 9** legger til `--desktop-mode`, der grafflaten ligger i skrivebordet
+bak ikonene som barn av WorkerW.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
-`docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md` og
-`docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`. Design:
+`docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
+`docs/superpowers/plans/2026-09-16-ticker-ny-instans.md` og
+`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-Alt ligger i **én fil**, `ticker.c` (~3150 linjer). Ingen eksterne avhengigheter
+All kode ligger i **én fil**, `ticker.c` (~3350 linjer). Ved siden av ligger
+`ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
 ---
@@ -1266,6 +1270,128 @@ underveis:
 
 `/W4` rent, x86, 174 KB exe.
 
+### Fase 9 — skrivebordsmodus (`--desktop-mode`)
+
+Plan, forundersøkelse og avvik:
+`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`. Utviklet på
+grenen `desktop-mode` (tre commits) og flettet inn med `--no-ff`.
+
+**Hva den gjør.** `ticker.exe --desktop-mode` (eneste argument) starter uten
+panel i systemstatusfeltet og legger grafflaten inn i skrivebordet: barn av
+WorkerW, under `SHELLDLL_DefView` (ikonene), over hele primærskjermen. Musa og
+tastaturet går til skrivebordet. Samme `BTCPopupClass`, `PopupProc` og
+`PaintPopup` som panelet. Bare opprettelsen er annerledes:
+
+- `TogglePopup` lager vinduet med `WS_POPUP` alene og kaller
+  `AttachToDesktop` *før* `hPopup` publiseres. Ingen `SquareCorners`,
+  `PlacePopupInitially` eller `ForceForeground`. `SW_SHOWNA`.
+- `FindDesktopWorkerW` sender `0x052C` (`0xD,1` og `0,0`) med
+  `SendMessageTimeoutW`, 1 s og `SMTO_ABORTIFHUNG`. Den tar WorkerW som
+  barn av Progman (24H2), og ellers den klassiske søsken-WorkerW via
+  `EnumWindows`.
+- `AttachToDesktop`: `WS_POPUP` → `WS_CHILD`, `SetParent`, **deretter**
+  `WS_EX_LAYERED | WS_EX_TRANSPARENT` og `SetLayeredWindowAttributes(255,
+  LWA_ALPHA)`, og til slutt `SetWindowPos(HWND_BOTTOM)` med
+  `SM_CXSCREEN`×`SM_CYSCREEN`. Origo regnes om med `MapWindowPoints`.
+- `WM_NCHITTEST` → `HTTRANSPARENT`. `DrawButtons` hoppes over.
+- `SaveGeometry` skriver ingenting. Tray: venstreklikk gjør ingenting, og
+  menyen har bare «Avslutt Ticker».
+- `WM_NCDESTROY` i `PopupProc` nuller `hPopup` og `animRunning` hvis flaten
+  forsvinner uten at vi ba om det, og starter `TIMER_EMBED_ID` (1 s).
+  `TaskbarCreated` legger ikonet inn igjen (i begge modi) og bygger flaten på nytt.
+
+**Manifestet er det som gjør flaten synlig.** Forundersøkelsen står i
+planen. Kort fortalt: på 26100 blir et vanlig GDI-barn av WorkerW (eller
+Progman) aldri synlig, fordi Progman har `WS_EX_NOREDIRECTIONBITMAP`. Et
+lagdelt barn blir synlig, men bare når **begge** disse er oppfylt:
+`supportedOS` Windows 8+ i manifestet (uten det er exstilen 0), og
+`SetLayeredWindowAttributes` kalt *etter* `SetParent`. `WS_EX_LAYERED` er altså
+ikke et valg mellom to måter å slippe musa gjennom. Uten den vises ingenting.
+
+**Shell-treet, verifisert** med en probe som leser vindustreet fra utsiden
+(`EnumChildWindows`, `GetParent`, `GetWindow`, `GetWindowLong`,
+`GetLayeredWindowAttributes`, `WindowFromPoint`):
+
+| Kontroll | Resultat |
+|---|---|
+| Forelder | `WorkerW` (Explorer-pid) |
+| WorkerW sin forelder / flatens rot | Progman / Progman |
+| Z-orden i Progman | `SHELLDLL_DefView` > `WorkerW` |
+| Z-orden i WorkerW | flaten er siste barn (`HWND_BOTTOM`) |
+| Stil / exstil | `0x54000000` (`WS_CHILD`, ingen `WS_POPUP`/`WS_THICKFRAME`) / `0x00080020` (`LAYERED`, `TRANSPARENT`) |
+| Lag | alfa 255, `LWA_ALPHA` |
+| Rekt | 0,0 3840×1600 = `SM_CXSCREEN`×`SM_CYSCREEN` |
+| Synlige toppnivåvinduer (knapp i oppgavelinja) | 0 |
+| `WindowFromPoint` på 27 synlige skrivebordspunkter | 27× `SysListView32`, **0** treff på flaten |
+| `WM_NCHITTEST` på header, kryss, venstre kant og graf | −1/−1/−1/−1 (`HTTRANSPARENT`) |
+| Knapperaden | én farge, ingen glyfer |
+| Skjermbilde | lysene synlige mellom og bak ikonene, pris øverst til venstre |
+| Avslutt via tray-stien | prosessen borte, tapetet tilbake, ingen rester |
+| `TaskbarCreated` postet | flaten revet ned (0 etter 300 ms), ny flate i WorkerW etter ~1 s, 13/14 over grønne |
+
+> Den fjortende etter `TaskbarCreated` var `WindowFromPoint`, med **0**
+> synlige skrivebordspunkter: et Chrome-vindu dekket da hele den delen av
+> skjermen hvor skrivebordet ellers var synlig. `WM_NCHITTEST` (−1 overalt) er
+> uavhengig av det. Explorer er **ikke** startet på nytt for alvor.
+
+**Vanlig modus med manifestet**, nytt bygg mot master, samme `--dup`-geometri:
+stil `0x94070000` og exstil `0x00000100` i begge. Toppnivå, samme rekt, samme
+treff-test (`HTCAPTION`/`HTCLIENT`/`HTLEFT`/`HTCLIENT`), og knapperaden
+**0 avvik av 3600 piksler** med `PrintWindow`.
+
+**Opptegning.** Samme QPC-markører ble satt inn med skript i master
+(`084f724`) og i nytt bygg. Total er fra før `BeginPaint` til etter
+`EndPaint` i den trege stien. Tegning er fra `CreateCompatibleDC` til
+`DeleteDC` og ligger 0,03–0,06 ms under total i alle rader. Skrivebordsmodus
+ved 1280×720 er et målebygg der `DM_W`/`DM_H` overstyrer flatens størrelse,
+så forankringen kan sammenliknes med samme pikselmengde. Fire runder, seks
+konfigurasjoner vekselvis. Hver runde: 5 s etter start, deretter 5 s med
+`InvalidateRect` hvert 16. ms fra en annen prosess. Ingen skjermfangst
+underveis:
+
+| Konfig | n | **Median** | Min | p90 | Rundemedianer |
+|---|---|---|---|---|---|
+| master, vanlig 1280×720 | 838 | **1,94 ms** | 0,92 | 2,68 | 1,79 / 2,11 / 1,83 / 2,29 |
+| ny, vanlig 1280×720 | 795 | **1,89 ms** | 0,82 | 2,60 | 2,09 / 1,89 / 1,94 / 1,84 |
+| ny, skrivebord 1280×720 | 705 | **2,24 ms** | 0,79 | 2,70 | 1,85 / 2,40 / 1,91 / 2,44 |
+| master, vanlig 3840×1600 | 741 | **13,36 ms** | 10,79 | 14,87 | 12,86 / 13,66 / 13,51 / 13,14 |
+| ny, vanlig 3840×1600 | 925 | **13,46 ms** | 10,67 | 14,86 | 12,58 / 13,29 / 14,56 / 13,10 |
+| ny, skrivebord 3840×1600 | 705 | **13,49 ms** | 10,68 | 14,74 | 13,40 / 12,61 / 13,72 / 14,05 |
+
+> **Mandatets < 0,85 ms holdes ikke i noen modus, og uendret master holder
+> det heller ikke i dag.** Tallet i *Kjente begrensninger* (~0,85 ms ved
+> 1280×720) er målt under andre forhold. I denne kjøringen gikk fire andre
+> `ticker.exe` med åpne paneler. Bare de raskeste enkeltbildene er under
+> 0,85 ms. **Forankringen koster ikke målbart ved full størrelse:** 13,49 mot
+> 13,46 ms, med rundemedianer som overlapper. Ved 1280×720 er skrivebordsmodus
+> 0,35 ms tregere i median, men også her overlapper rundemedianene
+> (1,85–2,44 mot 1,84–2,09). Det som faktisk koster, er størrelsen: 6,9 ganger
+> så mange piksler gir ~7 ganger tiden. Tidligere målt maksimert: ~9,5 ms ved
+> 3840×1552.
+
+**Minne og håndtak i hvile.** Ikke-instrumenterte bygg. Målt 15 s etter
+start, deretter fem avlesninger med 2 s mellomrom, to runder.
+`PrivateMemorySize64` og `GetGuiResources`:
+
+| Konfig | Private bytes | GDI | USER | Kjernehåndtak |
+|---|---|---|---|---|
+| master, vanlig 1280×720 | 3,86–4,00 MB | 33–38 | 14–18 | 366–370 |
+| **ny, vanlig 1280×720** | **3,59 MB** (alle 10) | **31** (alle 10) | **14** (alle 10) | 358–360 |
+| **ny, skrivebord 3840×1600** | **3,36–3,42 MB** | **30** (alle 10) | **6** (alle 10) | 323 |
+
+> **Skrivebordsmodus ligger under mandatets ~3,53 MB og 31/14.** Vanlig modus
+> ligger på 3,59 MB, som «~3,6 MB» under *Bygg*. Masters rader er **ikke i
+> hvile**: GDI 33–38 og USER opptil 18 er tellingen midt i en opptegning
+> (fallgruve 27). Det åpne panelet fikk hover-trafikk under målingen, så de
+> tallene sammenliknes ikke. At en flate på 3840×1600 ikke bruker mer privat
+> minne enn panelet, stemmer med at dobbeltbufferet lages og slettes i hvert
+> bilde, og med at kompatible bitmaper ikke telles i prosessens private
+> bytes. Vannmerkebitmapen er det eneste som lever mellom bildene. USER 6 mot
+> 14: flaten får ingen musemeldinger, og det finnes verken peker- eller
+> hover-tilstand å holde på.
+
+`/W4` rent, x86, 177 KB exe.
+
 ---
 
 ## Kjente begrensninger
@@ -1311,6 +1437,22 @@ underveis:
   datahenting klokka på nytt, fordi det levende lyset kan flytte Y-målet:
   målt **23 tikk på 30 sekunder**, mot 1800 om den hadde gått kontinuerlig.
   Den dør altså mellom hentingene — dette er ikke en lekkasje.
+- **Skrivebordsmodus: ekte omstart av Explorer er ikke testet.** Stien
+  (`WM_NCDESTROY` → timer, `TaskbarCreated` → ny flate) er kjørt med postet
+  `TaskbarCreated`, ikke med en WorkerW som faktisk forsvant. Om Windows
+  river ned et barn fra en annen prosess når forelderen dør, er ikke målt.
+  Begge tilfellene er håndtert.
+- **Skrivebordsmodus: den klassiske WorkerW-grenen er ikke kjørt.** Maskinen
+  har 24H2-treet, der WorkerW er barn av Progman.
+- **Skrivebordsmodus dekker bare primærskjermen**, og bare riktig ved 100 %.
+  Prosessen er DPI-uvitende, mens Explorer ikke er det. Ved høyere skalering
+  er både størrelse og skarphet utestet.
+- **Skrivebordsmodus kobler input-køene sammen.** Et barn av et vindu i en
+  annen prosess får Windows til å koble trådenes input (implisitt
+  `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
+  Nettverket går på egen tråd, så UI-tråden gjør bare opptegning.
+- **Skrivebordsmodus kan ikke bytte symbol eller intervall.** Overlayet nås
+  ikke. Det som står i registret fra vanlig modus, brukes.
 - **Over $999 999** klippes ikonteksten (4 sifre får ikke plass på 16 px).
   Trygt — opptegningen er bundet sjekket.
 - **Historikken er «hva panelet har sett».** Nyåpnet: 5 timer. Åpent en
@@ -1507,6 +1649,26 @@ underveis:
     like så lenge oppgavelinja står nederst eller til høyre. `SpawnInstance`
     bruker `GetWindowRect` for et vanlig vindu og faller til
     `rcNormalPosition` bare når vinduet er maksimert.
+43. **PowerShell sender `$null` som `""` til en P/Invoke-`string`.**
+    `FindWindow("Progman", $null)` ga 0, mens `FindWindow("Progman",
+    "Program Manager")` fant vinduet: den første leter etter et vindu med
+    *tom* tittel. Bruk `[NullString]::Value`. Dette er trolig hele forklaringen
+    på fallgruve 25.
+44. **Et vanlig barnevindu under WorkerW blir usynlig på 24H2, og ingenting
+    feiler.** `SetParent` lykkes, `GetParent` stemmer, `IsWindowVisible` er
+    `TRUE`, `WM_PAINT` kommer, og tapetet ligger likevel øverst. Flaten må være
+    lagdelt, med `SetLayeredWindowAttributes` kalt *etter* `SetParent`, og
+    exe-en må ha `supportedOS` Windows 8+ i manifestet. En tilstandsprobe
+    beviser ingenting her. Sjekk piksler på skjermen, der skrivebordet faktisk
+    er synlig.
+45. **`WindowFromPoint`-tester av skrivebordet krever at skrivebordet er
+    synlig.** Brukerens vinduer flytter seg mellom to kjøringer. Tell hvor
+    mange punkter som har Progman som rot, og behandle 0 som «ikke testet»,
+    ikke som grønt eller rødt.
+46. **`0x052C` endrer skrivebordet til alle.** Meldingen lager en WorkerW som
+    blir liggende etter at prosessen er avsluttet. Det er ufarlig, og tapetet
+    ser likt ut, men treet er ikke det samme som før første kjøring. En probe
+    som ser «før»-tilstanden, må kjøre før noe har sendt meldingen.
 
 ---
 
