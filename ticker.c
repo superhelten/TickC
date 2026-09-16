@@ -73,6 +73,18 @@
 #define PAD_L            10
 #define PAD_R            54
 #define HEADER_H         44
+
+// Kontrollknapper i headeren. Ultrakompakt: 26x18 er nok til en 9 px glyf
+// med luft rundt, og lar headerens 44 px fortsatt baere to tekstlinjer.
+#define BTN_W            26
+#define BTN_H            18
+#define BTN_GAP          2
+#define BTN_TOP          6
+#define BTN_MARGIN_R     8
+// Samlet bredde knapperaden opptar fra hoyre kant, inkludert margen.
+// DrawChart krymper headertekstens rektangel med denne, ellers ville den
+// hoyrestilte prosenten ligget rett under krysset.
+#define BTN_STRIP_W      (BTN_MARGIN_R + 4 * BTN_W + 3 * BTN_GAP)
 #define PAD_B            10
 
 // Palett (matcher tray-ikonet)
@@ -85,6 +97,8 @@
 #define CLR_CROSS        RGB(0x55, 0x5F, 0x6E)
 #define CLR_BOX          RGB(0x16, 0x1D, 0x27)
 #define CLR_BOXEDGE      RGB(0x33, 0x3D, 0x4B)
+#define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)   // rod bakgrunn paa krysset
+#define CLR_BTNHOT       RGB(0xFF, 0xFF, 0xFF)   // glyf paa rod bakgrunn
 #define CLR_WATERMARK    RGB(0x15, 0x19, 0x1F)   // CLR_BG + ~3 %
 // Vannmerkets fonthoyde = klemt(chart-hoyde / 5, 32, 120), grensene i
 // logiske piksler.
@@ -989,6 +1003,32 @@ static COLORREF Blend(COLORREF a, COLORREF b, int t) {
 
 static BOOL PtInRect2(const RECT* r, int x, int y) {
     return (x >= r->left && x < r->right && y >= r->top && y < r->bottom);
+}
+
+// Kontrollknappene i headeren. En ren funksjon av bredden, uten tilstand -
+// tegning, WM_NCHITTEST, hover og klikk leser alle denne. Leser to av dem
+// ulike kilder, treffer brukeren en annen knapp enn den som lyser.
+// Rekkefolge fra venstre: gjenopprett standardvisning, minimer, maksimer,
+// lukk. Krysset lengst til hoyre, der Windows har vent oyet til det.
+typedef enum { BTN_RESET = 0, BTN_MIN, BTN_MAX, BTN_CLOSE, BTN_COUNT } BtnId;
+
+static void ButtonLayout(int W, RECT out[BTN_COUNT]) {
+    int right = W - BTN_MARGIN_R;
+    for (int i = BTN_COUNT - 1; i >= 0; --i) {
+        out[i].right  = right;
+        out[i].left   = right - BTN_W;
+        out[i].top    = BTN_TOP;
+        out[i].bottom = BTN_TOP + BTN_H;
+        right = out[i].left - BTN_GAP;
+    }
+}
+
+// Hvilken knapp peker musa paa? -1 utenfor alle.
+static int ButtonHit(const RECT* btns, int x, int y) {
+    for (int i = 0; i < BTN_COUNT; ++i) {
+        if (PtInRect2(&btns[i], x, y)) return i;
+    }
+    return -1;
 }
 
 // Felles geometri for tegning og muse-treff.
