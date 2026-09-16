@@ -454,7 +454,14 @@ static void ResetToDefaultView(HWND hwnd) {
 
     // Var vinduet maksimert, maa det gjenopprettes forst - ellers ville
     // SetWindowPos skrevet en storrelse som OS-et overstyrer ved restore.
-    if (IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+    //
+    // IsIconic hoerer med av samme grunn, og av en til: et minimert vindu er
+    // fortsatt WS_VISIBLE, saa IsWindowVisible er TRUE og tray-menyens
+    // "Standardvisning" hopper over TogglePopup. Uten dette satte
+    // SetWindowPos bare den gjenopprettede geometrien mens vinduet ble
+    // staaende minimert - menypunktet gjorde ingenting synlig. Maalt etter at
+    // minimer-knappen gjorde den stien lett aa naa.
+    if (IsZoomed(hwnd) || IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
 
     HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = { sizeof(MONITORINFO) };
@@ -1997,6 +2004,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             GetClientRect(hwnd, &rc);
             ChartRect g = ChartGeometry(rc.right, rc.bottom);
 
+            // Knappe-hover. Maa staa etter TrackMouseEvent-armeringen over
+            // (fallgruve 13) og for overlay- og panoreringsgrenene, som
+            // begge returnerer tidlig.
+            //
+            // Mens overlayet er apent skal ingen knapp lyse: den kan heller
+            // ikke klikkes, og en lysende knapp som ikke svarer er verre enn
+            // ingen.
+            {
+                RECT btns[BTN_COUNT];
+                ButtonLayout(rc.right, btns);
+                int bh = g_Ctx.overlayOpen ? -1 : ButtonHit(btns, mx, my);
+                if (bh != g_Ctx.btnHot) {
+                    g_Ctx.btnHot = bh;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
+
             // Sperren staar etter TrackMouseEvent-armeringen over. Returnerte
             // vi for den, sluttet WM_MOUSELEAVE a fyre og crosshairet ville
             // blitt staaende etter at musa forlot vinduet.
@@ -2114,6 +2138,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             g_Ctx.trackingMouse = FALSE;
             g_Ctx.hoverIdx      = -1;
             g_Ctx.overlayHot    = -1;   // ellers blir en rad staaende framhevet
+            // Fyrer ogsaa naar pekeren gaar fra en knapp (HTCLIENT) ut i
+            // ledig headerflate (HTCAPTION): den forlater klientomraadet uten
+            // aa forlate vinduet. Uten dette blir knappen staaende opplyst.
+            g_Ctx.btnHot        = -1;
             StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -2232,6 +2260,38 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             RECT rc;
             GetClientRect(hwnd, &rc);
             int dx = GET_X_LPARAM(lParam), dy = GET_Y_LPARAM(lParam);
+            // Knappene. Etter overlayet - forste klikk lukker overlayet, ogsaa
+            // naar det treffer en knapp - og for panoreringen, som uansett
+            // bare gjelder chart-flaten.
+            {
+                RECT btns[BTN_COUNT];
+                ButtonLayout(rc.right, btns);
+                int bh = ButtonHit(btns, dx, dy);
+                if (bh >= 0) {
+                    switch (bh) {
+                        case BTN_RESET:
+                            ResetToDefaultView(hwnd);
+                            break;
+                        case BTN_MIN:
+                            ShowWindow(hwnd, SW_MINIMIZE);
+                            break;
+                        case BTN_MAX:
+                            // Geometrien lagres for vi maksimerer.
+                            SaveWindowPlacement(hwnd);
+                            ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+                            break;
+                        case BTN_CLOSE:
+                            // WM_CLOSE, ikke DestroyWindow: den eksisterende
+                            // handleren lagrer geometri og skjuler til
+                            // systemstatusfeltet. Tickeren er et
+                            // tray-program.
+                            SendMessageW(hwnd, WM_CLOSE, 0, 0);
+                            break;
+                    }
+                    return 0;
+                }
+            }
+
             ChartRect gg = ChartGeometry(rc.right, rc.bottom);
             if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= gg.bottom) {
                 // Start panorering. SetCapture sikrer at vi faar museslipp
