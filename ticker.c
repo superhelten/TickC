@@ -1016,13 +1016,21 @@ static void SyncDisp(AppContext* ctx) {
     GetView(ctx, &vs, &vc);
     ctx->dispStart = (double)vs;
     ctx->dispCount = (vc > 0) ? (double)vc : 1.0;
-    if (ctx->candleCount > 0 && vc > 0) {
-        PriceRange(ctx, vs, vc, &ctx->dispMin, &ctx->dispMax);
-    } else {
-        ctx->dispMin = 0.0;
-        ctx->dispMax = 1.0;
-    }
     ctx->dispEvictedSeen = ctx->evictedTotal;
+
+    // Med tomt buffer finnes det ingen prisakse a synkronisere mot. Markerer
+    // vi oss som gyldige her, eases dispMin/dispMax fra [0, 1] opp til det
+    // ekte spennet naar dataene kommer - altsaa en Y-akse som glir opp fra
+    // null i et halvt sekund etter hvert symbolbytte. Vi blir staaende
+    // ugyldige i stedet, saa forste bilde MED data snapper.
+    if (ctx->candleCount <= 0 || vc <= 0) {
+        ctx->dispMin   = 0.0;
+        ctx->dispMax   = 1.0;
+        ctx->dispValid = FALSE;
+        return;
+    }
+
+    PriceRange(ctx, vs, vc, &ctx->dispMin, &ctx->dispMax);
     ctx->dispValid = TRUE;
 }
 
