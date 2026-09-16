@@ -388,6 +388,34 @@ static int IconTextWidth(const char* s) {
     return total;
 }
 
+// Velger divisor og antall desimaler slik at den FERDIG FORMATERTE strengen
+// faar plass paa 16 px. Terskler paa selve prisen fanger ikke tilfellet der
+// "%.1f" runder 99950 opp til "100.0" - det er bredden som teller. Se feil #5
+// i ARBEIDSLOGG.md.
+static void FormatIconPrice(double price, char* out, size_t cb) {
+    struct { double div; const char* fmt; } cand[] = {
+        { 1.0,       "%.2f" },
+        { 1.0,       "%.1f" },
+        { 1.0,       "%.0f" },
+        { 1000.0,    "%.1f" },
+        { 1000.0,    "%.0f" },
+        { 1000000.0, "%.1f" },
+        { 1000000.0, "%.0f" },
+    };
+    int n = (int)(sizeof(cand) / sizeof(cand[0]));
+    for (int i = 0; i < n; ++i) {
+        char tmp[16];
+        snprintf(tmp, sizeof(tmp), cand[i].fmt, price / cand[i].div);
+        if (IconTextWidth(tmp) <= 16) {
+            strcpy_s(out, cb, tmp);
+            return;
+        }
+    }
+    // Ingen kandidat passer: klipp heller enn a vise ingenting. Opptegningen
+    // i RenderMicroFontIcon er bundet sjekket.
+    snprintf(out, cb, "%.0f", price / 1000000.0);
+}
+
 // argb: fargen sifrene tegnes med. Dempes naar forbindelsen er borte, slik
 // at ikonet forteller at tallet ikke lenger er ferskt.
 static HICON RenderMicroFontIcon(const char* str, unsigned int argb) {
@@ -722,18 +750,13 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
 // vi kan gjenbruke prisen vi allerede har, i stedet for a hente den paa nytt.
 static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
     if (price <= 0.0) return;
-    swprintf_s(ctx->fullPriceStr, 64, L"BTC/USDT: $%.2f%s", price,
-               stale ? L" (frakoblet)" : L"");
+    swprintf_s(ctx->fullPriceStr, 64, L"%s: $%.2f%s",
+               SYMBOLS[ctx->symIdx].label, price, stale ? L" (frakoblet)" : L"");
 
-    // "75.8" = 4 glyfer = noyaktig 16px. Dropper desimalen naar den ikke
-    // faar plass ("104"). Malingen ma skje PA den ferdig formaterte
-    // strengen, ikke pa en terskel: %.1f runder 99950-99999 opp til
-    // "100.0", som er 21px og ville blitt klippet.
+    // Divisor og desimaler velges etter bredden paa den ferdig formaterte
+    // strengen, ikke etter en terskel paa prisen. Se FormatIconPrice.
     char iconStr[16];
-    snprintf(iconStr, sizeof(iconStr), "%.1f", price / 1000.0);
-    if (IconTextWidth(iconStr) > 16) {
-        snprintf(iconStr, sizeof(iconStr), "%.0f", price / 1000.0);
-    }
+    FormatIconPrice(price, iconStr, sizeof(iconStr));
 
     // Dempede siffer naar tallet ikke lenger er ferskt. Gronn 0xFF00FF66
     // blandet ned mot bakgrunnen gir en synlig, men udramatisk forskjell.
