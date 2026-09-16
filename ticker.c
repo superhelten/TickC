@@ -942,19 +942,23 @@ static ChartRect ChartGeometry(int W, int H) {
 }
 
 // Hvilket lys peker musa paa? Returnerer absolutt indeks, -1 utenfor.
-// Brukes bade av WM_MOUSEMOVE og av zoomen, slik at crosshairet folger
-// utsnittet selv naar musa staar stille.
+// MAA lese de samme disp-verdiene som DrawChart. Leser den ene maalet og den
+// andre visningen, peker crosshairet paa feil lys midt i animasjonen - det er
+// feil #7 fra loggen i ny drakt.
 static int HitCandle(const AppContext* ctx, const ChartRect* g, int mx, int my) {
-    int vs, vc;
-    GetView(ctx, &vs, &vc);
-    if (vc <= 0 || g->cw <= 0) return -1;
+    if (ctx->dispCount <= 0.0 || g->cw <= 0) return -1;
+    if (ctx->candleCount <= 0) return -1;
     if (mx < g->left || mx >= g->right || my < g->top || my > g->bottom) return -1;
 
-    double slot = (double)g->cw / (double)vc;
-    int rel = (int)((mx - g->left) / slot);
-    if (rel < 0)   rel = 0;
-    if (rel >= vc) rel = vc - 1;
-    return vs + rel;
+    double slot = (double)g->cw / ctx->dispCount;
+    if (slot <= 0.0) return -1;
+    int idx = (int)(ctx->dispStart + (double)(mx - g->left) / slot);
+
+    // Bundet mot candleCount, ikke mot vs + vc: under animasjonen kan
+    // visningen henge utenfor maalutsnittet.
+    if (idx < 0) idx = 0;
+    if (idx >= ctx->candleCount) idx = ctx->candleCount - 1;
+    return idx;
 }
 
 // Antall desimaler paa prisaksen velges fra AVSTANDEN mellom etikettene, ikke
@@ -1403,9 +1407,20 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     int cw = g.cw, ch = g.ch;
     if (cw <= 0 || ch <= 0) return;
 
-    double minP, maxP;
-    PriceRange(ctx, vs, vc, &minP, &maxP);
+    // Kalles under laas, saa evictedTotal kan leses direkte.
+    ApplyEviction(ctx);
+    if (!ctx->dispValid) SyncDisp(ctx);
+
+    // Tegningen leser VISNINGEN. Maalet (vs, vc) brukes bare til spennteksten
+    // i headeren og til a regne ut hva visningen skal ease MOT - og det siste
+    // skjer i WM_TIMER, ikke her.
+    double dStart = ctx->dispStart;
+    double dCount = ctx->dispCount;
+    if (dCount < 1.0) dCount = 1.0;
+
+    double minP = ctx->dispMin, maxP = ctx->dispMax;
     double range = maxP - minP;
+    if (range < 1e-9) range = 1.0;
 
     // --- Rutenett + prisetiketter ---
     HPEN hOldPen = (HPEN)SelectObject(hdc, ctx->penGrid);
@@ -1425,18 +1440,29 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     SelectObject(hdc, hOldPen);
 
     // --- Candlesticks ---
-    double slot = (double)cw / (double)vc;
+    double slot = (double)cw / dCount;
     int bodyW = (int)(slot * 0.62);
     if (bodyW < 1)  bodyW = 1;
     if (bodyW > 18) bodyW = 18;   // hindrer klumpete lys ved full innzoom
 
+    // Med dStart = 142,7 finnes det halve lys i begge kanter. Klippingen
+    // hindrer at de blor ut i prisaksen og headeren. MAA gjenopprettes for
+    // aksetekstene og chromet tegnes - de ligger utenfor chart-flaten.
+    IntersectClipRect(hdc, left, top, right + 1, bottom + 1);
 
+    // Lokka gaar fortsatt over SYNLIGE lys, ikke over hele historikken:
+    // i1 - i0 er dCount + 1 avrundet. Ytelseskarakteristikken fra fase 1
+    // staar.
+    int i0 = (int)floor(dStart);
+    int i1 = (int)ceil(dStart + dCount);
+    if (i0 < 0) i0 = 0;
+    if (i1 > n) i1 = n;
 
-    for (int i = 0; i < vc; ++i) {
-        Candle* c = &ctx->candles[vs + i];
+    for (int i = i0; i < i1; ++i) {
+        Candle* c = &ctx->candles[i];
         int up = (c->close >= c->open);
 
-        int cx     = left + (int)(slot * i + slot / 2.0);
+        int cx     = left + (int)(((double)i - dStart + 0.5) * slot);
         int yHigh  = top + (int)(((maxP - c->high)  / range) * ch);
         int yLow   = top + (int)(((maxP - c->low)   / range) * ch);
         int yOpen  = top + (int)(((maxP - c->open)  / range) * ch);
@@ -1455,6 +1481,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         if (yBot - yTop < 1) yBot = yTop + 1; // doji -> minst 1px
         Rectangle(hdc, cx - bodyW / 2, yTop, cx - bodyW / 2 + bodyW, yBot);
     }
+
+    SelectClipRgn(hdc, NULL);
 
     SelectObject(hdc, GetStockObject(BLACK_PEN));
     SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -1481,7 +1509,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         // Utenfor synlig prisomraade tegnes ingenting. Et stempel klemt mot
         // kanten ville plassert prisen et sted den ikke er.
         if (yLast >= top && yLast <= bottom) {
-            int xLast = left + (int)(slot * (vc - 1) + slot / 2.0);
+            int xLast = left + (int)(((double)(n - 1) - dStart + 0.5) * slot);
             if (xLast < left)  xLast = left;
             if (xLast > right) xLast = right;
 
@@ -1518,11 +1546,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     }
 
     // --- Crosshair + hover-boks ---
-    int rel = ctx->hoverIdx - vs;
-    if (ctx->hoverIdx < 0 || rel < 0 || rel >= vc) return;
+    // Bundet mot den SYNLIGE flaten, ikke mot maalutsnittet - de faller fra
+    // hverandre midt i en animasjon.
+    if (ctx->hoverIdx < 0 || ctx->hoverIdx >= n) return;
+    double hrel = (double)ctx->hoverIdx - dStart;
+    if (hrel < 0.0 || hrel >= dCount) return;
 
     const Candle* hc = &ctx->candles[ctx->hoverIdx];
-    int hx = left + (int)(slot * rel + slot / 2.0);
+    int hx = left + (int)((hrel + 0.5) * slot);
     int hy = ctx->hoverY;
     if (hy < top) hy = top;
     if (hy > bottom) hy = bottom;
@@ -1706,6 +1737,7 @@ static void ApplyConfigChoice(AppContext* ctx, HWND hwnd, int hit) {
 
     ctx->hoverIdx = -1;
     ctx->wmValid  = FALSE;   // vannmerket viser forrige symbol/intervall
+    ctx->dispValid = FALSE;  // nytt buffer: ingenting a ease fra
     // SetEvent staar utenfor laasen. Den er ikke PostMessage, men samme regel
     // gjelder av samme grunn: ikke hold laasen over noe som vekker den andre
     // traden.
@@ -1843,10 +1875,18 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     ClampView(&g_Ctx);
                     g_Ctx.followLive =
                         (g_Ctx.viewStart + g_Ctx.viewCount >= g_Ctx.candleCount);
+                    // Dra-panorering eases IKKE i X. Fingeren og grafen maa
+                    // henge sammen; eased dra foles treigt, ikke mykt.
+                    // Y-aksen eases fortsatt - den skal gli naar nye topper
+                    // og bunner kommer inn i utsnittet.
+                    g_Ctx.dispStart = (double)g_Ctx.viewStart;
+                    g_Ctx.dispCount = (double)((g_Ctx.viewCount > 0)
+                                               ? g_Ctx.viewCount : g_Ctx.candleCount);
                     g_Ctx.hoverIdx = HitCandle(&g_Ctx, &g, mx, my);
                     g_Ctx.hoverY   = my;
                 }
                 LeaveCriticalSection(&g_Ctx.lock);
+                StartAnim(hwnd);   // Y-aksen kan ha nytt maal
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
@@ -1916,6 +1956,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             LeaveCriticalSection(&g_Ctx.lock);
 
+            StartAnim(hwnd);   // maalet flyttet seg; visningen skal ease dit
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -1960,6 +2001,49 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                                               ANIM_TAU_CHROME, 0.5);
                     if ((int)(before + 0.5) != (int)(g_Ctx.overlayF + 0.5)) redraw = TRUE;
                     if (g_Ctx.overlayF != ovlTarget) settled = FALSE;
+                }
+
+                // View- og Y-akse-easing. Maalet leses under laas; selve
+                // interpolasjonen skjer utenfor, paa UI-eide felter.
+                //
+                // Terskelen er en kvart piksel omregnet til den enheten som
+                // eases - derfor trengs chart-geometrien her.
+                {
+                    RECT rcE;
+                    GetClientRect(hwnd, &rcE);
+                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom);
+
+                    int tvs = 0, tvc = 0, tn = 0;
+                    double tMin = 0.0, tMax = 1.0;
+                    EnterCriticalSection(&g_Ctx.lock);
+                    ApplyEviction(&g_Ctx);
+                    tn = g_Ctx.candleCount;
+                    GetView(&g_Ctx, &tvs, &tvc);
+                    if (tn > 0 && tvc > 0) PriceRange(&g_Ctx, tvs, tvc, &tMin, &tMax);
+                    LeaveCriticalSection(&g_Ctx.lock);
+
+                    if (tn > 0 && tvc > 0 && g_Ctx.dispValid &&
+                        gE.cw > 0 && gE.ch > 0) {
+                        double dc = (g_Ctx.dispCount > 1.0) ? g_Ctx.dispCount : 1.0;
+                        double snapX = SNAP_PX * dc / (double)gE.cw;
+                        double snapY = SNAP_PX * (tMax - tMin) / (double)gE.ch;
+                        if (snapX <= 0.0) snapX = 1e-9;
+                        if (snapY <= 0.0) snapY = 1e-9;
+
+                        struct { double* v; double t; double snap; } eases[4] = {
+                            { &g_Ctx.dispStart, (double)tvs, snapX },
+                            { &g_Ctx.dispCount, (double)tvc, snapX },
+                            { &g_Ctx.dispMin,   tMin,        snapY },
+                            { &g_Ctx.dispMax,   tMax,        snapY },
+                        };
+                        for (int e = 0; e < 4; ++e) {
+                            if (*eases[e].v == eases[e].t) continue;
+                            *eases[e].v = AnimStep(*eases[e].v, eases[e].t, dt,
+                                                   ANIM_TAU_VIEW, eases[e].snap);
+                            redraw = TRUE;
+                            if (*eases[e].v != eases[e].t) settled = FALSE;
+                        }
+                    }
                 }
 
                 // Stale-telleren. Klokka maa ga mens vi er frakoblet, men
@@ -2243,6 +2327,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->overlayOpen = FALSE;   // overlayet skal aldri sta apent ved apning
     ctx->overlayF    = 0.0;
     ctx->overlayHot  = -1;
+    ctx->dispValid   = FALSE;   // panelet skal apne ferdig, ikke gli paa plass
     PositionPopup(ctx->hPopup);
     ctx->shownTick = GetTickCount64();
     ShowWindow(ctx->hPopup, SW_SHOWNA);
@@ -2309,7 +2394,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_Ctx.hPopup && IsWindowVisible(g_Ctx.hPopup)) {
                 // Klokka maa ga mens vi er frakoblet, ellers fryser
                 // sekundtelleren i undertittelen.
-                if (stale) StartAnim(g_Ctx.hPopup);
+                // Nye lys kan flytte Y-maalet, og frakoblet maa telleren ga.
+                StartAnim(g_Ctx.hPopup);
                 InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
             }
             return 0;
