@@ -91,6 +91,7 @@
 #define BTN_GAP          2
 #define BTN_TOP          6
 #define BTN_MARGIN_R     8
+#define SPAWN_OFFSET     30    // [ + ]: ny instans forskyves saa mye ned og til hoyre
 // Knapperadens venstre kant leses fra ButtonStrip, ikke fra en egen
 // breddekonstant - DrawChart maaler headeren mot den.
 //
@@ -290,6 +291,11 @@ static int g_savedPanelW = 0;   // panelstorrelse fra registret, 0 = ubrukt
 static int g_savedPanelH = 0;
 static int g_savedPanelX = 0;   // settes av LoadConfig, GEOM_UNSET = ubrukt
 static int g_savedPanelY = 0;
+// Startet via [ + ]. Et duplikat skriver aldri til registret - verken
+// geometri eller symbol - og avslutter prosessen naar panelet lukkes.
+// Registret er hovedinstansens hukommelse; ellers ville den som lukkes sist
+// bestemt hvor neste oppstart legger panelet.
+static BOOL g_isDuplicate = FALSE;
 static char s_httpBuf[98304];    // 300 lys gir ~50 KB svar
 static Candle s_incoming[SEED_COUNT];
 
@@ -416,6 +422,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
 }
 
 static void SaveConfig(const AppContext* ctx) {
+    if (g_isDuplicate) return;
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
                         KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
@@ -428,7 +435,7 @@ static void SaveConfig(const AppContext* ctx) {
 }
 
 static void SaveGeometry(int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0 || g_isDuplicate) return;
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
                         KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
@@ -1059,9 +1066,11 @@ static BOOL PtInRect2(const RECT* r, int x, int y) {
 // Kontrollknappene i headeren. En ren funksjon av bredden, uten tilstand -
 // tegning, WM_NCHITTEST, hover og klikk leser alle denne. Leser to av dem
 // ulike kilder, treffer brukeren en annen knapp enn den som lyser.
-// Rekkefolge fra venstre: gjenopprett standardvisning, minimer, maksimer,
-// lukk. Krysset lengst til hoyre, der Windows har vent oyet til det.
-typedef enum { BTN_RESET = 0, BTN_MIN, BTN_MAX, BTN_CLOSE, BTN_COUNT } BtnId;
+// Rekkefolge fra venstre: ny instans, minimer, maksimer, lukk. Krysset
+// lengst til hoyre, der Windows har vent oyet til det. [ + ] tok plassen til
+// gjenopprett-standardvisning-knappen i samme enum-posisjon, saa geometrien,
+// WM_NCHITTEST og hover-indeksene er uendret.
+typedef enum { BTN_NEW = 0, BTN_MIN, BTN_MAX, BTN_CLOSE, BTN_COUNT } BtnId;
 
 static void ButtonLayout(int W, RECT out[BTN_COUNT]) {
     int right = W - BTN_MARGIN_R;
@@ -1861,21 +1870,16 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         int g  = 4;   // halv glyfbredde: 9x9 piksler totalt
 
         switch (i) {
-            case BTN_RESET: {
-                // Sirkelpil. Arc gaar mot klokka SETT PAA SKJERMEN - maalt,
-                // ikke antatt: start 3 og slutt 12 ga en bue i ovre hoyre
-                // kvadrant. Vi starter derfor paa 12 og slutter paa 2, som
-                // er ~300 grader med et gap oppe til hoyre. En 90-graders
-                // bue leses som en tilfeldig strek, ikke som "gjenopprett".
-                Arc(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1,
-                         cx,     cy - g,      // start: 12
-                         cx + 3, cy - 2);     // slutt: ca. 2
-                // Pilspiss i gapet, paa buens startende.
-                MoveToEx(hdc, cx - 3, cy - g - 2, NULL);
-                LineTo(hdc, cx + 1, cy - g);
-                LineTo(hdc, cx - 3, cy - g + 2);
+            case BTN_NEW:
+                // Plusstegn, 7x7 rundt senterpikselen: x og y i [-3, +3].
+                // LineTo tegner ikke sluttpunktet, derfor +4 - det er det
+                // som gjor korset symmetrisk. 7 og ikke 9 som de andre: et
+                // 9x9 pluss veier optisk tyngre enn krysset ved siden av.
+                MoveToEx(hdc, cx - 3, cy, NULL);
+                LineTo(hdc, cx + 4, cy);
+                MoveToEx(hdc, cx, cy - 3, NULL);
+                LineTo(hdc, cx, cy + 4);
                 break;
-            }
             case BTN_MIN:
                 MoveToEx(hdc, cx - g, cy + 3, NULL);
                 LineTo(hdc, cx + g + 1, cy + 3);
@@ -2058,6 +2062,144 @@ static void ApplyConfigChoice(AppContext* ctx, HWND hwnd, int hit) {
     SetEvent(ctx->hWakeEvent);
     SaveConfig(ctx);
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// Zoom og panorering tilbake til standardutsnittet: de siste DEFAULT_VIEW
+// lysene, festet til hoyre kant og fulgt live. Rorer ikke dispValid, saa
+// visningen eases tilbake fra der den staar - samme mekanisme som hjulzoom.
+// TogglePopup vil derimot ha snap ved aapning og setter dispValid selv.
+// Vindusgeometrien er en annen sak: den eier ResetToDefaultView (Ctrl+0).
+static void ResetView(AppContext* ctx) {
+    EnterCriticalSection(&ctx->lock);
+    ctx->viewCount  = 0;
+    ctx->followLive = TRUE;
+    if (ctx->candleCount > 0) {
+        int vc = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
+        ctx->viewCount = vc;
+        ctx->viewStart = ctx->candleCount - vc;
+    }
+    LeaveCriticalSection(&ctx->lock);
+}
+
+// Staar utsnittet der ResetView ville satt det? ESC bruker svaret til aa
+// velge lag: er det allerede i standard, skjuler ESC panelet i stedet.
+static BOOL ViewIsDefault(AppContext* ctx) {
+    EnterCriticalSection(&ctx->lock);
+    int n = ctx->candleCount, vs, vc;
+    GetView(ctx, &vs, &vc);
+    int want = (n < DEFAULT_VIEW) ? n : DEFAULT_VIEW;
+    BOOL def = (n == 0) || (vc == want && vs + vc >= n);
+    LeaveCriticalSection(&ctx->lock);
+    return def;
+}
+
+// Skjuler panelet til systemstatusfeltet - eller, i et duplikat, avslutter
+// prosessen. Et duplikat har ingen hovedinstans-rolle aa vende tilbake til,
+// og en hale av skjulte tray-ikoner er ingen funksjon. Avslutningen gaar
+// gjennom tray-menyens egen sti, saa ikonet fjernes likt i begge tilfeller.
+static void HidePanel(HWND hwnd) {
+    g_Ctx.hoverIdx = -1;
+    g_Ctx.btnHot   = -1;
+    if (g_isDuplicate) {
+        ShowWindow(hwnd, SW_HIDE);
+        SendMessageW(g_Ctx.hWnd, WM_COMMAND, ID_TRAY_EXIT, 0);
+        return;
+    }
+    SaveWindowPlacement(hwnd);
+    ShowWindow(hwnd, SW_HIDE);
+}
+
+// Starter en ny, isolert instans av programmet, forskjovet SPAWN_OFFSET
+// ned og til hoyre. Geometri, symbol og intervall gaar paa kommandolinja -
+// ikke via registret, som hovedinstansen eier og duplikater ikke skriver.
+//
+// Maksimert vindu: +30 fra et vindu som fyller skjermen ville lagt barnet
+// halvveis utenfor. Da brukes den gjenopprettede geometrien. Ellers
+// GetWindowRect, som er skjermkoordinater - rcNormalPosition er
+// arbeidsomraade-koordinater, og skiller seg naar oppgavelinja staar oppe
+// eller til venstre.
+static void SpawnInstance(HWND hwnd) {
+    RECT r;
+    if (IsZoomed(hwnd)) {
+        WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+        if (!GetWindowPlacement(hwnd, &wp)) return;
+        r = wp.rcNormalPosition;
+    } else if (!GetWindowRect(hwnd, &r)) {
+        return;
+    }
+    int w = r.right - r.left, h = r.bottom - r.top;
+    int x = r.left + SPAWN_OFFSET, y = r.top + SPAWN_OFFSET;
+
+    // Kaskaden gaar tilbake til hjornet naar neste steg ville skjovet
+    // knapperaden ut av arbeidsomraadet - ellers blir [ + ] etter noen klikk
+    // et vindu brukeren ikke kan lukke.
+    MONITORINFO mi = { sizeof(MONITORINFO) };
+    if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+        RECT wa = mi.rcWork;
+        if (x + w > wa.right)  x = wa.left;
+        if (y + h > wa.bottom) y = wa.top;
+    }
+
+    wchar_t exe[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return;
+
+    // CreateProcessW kan skrive i kommandolinja, saa den maa ligge i et
+    // skrivbart buffer - aldri en strengkonstant.
+    wchar_t cmd[MAX_PATH + 96];
+    swprintf_s(cmd, MAX_PATH + 96, L"\"%s\" --dup %d %d %d %d %d %d",
+               exe, x, y, w, h, g_Ctx.symIdx, g_Ctx.ivIdx);
+
+    STARTUPINFOW si = { sizeof(STARTUPINFOW) };
+    PROCESS_INFORMATION pi;
+    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+// Klikk paa en kontrollknapp. Egen funksjon fordi to meldinger naar hit:
+// WM_LBUTTONDOWN, og WM_LBUTTONDBLCLK - med CS_DBLCLKS blir andre klikk i et
+// raskt dobbeltklikk en DBLCLK, og knappene ville ellers spist det.
+static void OnButtonClick(HWND hwnd, int bh) {
+    switch (bh) {
+        case BTN_NEW:
+            SpawnInstance(hwnd);
+            break;
+        case BTN_MIN:
+            ShowWindow(hwnd, SW_MINIMIZE);
+            break;
+        case BTN_MAX:
+            if (IsZoomed(hwnd)) {
+                ShowWindow(hwnd, SW_RESTORE);
+                // Mandatets "eller DPI-skalert 1280x720": OS-et eier den
+                // gjenopprettede rekta, og SW_RESTORE bruker den. Men var den
+                // lagret paa en skjerm som siden er koblet fra, havner vinduet
+                // utenfor alt synlig. Samme sjekk som PlacePopupInitially gjor
+                // ved apning.
+                WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+                if (GetWindowPlacement(hwnd, &wp)) {
+                    RECT* nr = &wp.rcNormalPosition;
+                    if (!PlacementIsVisible(nr->left, nr->top,
+                                            nr->right - nr->left,
+                                            nr->bottom - nr->top)) {
+                        ResetToDefaultView(hwnd);
+                    }
+                }
+            } else {
+                // Geometrien lagres for vi maksimerer. Ved gjenoppretting er
+                // den allerede lagret.
+                SaveWindowPlacement(hwnd);
+                ShowWindow(hwnd, SW_MAXIMIZE);
+            }
+            break;
+        case BTN_CLOSE:
+            // WM_CLOSE, ikke DestroyWindow: den eksisterende handleren lagrer
+            // geometri og skjuler til systemstatusfeltet. Tickeren er et
+            // tray-program.
+            SendMessageW(hwnd, WM_CLOSE, 0, 0);
+            break;
+    }
 }
 
 static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2454,6 +2596,36 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             return 0;
 
+        // Dobbeltklikk paa grafen eller prisaksen nullstiller zoom og
+        // panorering. Krever CS_DBLCLKS paa vindusklassen - uten den kommer
+        // meldingen aldri. Alt som ikke er graf eller akse - knappene, og
+        // hele panelet mens overlayet er apent - faller gjennom til
+        // WM_LBUTTONDOWN, slik at andre klikk i et raskt dobbeltklikk
+        // oppforer seg som for CS_DBLCLKS kom inn.
+        //
+        // Forste klikk har allerede startet en panorering, men WM_LBUTTONUP
+        // har sluppet den igjen for DBLCLK kommer. Ledig headerflate er
+        // HTCAPTION og gir WM_NCLBUTTONDBLCLK (maksimer) - den naar ikke hit.
+        case WM_LBUTTONDBLCLK: {
+            if (!g_Ctx.overlayOpen) {
+                RECT rcD;
+                GetClientRect(hwnd, &rcD);
+                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom);
+                int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+                // [g.left, W): grafen og aksemargen til hoyre for den.
+                if (mx >= gd.left && mx < rcD.right && my >= gd.top && my <= gd.bottom) {
+                    ResetView(&g_Ctx);
+                    EnterCriticalSection(&g_Ctx.lock);
+                    g_Ctx.hoverIdx = HitCandle(&g_Ctx, &gd, mx, my);
+                    g_Ctx.hoverY   = my;
+                    LeaveCriticalSection(&g_Ctx.lock);
+                    StartAnim(hwnd);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+        }
+        // fall through
         case WM_LBUTTONDOWN: {
             // Staar forst med vilje: mens overlayet er apent skal ingen del
             // av panelet ta klikket - heller ikke krysset. Forste klikk
@@ -2482,49 +2654,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 ButtonLayout(rc.right, btns);
                 int bh = ButtonHit(btns, dx, dy);
                 if (bh >= 0) {
-                    switch (bh) {
-                        case BTN_RESET:
-                            ResetToDefaultView(hwnd);
-                            break;
-                        case BTN_MIN:
-                            ShowWindow(hwnd, SW_MINIMIZE);
-                            break;
-                        case BTN_MAX:
-                            if (IsZoomed(hwnd)) {
-                                ShowWindow(hwnd, SW_RESTORE);
-                                // Mandatets "eller DPI-skalert 1280x720":
-                                // OS-et eier den gjenopprettede rekta, og
-                                // SW_RESTORE bruker den. Men var den lagret
-                                // paa en skjerm som siden er koblet fra,
-                                // havner vinduet utenfor alt synlig. Samme
-                                // sjekk som PlacePopupInitially gjor ved
-                                // apning.
-                                {
-                                    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-                                    if (GetWindowPlacement(hwnd, &wp)) {
-                                        RECT* nr = &wp.rcNormalPosition;
-                                        if (!PlacementIsVisible(nr->left, nr->top,
-                                                                nr->right - nr->left,
-                                                                nr->bottom - nr->top)) {
-                                            ResetToDefaultView(hwnd);
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Geometrien lagres for vi maksimerer. Ved
-                                // gjenoppretting er den allerede lagret.
-                                SaveWindowPlacement(hwnd);
-                                ShowWindow(hwnd, SW_MAXIMIZE);
-                            }
-                            break;
-                        case BTN_CLOSE:
-                            // WM_CLOSE, ikke DestroyWindow: den eksisterende
-                            // handleren lagrer geometri og skjuler til
-                            // systemstatusfeltet. Tickeren er et
-                            // tray-program.
-                            SendMessageW(hwnd, WM_CLOSE, 0, 0);
-                            break;
-                    }
+                    OnButtonClick(hwnd, bh);
                     return 0;
                 }
             }
@@ -2576,14 +2706,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             return 0;
 
-        case WM_KEYDOWN:
+        case WM_KEYDOWN: {
+            BOOL ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             // Ctrl+0: tilbake til fabrikkgeometri, sentrert paa den skjermen
-            // vinduet staar paa.
-            if (wParam == '0' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // vinduet staar paa. Vindusgeometri, ikke zoom - se R under.
+            if (wParam == '0' && ctrl) {
                 ResetToDefaultView(hwnd);
                 return 0;
             }
-            // ESC lukker overlayet FOR den lukker panelet.
+            // ESC er lagvis, innerst forst: lukk overlayet, nullstill
+            // utsnittet, skjul panelet. Ingen av lagene forsvinner for et
+            // annet - den som vil skjule et zoomet panel trykker to ganger.
             if (wParam == VK_ESCAPE && g_Ctx.overlayOpen) {
                 g_Ctx.overlayOpen = FALSE;
                 g_Ctx.overlayHot  = -1;
@@ -2591,25 +2724,30 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
-            if (wParam == VK_ESCAPE) {
-                // ESC skjuler vinduet til systemstatusfeltet. Krysset i
-                // headeren er det opplagte alternativet, men tastatur-
-                // snarveien er billig a beholde.
+            // R: zoom og panorering tilbake til standardutsnittet. Ikke mens
+            // overlayet er apent - der eier det tastaturet, som hjulet.
+            // VK-kodene for bokstaver er de store ASCII-tegnene.
+            if ((wParam == 'R' && !ctrl && !g_Ctx.overlayOpen) ||
+                (wParam == VK_ESCAPE && !ViewIsDefault(&g_Ctx))) {
+                ResetView(&g_Ctx);
                 g_Ctx.hoverIdx = -1;
-                g_Ctx.btnHot   = -1;
-                SaveWindowPlacement(hwnd);
-                ShowWindow(hwnd, SW_HIDE);
+                StartAnim(hwnd);
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+            if (wParam == VK_ESCAPE) {
+                // Krysset i headeren er det opplagte alternativet, men
+                // tastatursnarveien er billig a beholde.
+                HidePanel(hwnd);
             }
             return 0;
+        }
 
         case WM_CLOSE:
             // Lukkeknappen skjuler til systemstatusfeltet. Tickeren er et
             // tray-program; "Avslutt Ticker" i tray-menyen avslutter det.
-            // Posisjonen lagres for vi forsvinner.
-            g_Ctx.hoverIdx = -1;
-            g_Ctx.btnHot   = -1;
-            SaveWindowPlacement(hwnd);
-            ShowWindow(hwnd, SW_HIDE);
+            // Posisjonen lagres for vi forsvinner. Et duplikat avsluttes.
+            HidePanel(hwnd);
             return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -2709,15 +2847,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         created = TRUE;
     }
 
-    EnterCriticalSection(&ctx->lock);
-    ctx->viewCount  = 0;   // utsnittet settes pa nytt; bufferet beholdes
-    ctx->followLive = TRUE;
-    if (ctx->candleCount > 0) {
-        int vc = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
-        ctx->viewCount = vc;
-        ctx->viewStart = ctx->candleCount - vc;
-    }
-    LeaveCriticalSection(&ctx->lock);
+    ResetView(ctx);   // utsnittet settes pa nytt; bufferet beholdes
 
     ctx->panning   = FALSE;
     ctx->hoverIdx  = -1;
@@ -2846,10 +2976,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
-    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Global\\BTCTicker_PhD_Instance");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        return 0;
-    }
+    // Ingen single-instance-mutex lenger: [ + ] starter nettopp en instans
+    // til. Hver prosess har sin egen arbeidertraad, sitt eget tray-ikon og
+    // sine egne vindusklasser (klasser er per prosess, saa navnene kolliderer
+    // ikke).
 
     memset(&g_Ctx, 0, sizeof(AppContext));
     g_Ctx.hoverIdx = -1;   // 0 fra memset ville betydd "hover pa forste lys"
@@ -2887,6 +3017,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     pwc.lpszClassName = L"BTCPopupClass";
     pwc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
     pwc.hbrBackground = NULL; // vi tegner alt selv
+    pwc.style         = CS_DBLCLKS;   // dobbeltklikk nullstiller zoom og panorering
     RegisterClassW(&pwc);
 
     g_Ctx.hWnd = CreateWindowExW(0, wc.lpszClassName, L"BTC Core Engine", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
@@ -2930,10 +3061,41 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
 
+    // Duplikat: "--dup x y w h sym iv", skrevet av SpawnInstance. Overstyrer
+    // det LoadConfig leste, med samme grenser - en haandskrevet kommandolinje
+    // skal ikke kunne indeksere utenfor tabellene. Feiler sjekken, starter
+    // vi som vanlig hovedinstans i stedet for aa gjette.
+    {
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        if (argv && argc == 8 && wcscmp(argv[1], L"--dup") == 0) {
+            int v[6];
+            for (int i = 0; i < 6; ++i) v[i] = _wtoi(argv[2 + i]);
+            if (v[2] >= 240 && v[2] <= 8192 && v[3] >= 160 && v[3] <= 8192 &&
+                v[4] >= 0 && v[4] < SYMBOL_COUNT &&
+                v[5] >= 0 && v[5] < INTERVAL_COUNT) {
+                g_isDuplicate    = TRUE;
+                g_savedPanelX    = v[0];
+                g_savedPanelY    = v[1];
+                g_savedPanelW    = v[2];
+                g_savedPanelH    = v[3];
+                g_Ctx.symIdx     = v[4];
+                g_Ctx.ivIdx      = v[5];
+                g_Ctx.intervalMs = INTERVALS[v[5]].ms;
+            }
+        }
+        if (argv) LocalFree(argv);
+    }
+
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manuell reset
     g_Ctx.hWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);  // auto reset
     g_Ctx.hThread    = CreateThread(NULL, 0, NetworkThread, &g_Ctx, 0, NULL);
+
+    // Et duplikat er startet fra et klikk og skal vise seg med en gang - en
+    // hovedinstans starter i systemstatusfeltet. Etter laasen og hendelsene:
+    // TogglePopup gaar inn i laasen og vekker traden.
+    if (g_isDuplicate) TogglePopup(&g_Ctx, hInstance);
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
@@ -2975,8 +3137,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     if (g_Ctx.hConnect) WinHttpCloseHandle(g_Ctx.hConnect);
     if (g_Ctx.hSession) WinHttpCloseHandle(g_Ctx.hSession);
-    ReleaseMutex(hMutex);
-    CloseHandle(hMutex);
 
     return (int)msg.wParam;
 }
