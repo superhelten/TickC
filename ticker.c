@@ -189,6 +189,14 @@ typedef struct {
     BOOL   animRunning;
     int    staleSecsShown;   // sist tegnede sekundtall, hindrer 60 fps paa en teller
 
+    // --- Overlay for symbol-/intervallvalg ---
+    // overlayOpen er den LOGISKE tilstanden og styrer treffdeteksjon.
+    // overlayF er fade-nivaet og styrer bare tegning. Under uttoning er
+    // overlayF > 0 mens overlayOpen er FALSE - da skal klikk ga til grafen.
+    BOOL   overlayOpen;
+    double overlayF;      // 0-255
+    int    overlayHot;    // indeks i rows[], -1 = ingen
+
     // --- Arbeidertrad ---
     // Laasen dekker candles[], candleCount, viewStart, viewCount,
     // followLive, lastPrice og hPopup. Alt annet rores kun av UI-traden.
@@ -823,6 +831,18 @@ static int HitCandle(const AppContext* ctx, const ChartRect* g, int mx, int my) 
     return vs + rel;
 }
 
+// Antall desimaler paa prisaksen velges fra AVSTANDEN mellom etikettene, ikke
+// fra prisens storrelse. SOL rundt 97 dollar har et spenn paa under en dollar:
+// med "%.0f" leste alle fem etikettene "97". BTC rundt 75 000 trenger ingen
+// desimaler. Samme klasse feil som #5 i loggen - formatet maa folge tallet
+// som faktisk skal vises, ikke en antatt storrelsesorden.
+static int PriceDecimals(double step) {
+    if (step <= 0.0) return 2;
+    int d = 0;
+    while (step < 2.0 && d < 6) { step *= 10.0; ++d; }
+    return d;
+}
+
 // Min/maks over synlige lys, med 8% luft over og under.
 static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, double* outMax) {
     double mn = ctx->candles[vs].low, mx = ctx->candles[vs].high;
@@ -890,6 +910,127 @@ static void EnsureChromeCache(AppContext* ctx) {
     ctx->cacheChrome   = a;
     ctx->cacheCloseHot = ctx->closeHot;
     ctx->cacheValid    = TRUE;
+}
+
+// Layout og treffdeteksjon deler en funksjon. To uavhengige utregninger av
+// samme flate ender med a peke forskjellige steder - se feil #7 i loggen.
+#define OVL_ROWS_MAX  16
+#define OVL_ROW_H     22
+#define OVL_COL_W     104
+#define OVL_PAD       10
+#define OVL_HDR_H     18
+
+typedef struct {
+    RECT box;                    // hele overlayet
+    RECT rows[OVL_ROWS_MAX];     // en per valg
+    int  count;                  // SYMBOL_COUNT forst, sa INTERVAL_COUNT
+    RECT symHdr, ivHdr;          // overskriftene
+} OverlayRects;
+
+static void OverlayLayout(int W, int H, OverlayRects* r) {
+    // Nulles helt ut. De ubrukte radene bak count er ellers stack-soppel, og
+    // da er funksjonen ikke lenger ren - to kall med samme inndata gir ulikt
+    // innhold. Enhetstesten fanget nettopp det. OverlayHit gaar bare til
+    // count, saa soppelet var ufarlig i dag; dette lukker klassen.
+    memset(r, 0, sizeof(*r));
+
+    int rowsMax = (SYMBOL_COUNT > INTERVAL_COUNT) ? SYMBOL_COUNT : INTERVAL_COUNT;
+    int boxW = OVL_PAD * 3 + OVL_COL_W * 2;
+    int boxH = OVL_PAD * 2 + OVL_HDR_H + rowsMax * OVL_ROW_H;
+
+    // Sentrert, men aldri utenfor panelet - panelet kan vaere mindre enn
+    // boksen paa minimumsstorrelsen.
+    if (boxW > W) boxW = W;
+    if (boxH > H) boxH = H;
+    int bx = (W - boxW) / 2, by = (H - boxH) / 2;
+    if (bx < 0) bx = 0;
+    if (by < 0) by = 0;
+
+    r->box.left = bx; r->box.top = by;
+    r->box.right = bx + boxW; r->box.bottom = by + boxH;
+
+    int colW = (boxW - OVL_PAD * 3) / 2;
+    if (colW < 1) colW = 1;
+    int c1 = bx + OVL_PAD, c2 = c1 + colW + OVL_PAD;
+    int y0 = by + OVL_PAD;
+
+    r->symHdr.left = c1; r->symHdr.right = c1 + colW;
+    r->symHdr.top  = y0; r->symHdr.bottom = y0 + OVL_HDR_H;
+    r->ivHdr.left  = c2; r->ivHdr.right  = c2 + colW;
+    r->ivHdr.top   = y0; r->ivHdr.bottom = y0 + OVL_HDR_H;
+
+    int ry = y0 + OVL_HDR_H;
+    r->count = 0;
+    for (int i = 0; i < SYMBOL_COUNT && r->count < OVL_ROWS_MAX; ++i) {
+        RECT* q = &r->rows[r->count++];
+        q->left = c1; q->right = c1 + colW;
+        q->top = ry + i * OVL_ROW_H; q->bottom = q->top + OVL_ROW_H;
+        if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
+    }
+    for (int i = 0; i < INTERVAL_COUNT && r->count < OVL_ROWS_MAX; ++i) {
+        RECT* q = &r->rows[r->count++];
+        q->left = c2; q->right = c2 + colW;
+        q->top = ry + i * OVL_ROW_H; q->bottom = q->top + OVL_ROW_H;
+        if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
+    }
+}
+
+// Indeks 0..SYMBOL_COUNT-1 er symboler, resten intervaller. -1 = ingen.
+static int OverlayHit(const OverlayRects* r, int x, int y) {
+    for (int i = 0; i < r->count; ++i) {
+        const RECT* q = &r->rows[i];
+        if (x >= q->left && x < q->right && y >= q->top && y < q->bottom) return i;
+    }
+    return -1;
+}
+
+// Paletten er CLR_BG/CLR_BOX/CLR_BOXEDGE - identisk med hover-boksen, saa
+// overlayet leses som samme element-familie.
+// Kalles fra PaintPopup, IKKE fra DrawChart: DrawChart returnerer tidlig naar
+// candleCount == 0, og det er nettopp tilstanden rett etter et konfigbytte.
+// Laa kallet der, ville uttoningen aldri blitt tegnet etter et bytte.
+static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
+    int a = (int)(ctx->overlayF + 0.5);
+    if (a <= 0) return;
+
+    OverlayRects r;
+    OverlayLayout(W, H, &r);
+
+    HBRUSH brBox  = CreateSolidBrush(Blend(CLR_BG, CLR_BOX, a));
+    HBRUSH brEdge = CreateSolidBrush(Blend(CLR_BG, CLR_BOXEDGE, a));
+    FillRect(hdc, &r.box, brBox);
+    FrameRect(hdc, &r.box, brEdge);
+
+    SelectObject(hdc, ctx->hFontSmall);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, Blend(CLR_BG, CLR_DIM, a));
+    RECT h1 = r.symHdr, h2 = r.ivHdr;
+    h1.left += 6; h2.left += 6;
+    DrawTextW(hdc, L"SYMBOL",    -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    DrawTextW(hdc, L"INTERVALL", -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    for (int i = 0; i < r.count; ++i) {
+        BOOL isSym  = (i < SYMBOL_COUNT);
+        int  idx    = isSym ? i : (i - SYMBOL_COUNT);
+        BOOL active = isSym ? (idx == ctx->symIdx) : (idx == ctx->ivIdx);
+        const wchar_t* lbl = isSym ? SYMBOLS[idx].label : INTERVALS[idx].label;
+
+        if (i == ctx->overlayHot) {
+            HBRUSH brHot = CreateSolidBrush(Blend(CLR_BG, CLR_BOXEDGE, a / 2));
+            FillRect(hdc, &r.rows[i], brHot);
+            DeleteObject(brHot);
+        }
+        COLORREF fg = active ? CLR_UP : CLR_TEXT;
+        SetTextColor(hdc, Blend(CLR_BG, fg, a));
+        RECT t = r.rows[i]; t.left += 6;
+        DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
+
+    // Penslene lages per bilde med vilje: fargen avhenger av fade-nivaet, som
+    // endrer seg hvert bilde MENS overlayet toner. I hvile returnerer
+    // funksjonen paa a <= 0, saa GDI-antallet i ro er uendret.
+    DeleteObject(brBox);
+    DeleteObject(brEdge);
 }
 
 static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
@@ -990,7 +1131,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         LineTo(hdc, right, y);
 
         double p = maxP - (range * i) / 4.0;
-        swprintf_s(buf, 64, L"%.0f", p);
+        swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
         RECT rcLbl = { right + 4, y - 8, W - 4, y + 8 };
         SetTextColor(hdc, CLR_DIM);
         DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -1049,7 +1190,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     // Prisetikett pa hoyreaksen der pekeren star
     double hp = maxP - ((double)(hy - top) / (double)ch) * range;
-    swprintf_s(buf, 64, L"%.0f", hp);
+    swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
     RECT rcTag = { right + 1, hy - 8, W - 1, hy + 8 };
     FillRect(hdc, &rcTag, ctx->brBoxEdge);
     SelectObject(hdc, ctx->hFontSmall);
@@ -1165,6 +1306,12 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     DrawChart(ctx, hdcMem, W, H);
     LeaveCriticalSection(&ctx->lock);
 
+    // Overlayet tegnes UTENFOR laasen: alt det leser (overlayF, overlayHot,
+    // symIdx, ivIdx) er UI-eid. Og det maa staa her, ikke i DrawChart, som
+    // returnerer tidlig naar bufferet er tomt - nettopp tilstanden rett
+    // etter et konfigbytte.
+    DrawOverlay(ctx, hdcMem, W, H);
+
     DrawChrome(ctx, hdcMem, W, H);   // rorer ikke lysdata
 
     BitBlt(hdcDst, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
@@ -1189,6 +1336,36 @@ static void StartAnim(HWND hwnd) {
         g_Ctx.lastAnimTick = GetTickCount64();
         SetTimer(hwnd, TIMER_ANIM_ID, ANIM_INTERVAL, NULL);
     }
+}
+
+// Bytter symbol eller intervall. Teller opp configGen og tommer bufferet i
+// SAMME kritiske seksjon, slik at et svar fra forrige konfig som ankommer
+// akkurat naa blir forkastet i stedet for flettet inn.
+static void ApplyConfigChoice(AppContext* ctx, HWND hwnd, int hit) {
+    BOOL isSym = (hit < SYMBOL_COUNT);
+    int  idx   = isSym ? hit : (hit - SYMBOL_COUNT);
+    if (isSym  && (idx < 0 || idx >= SYMBOL_COUNT))   return;
+    if (!isSym && (idx < 0 || idx >= INTERVAL_COUNT)) return;
+    if (isSym  && idx == ctx->symIdx) return;   // ingen endring, ingen tomming
+    if (!isSym && idx == ctx->ivIdx)  return;
+
+    EnterCriticalSection(&ctx->lock);
+    if (isSym) ctx->symIdx = idx;
+    else       { ctx->ivIdx = idx; ctx->intervalMs = INTERVALS[idx].ms; }
+    ctx->configGen++;
+    ctx->candleCount = 0;
+    ctx->viewStart   = 0;
+    ctx->viewCount   = 0;
+    ctx->followLive  = TRUE;
+    ctx->lastPrice   = 0.0;
+    LeaveCriticalSection(&ctx->lock);
+
+    ctx->hoverIdx = -1;
+    // SetEvent staar utenfor laasen. Den er ikke PostMessage, men samme regel
+    // gjelder av samme grunn: ikke hold laasen over noe som vekker den andre
+    // traden.
+    SetEvent(ctx->hWakeEvent);
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1281,6 +1458,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 InvalidateRect(hwnd, NULL, FALSE);
             }
 
+            // Sperren staar HER, ikke forst i blokka: over den ligger
+            // TrackMouseEvent-armeringen og hot-tilstanden. Returnerte vi
+            // for dem, sluttet WM_MOUSELEAVE a fyre og windowHot ville
+            // hengt fast paa TRUE.
+            // Sjekker overlayOpen, ikke overlayF: under uttoning er boksen
+            // fortsatt synlig, men musa skal styre grafen igjen.
+            if (g_Ctx.overlayOpen) {
+                OverlayRects orr;
+                OverlayLayout(rc.right, rc.bottom, &orr);
+                int hot = OverlayHit(&orr, mx, my);
+                if (hot != g_Ctx.overlayHot) {
+                    g_Ctx.overlayHot = hot;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+                return 0;
+            }
+
             if (g_Ctx.panning) {
                 EnterCriticalSection(&g_Ctx.lock);
                 int vs2, vc2;
@@ -1315,6 +1509,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // Ctrl + musehjul zoomer om punktet under pekeren. Merk at lParam
         // her er SKJERM-koordinater, i motsetning til WM_MOUSEMOVE.
         case WM_MOUSEWHEEL: {
+            if (g_Ctx.overlayOpen) return 0;
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);   // lParam er SKJERM-koordinater her
 
@@ -1374,6 +1569,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             g_Ctx.headerHot     = FALSE;
             g_Ctx.closeHot      = FALSE;
             g_Ctx.hoverIdx      = -1;
+            g_Ctx.overlayHot    = -1;   // ellers blir en rad staaende framhevet
             StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -1397,6 +1593,16 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     int rounded = (int)(g_Ctx.chromeF + 0.5);
                     if (rounded != g_Ctx.chrome) { g_Ctx.chrome = rounded; redraw = TRUE; }
                     if (g_Ctx.chromeF != target) settled = FALSE;
+                }
+
+                // Overlay-fade. Samme kurve som chromet.
+                double ovlTarget = g_Ctx.overlayOpen ? 255.0 : 0.0;
+                if (g_Ctx.overlayF != ovlTarget) {
+                    double before = g_Ctx.overlayF;
+                    g_Ctx.overlayF = AnimStep(g_Ctx.overlayF, ovlTarget, dt,
+                                              ANIM_TAU_CHROME, 0.5);
+                    if ((int)(before + 0.5) != (int)(g_Ctx.overlayF + 0.5)) redraw = TRUE;
+                    if (g_Ctx.overlayF != ovlTarget) settled = FALSE;
                 }
 
                 // Stale-telleren. Klokka maa ga mens vi er frakoblet, men
@@ -1430,6 +1636,22 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
 
         case WM_LBUTTONDOWN: {
+            // Staar forst med vilje: mens overlayet er apent skal ingen del
+            // av panelet ta klikket - heller ikke krysset. Forste klikk
+            // lukker overlayet, neste lukker panelet.
+            if (g_Ctx.overlayOpen) {
+                RECT rcO;
+                GetClientRect(hwnd, &rcO);
+                OverlayRects orr;
+                OverlayLayout(rcO.right, rcO.bottom, &orr);
+                int hit = OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+                if (hit >= 0) ApplyConfigChoice(&g_Ctx, hwnd, hit);
+                g_Ctx.overlayOpen = FALSE;   // klikk utenfor lukker uten endring
+                g_Ctx.overlayHot  = -1;
+                StartAnim(hwnd);
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
             RECT rc;
             GetClientRect(hwnd, &rc);
             RECT rcC = CloseButtonRect(rc.right);
@@ -1458,8 +1680,27 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 g_Ctx.headerHot = FALSE;
                 g_Ctx.chrome    = 0;
                 g_Ctx.chromeF   = 0.0;
+                g_Ctx.overlayOpen = FALSE;
+                g_Ctx.overlayF    = 0.0;
+                g_Ctx.overlayHot  = -1;
                 g_Ctx.lastHideTick = GetTickCount64();
                 ShowWindow(hwnd, SW_HIDE);
+            }
+            return 0;
+        }
+
+        case WM_RBUTTONUP: {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            ChartRect gg = ChartGeometry(rc.right, rc.bottom);
+            int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            if (!g_Ctx.overlayOpen &&
+                mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
+                g_Ctx.overlayOpen = TRUE;
+                g_Ctx.overlayHot  = -1;
+                g_Ctx.hoverIdx    = -1;   // crosshairet skal ikke sta igjen under
+                StartAnim(hwnd);
+                InvalidateRect(hwnd, NULL, FALSE);
             }
             return 0;
         }
@@ -1497,6 +1738,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             break;
 
         case WM_KEYDOWN:
+            // ESC lukker overlayet FOR den lukker panelet.
+            if (wParam == VK_ESCAPE && g_Ctx.overlayOpen) {
+                g_Ctx.overlayOpen = FALSE;
+                g_Ctx.overlayHot  = -1;
+                StartAnim(hwnd);
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
             if (wParam == VK_ESCAPE) {
                 g_Ctx.pinned = FALSE;
                 g_Ctx.hoverIdx = -1;
@@ -1585,6 +1834,9 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         ctx->windowHot = FALSE;
         ctx->chrome    = 0;
         ctx->chromeF   = 0.0;
+        ctx->overlayOpen = FALSE;
+        ctx->overlayF    = 0.0;
+        ctx->overlayHot  = -1;
         ctx->lastHideTick = GetTickCount64();
         ShowWindow(ctx->hPopup, SW_HIDE);
         return;
@@ -1626,6 +1878,9 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->closeHot  = FALSE;
     ctx->chrome    = 0;   // apner alltid rent, uten kontroller
     ctx->chromeF   = 0.0;
+    ctx->overlayOpen = FALSE;   // overlayet skal aldri sta apent ved apning
+    ctx->overlayF    = 0.0;
+    ctx->overlayHot  = -1;
     PositionPopup(ctx->hPopup);
     ctx->shownTick = GetTickCount64();
     ShowWindow(ctx->hPopup, SW_SHOWNA);
@@ -1720,6 +1975,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     memset(&g_Ctx, 0, sizeof(AppContext));
     g_Ctx.hoverIdx = -1;   // 0 fra memset ville betydd "hover pa forste lys"
+    g_Ctx.overlayHot = -1; // samme grunn: 0 ville betydd "forste rad framhevet"
 
     g_Ctx.hSession = WinHttpOpen(L"BTCTicker Engine/2.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
