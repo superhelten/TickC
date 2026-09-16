@@ -1360,8 +1360,9 @@ underveis:
 
 > **Mandatets < 0,85 ms holdes ikke i noen modus, og uendret master holder
 > det heller ikke i dag.** Tallet i *Kjente begrensninger* (~0,85 ms ved
-> 1280×720) er målt under andre forhold. I denne kjøringen gikk fire andre
-> `ticker.exe` med åpne paneler. Bare de raskeste enkeltbildene er under
+> 1280×720) er målt under andre forhold. Maskinen var i vanlig bruk, og
+> brukeren hadde egne `ticker.exe` i gang: fire da arbeidet startet, én ved
+> slutten. Bare de raskeste enkeltbildene er under
 > 0,85 ms. **Forankringen koster ikke målbart ved full størrelse:** 13,49 mot
 > 13,46 ms, med rundemedianer som overlapper. Ved 1280×720 er skrivebordsmodus
 > 0,35 ms tregere i median, men også her overlapper rundemedianene
