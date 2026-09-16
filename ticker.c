@@ -2013,11 +2013,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             //
             // Mens overlayet er apent skal ingen knapp lyse: den kan heller
             // ikke klikkes, og en lysende knapp som ikke svarer er verre enn
-            // ingen.
+            // ingen. Det samme gjelder under panorering - der holder
+            // chart-flaten museknappen via SetCapture, saa en dra-bevegelse
+            // som passerer over headeren ville tent krysset rodt midt i
+            // panoreringen, uten at det gikk an aa klikke det.
             {
                 RECT btns[BTN_COUNT];
                 ButtonLayout(rc.right, btns);
-                int bh = g_Ctx.overlayOpen ? -1 : ButtonHit(btns, mx, my);
+                int bh = (g_Ctx.overlayOpen || g_Ctx.panning)
+                         ? -1 : ButtonHit(btns, mx, my);
                 if (bh != g_Ctx.btnHot) {
                     g_Ctx.btnHot = bh;
                     InvalidateRect(hwnd, NULL, FALSE);

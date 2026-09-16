@@ -130,6 +130,11 @@ dekket oppgavelinja med 55 px, og krysset lå 7 px utenfor skjermkanten.
 selv. `ptMaxPosition` er relativ til *skjermens* hjørne, ikke til skrivebordet.
 Etterpå treffer maksimert vindu `rcWork` eksakt.
 
+> **Uverifisert på sekundærskjerm.** Alt er målt på en maskin med én skjerm,
+> der `rcWork` starter i `0,0` — så subtraksjonen `rcWork − rcMonitor` var
+> null og ble aldri satt på prøve. Har du to skjermer: dra panelet til den
+> andre og trykk `□` én gang. Forventet er den skjermens `rcWork` eksakt.
+
 > `ptMaxTrackSize` settes **ikke**. Den ville klemt *manuell* skalering til én
 > skjerms arbeidsområde, så panelet ikke lenger kunne strekkes over to
 > skjermer. Det er maksimert størrelse som skal følge `rcWork`, ikke største
@@ -841,6 +846,21 @@ rammefjerningen tok den 29 → 27. USER 14, uendret.
 ekte musejiggler *på* krysset, så hover-stien med `FillRect` var med i lasten.
 Ingen vranglås. Håndtak 31/14 før og etter begge rundene; se fallgruve 27 om
 hvorfor de står på 34/15 *under* kjøring.
+
+**Firkantede hjørner:** alle fire 8×8-blokker i hjørnene er ren
+`#0D1117`, lest med `CopyFromScreen` — DWM-runding er en komposittoreffekt
+og finnes *ikke* i `PrintWindow`-utdata, så den må leses fra skjermen.
+`DWMWCP_DONOTROUND` virker altså.
+
+> Første måling viste lyse piksler i de to venstre hjørnene. Det var ikke
+> avrunding — en kvartsirkel rammer alle fire likt — men et annet vindu som
+> lå oppe over panelet. Panelet er ikke `WS_EX_TOPMOST`. `BringWindowToTop`
+> først, så måle.
+
+**Hover slukkes under panorering.** Chart-flaten holder museknappen via
+`SetCapture`, så en dra-bevegelse som passerer over headeren ville ellers
+tent krysset rødt midt i panoreringen — uten at det gikk an å klikke det.
+Målt `#0D1117` under draget og `#C02A3E` så snart knappen slippes.
 
 **Treffsoner:** 22/22, både normalt og maksimert, spørt direkte med
 `SendMessage(WM_NCHITTEST)`. Grensene er pikselnøyaktige: `y=5` gir `HTTOP`
