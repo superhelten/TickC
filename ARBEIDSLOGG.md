@@ -4,7 +4,8 @@ Status per 16.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
 del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
 indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
-er levert.** Design:
+er levert.** Deretter er panelet flyttet fra rammelost popup til et vanlig
+OS-vindu — se **Vinduet** under. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
@@ -74,6 +75,47 @@ tegnearbeidet er derfor uavhengig av hvor mye historikk som er lagret.
 
 GDI-objekter er bufret: ni faste farger lages ved oppstart, de blandede
 fade-fargene bare når `(chrome, closeHot)` endrer seg.
+
+### Vinduet
+
+Panelet er et **vanlig OS-vindu**: `WS_OVERLAPPEDWINDOW` med tittellinje,
+minimer, maksimer og lukk, knapp i oppgavelinja, og ikke lenger alltid øverst.
+`WM_NCCALCSIZE`, `WM_NCHITTEST` og `WM_SETCURSOR` finnes ikke — `DefWindowProc`
+gjør jobben.
+
+> **Dette erstattet det rammeløse panelet fra fase 1.** Hele hover-chromet
+> (kryss, grip-prikker, resize-grip, ramme, fade) og auto-skjul på fokustap
+> fantes *fordi* det ikke var noen OS-ramme. Alt er fjernet i `c77b6eb`. Se
+> «Fjernet i fase 3» under funksjonslista.
+
+| Handling | Oppførsel |
+|---|---|
+| Maksimer / gjenopprett / minimer | `DefWindowProc`; vi fanger bare `WM_SIZE` |
+| Lukkeknapp | skjuler til systemstatusfeltet og lagrer geometrien |
+| «Avslutt Ticker» i tray-menyen | avslutter programmet |
+| Tray-klikk | fremme og aktivt → skjul; ellers vis, gjenopprett og gi fokus |
+| `Ctrl` + `0` / «Standardvisning» | sentrer 380×300 på skjermen vinduet står på |
+| `ESC` | skjuler til systemstatusfeltet |
+
+**Tittellinja viser aktivt par** og følger symbolbytte, så den er riktig også i
+oppgavelinja. DWM tegner den mørk — ellers sto en lys systemramme rundt en
+`#0D1117`-flate.
+
+**`ForceForeground` er beholdt.** Feil #1 gjelder fortsatt: et tray-klikk gir
+ikke prosessen forgrunnsrett, og uten dette får vinduet aldri tastaturfokus —
+da når verken `ESC` eller `Ctrl`+`0` frem.
+
+**Panelet eies ikke av hovedvinduet.** Eierskap ville fjernet knappen i
+oppgavelinja, men det betyr også at Windows ikke river det ned for oss:
+`WM_DESTROY` på hovedvinduet gjør det selv.
+
+**Geometri i registret:** `PanelX`, `PanelY`, `PanelWidth`, `PanelHeight`,
+pluss `PanelHasPos` som skiller «ikke lagret» fra «lagret som 0,0».
+Koordinatene tolkes *signed* — en skjerm kan ligge til venstre for den
+primære. Lagret posisjon brukes bare hvis den fortsatt treffer en tilkoblet
+skjerm (`MonitorFromRect`), ellers sentreres vinduet. Lagringen går gjennom
+`GetWindowPlacement`, så et minimert eller maksimert vindu ikke husker en
+oppgavelinje-strimmel som «brukerens størrelse».
 
 ### Animasjonsklokka
 
@@ -268,7 +310,8 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
 4. **Crosshair + hover-boks** — tid og OHLC for lyset under musa.
 5. **Flyttbart / skalerbart panel** — `WS_THICKFRAME` + `WM_NCCALCSIZE`.
 6. **Hover-kontroller** — kryss, grip-prikker, ramme og resize-grip som toner
-   inn ved hover og er usynlige i hvile.
+   inn ved hover og er usynlige i hvile. **Fjernet i `c77b6eb`** — erstattet av
+   OS-rammen.
 7. **Ctrl + hjul = zoom**, ankret mot musepekeren.
 8. **Akkumulerende historikk + panorering** — hjul og dra.
 9. **Arbeidertråd + GDI-cache.**
@@ -277,6 +320,25 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
     (fase 2 B).
 12. **Siste-pris-indikator, skalert vannmerke, view- og Y-akse-easing**
     (fase 2 C).
+13. **Nativ vindusramme**, standardvisning (`Ctrl`+`0`) og posisjonspersistens.
+
+### Fjernet i fase 3
+
+Beskrivelsene over står fordi de forklarer *hvorfor* koden ble som den ble.
+Dette er hva som ikke lenger finnes, og hvor det ble borte:
+
+| Hva | Hvorfor | Commit |
+|---|---|---|
+| Hover-chrome: kryss, grip-prikker, resize-grip, ramme, fade | OS-rammen har alt sammen | `c77b6eb` |
+| `EnsureChromeCache` og seks bufrede GDI-objekter | fulgte med chromet; GDI 35 → 29 | `c77b6eb` |
+| Auto-skjul på fokustap, `pinned`, `SHOW_GRACE_MS`, `REOPEN_GUARD_MS` | et vindu med tittellinje som forsvinner når man klikker i et annet vindu er ubrukelig | `c77b6eb` |
+| `inSizeMove` (feil #6) | brukt til dragrammens farge, som er borte | `c77b6eb` |
+| `WM_NCCALCSIZE`, `WM_NCHITTEST`, `WM_SETCURSOR` | `DefWindowProc` gjør jobben igjen | `c77b6eb` |
+| `CLR_WHITE`, `CLR_HDRHOT`, `CLR_CLOSEHOT` | hadde bare chromet som bruker | `c77b6eb` |
+
+Målingene av fade-fargene (`#0D1117 → #333D4B`) og av pekerne i ni soner
+gjelder kode som ikke finnes lenger. De står igjen som metode: *mål
+pikselfarger, ikke øyemål* er fortsatt regelen — se fallgruve #7.
 
 ---
 
@@ -608,17 +670,41 @@ etter fem hakk pluss settling.
 det (to stiplede penner, 33 → 35), og vannmerkefonten bygges om ved hver
 størrelsesendring uten å lekke — verifisert flat gjennom 20 resizer.
 
+### Fase 3 — nativt vindu
+
+Alt målt på et ekte vindu på 3840×1600:
+
+| Handling | Resultat |
+|---|---|
+| Første åpning, tomt register | sentrert `1730,626` 380×300 |
+| `SC_MAXIMIZE` | `-8,-8` 3856×1568, `IsZoomed` |
+| `SC_RESTORE` | tilbake til `1730,626` 380×300 |
+| `SC_MINIMIZE` + tray-klikk | minimert, så gjenopprettet |
+| `Ctrl`+`0` (**ekte** tastetrykk) | `120,90` 700×520 → `1730,626` 380×300 |
+| Tray-menyens «Standardvisning» | samme |
+| `WM_CLOSE` | skjult; `X=450 Y=320 W=560 H=420` i registret |
+| Omstart | gjenåpnet på `450,320` 560×420 |
+| Avslutning via tray-menyen | 0 etterlatte vinduer fra gammel PID |
+| Ekte `ESC` | skjuler vinduet |
+| `GetGUIThreadInfo` | `hwndActive == hwndFocus ==` panelet — feil #2 er ikke tilbake |
+
+**Håndtak: GDI 35 → 29.** De seks bufrede chrome-objektene er borte. USER 14.
+
+> Ytelsen i `WM_PAINT` er uendret — ingenting er lagt til i tegneløkka, og
+> `DrawChrome` er fjernet fra den. Spesifikasjonens «0,000 ms» er riktig for
+> *denne* endringen, i motsetning til anslagene for siste-pris-linja og
+> `BitBlt`.
+
 ---
 
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
   tråden har hentet. Alle senere åpninger har data fra bufferet umiddelbart.
-- **Ingen synlig indikator på at panelet er festet.** Regelen: dratt eller skalert
-  = festet (auto-skjul av). Lukkes med kryss, ESC eller tray-klikk.
-- **ESC krever fokus.** Er panelet festet og du har vært i et annet vindu, må du
-  klikke panelet først.
-- **Størrelsen overlever omstart** (registret); posisjonen gjør det ikke.
+- **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0` setter
+  tilbake til 380×300 sentrert.
+- **`ESC` krever tastaturfokus.** Har du klikket i et annet vindu, må panelet
+  klikkes først. Lukkeknappen virker uansett.
 - **Tray-ikonets skala er implisitt.** SOL på $150 og BTC på $150 000 tegnes
   begge som `150`. Fonten har ingen `k`-glyf — fase 1 valgte bevisst `75.8`
   framfor `75k` — og verktøytipset bærer det eksakte tallet.
@@ -677,12 +763,10 @@ størrelsesendring uten å lekke — verifisert flat gjennom 20 resizer.
     instrumentert testbygg side om side med den ekte appen, må du endre både
     mutexnavnet og vindusklassen — ellers avslutter testbygget seg selv, eller
     `FindWindow` treffer feil prosess.
-11. **Panelet auto-skjuler seg midt i en måling.** Åpnet via `PostMessage`
-    får det aldri forgrunnsrett, og `WA_INACTIVE` lukker det så snart
-    fokus flytter seg — også mellom to PowerShell-kall. Bruk et testbygg som
-    setter `pinned = TRUE` ved visning. Les alltid `GetWindowRect` **rett
-    før** du fanger skjermbildet; vinduet kan ha flyttet eller endret
-    størrelse siden sist.
+11. **Les `GetWindowRect` rett før du fanger skjermbildet.** Vinduet kan ha
+    flyttet eller endret størrelse siden sist. (Auto-skjul-problemet som
+    gjorde dette til en plage i fase 2 er borte med OS-rammen — `pinned`
+    finnes ikke lenger.)
 12. **Treffdeteksjon må henge på logisk tilstand, ikke på fade-nivå.** Under
     uttoning er overlayet fortsatt synlig. Sjekker du `overlayF > 0`,
     svelger boksen klikk den ikke lenger eier.
@@ -702,6 +786,17 @@ størrelsesendring uten å lekke — verifisert flat gjennom 20 resizer.
 17. **Hold øye med tomt buffer i all ny tilstand.** Rett etter et
     symbolbytte er `candleCount = 0`. Tilstand som «synkroniserer seg» da,
     synkroniserer seg mot ingenting — se feil #15.
+18. **`CopyFromScreen` fanger det som ligger øverst.** Uten `WS_EX_TOPMOST`
+    kan et annet vindu dekke panelet, og skjermbildet blir av *det*. Bruk
+    `PrintWindow` med `PW_RENDERFULLCONTENT` — den tegner vinduet uansett
+    stablerekkefølge.
+19. **`GetGUIThreadInfo` med feil `cbSize` lyver stille.** Den returnerte
+    `TRUE` og `hwndFocus = 0`, altså nøyaktig symptomet på feil #2, mens
+    fokus i virkeligheten var riktig. Sett `cbSize` fra *typen*, ikke fra en
+    bokset instans — og stol mer på et ekte tastetrykk enn på proben.
+20. **Eierskap og oppgavelinje henger sammen.** Et eid vindu får ikke egen
+    knapp i oppgavelinja. Vil du ha knappen, kan vinduet ikke eies — og da
+    må du rive det ned selv ved avslutning.
 
 ---
 
