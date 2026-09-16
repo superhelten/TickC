@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
+#include <dwmapi.h>
 #include <shellapi.h>
 #include <windowsx.h>
 #include <winhttp.h>
@@ -15,11 +16,13 @@
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "shell32.lib")
 
 #define WM_TRAYICON      (WM_USER + 1)
 #define WM_APP_DATA      (WM_APP + 1)   // arbeidertraden har nye data
 #define ID_TRAY_EXIT     1001
+#define ID_TRAY_RESET    1002
 #define TIMER_INTERVAL   3000 // 3 sekunder
 
 // --- Popup / graf ---
@@ -33,8 +36,6 @@
 #define DEFAULT_VIEW     300   // synlig utsnitt ved apning
 #define MIN_VIEW         8     // minste antall synlige lys ved full zoom
 #define ZOOM_STEP        1.2   // per musehjul-hakk
-#define REOPEN_GUARD_MS  250   // hindrer at klikk-for-aa-lukke aapner igjen med en gang
-#define SHOW_GRACE_MS    400   // ignorer fokustap rett etter apning
 #define TIMER_ANIM_ID    2
 #define ANIM_INTERVAL    16     // ~60 fps
 // Tidsbasert interpolasjon, ikke fast steg per tikk: SetTimer(16) fyrer i
@@ -44,10 +45,10 @@
 // ser faden som ferdig) og full innsetting paa ~340 ms. Halen koster kun
 // timer-tikk, ikke opptegninger - vi tegner bare naar det avrundede
 // niva faktisk endrer seg.
-#define ANIM_TAU_CHROME  55.0   // tidskonstant chrome-fade (ms)
+#define ANIM_TAU_FADE    55.0   // tidskonstant overlay-fade (ms)
 #define ANIM_DT_MAX      100.0  // klemmer dt, saa en lang pause gir ett hopp
 
-// View-easing. Litt lengre tau enn chromet - en panorering er en storre
+// View-easing. Litt lengre tau enn overlay-faden - en panorering er en storre
 // bevegelse enn en fade - men ikke mye: 2,3*tau er der oyet ser den som
 // ferdig, altsaa ~160 ms.
 #define ANIM_TAU_VIEW    70.0
@@ -67,8 +68,6 @@
 #define NET_RETRY_MAX    60000  // tak for eksponentiell backoff (ms)
 #define NET_RECONNECT_AT 3      // antall feil for hConnect slippes (ny DNS)
 #define STALE_AFTER      (3 * TIMER_INTERVAL)  // 9 s = to tapte sykluser
-#define CLOSE_SZ         20
-#define HDR_TEXT_L       (PAD_L + 12)  // plass til grip-prikkene
 
 // Layout innenfor popup-vinduet
 #define PAD_L            10
@@ -86,9 +85,6 @@
 #define CLR_CROSS        RGB(0x55, 0x5F, 0x6E)
 #define CLR_BOX          RGB(0x16, 0x1D, 0x27)
 #define CLR_BOXEDGE      RGB(0x33, 0x3D, 0x4B)
-#define CLR_HDRHOT       RGB(0x16, 0x1D, 0x27)
-#define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)
-#define CLR_WHITE        RGB(0xFF, 0xFF, 0xFF)
 #define CLR_WATERMARK    RGB(0x15, 0x19, 0x1F)   // CLR_BG + ~3 %
 // Vannmerkets fonthoyde = klemt(chart-hoyde / 5, 32, 120), grensene i
 // logiske piksler.
@@ -186,26 +182,14 @@ typedef struct {
 
     HFONT hFontBig;
     HFONT hFontSmall;
-    ULONGLONG lastHideTick;
-    ULONGLONG shownTick;
 
     int hoverIdx;        // indeks til lyset under pekeren, -1 = ingen
     int hoverY;          // muse-Y i klientkoordinater
     BOOL trackingMouse;  // om WM_MOUSELEAVE er bestilt
-    BOOL pinned;         // satt nar brukeren drar/endrer storrelse
-    BOOL inSizeMove;     // inne i Windows sin modale flytte-/resize-lokke
-
-    // Kontrollene (kryss, grip, ramme) er usynlige i hvile og tones inn
-    // nar musa er over vinduet. chrome er fade-nivaet 0-255.
-    BOOL windowHot;
-    BOOL headerHot;
-    BOOL closeHot;
-    int  chrome;          // avrundet fade-niva, brukes av tegning og GDI-cache
-    double chromeF;       // selve den animerte verdien
 
     // --- Animasjonsklokke ---
-    // En timer driver alt tidsavhengig: chrome-fade, stale-telleren og
-    // (fra del C) view- og Y-akse-easing. Den lever bare mens noe faktisk
+    // En timer driver alt tidsavhengig: overlay-fade, stale-telleren,
+    // view- og Y-akse-easing. Den lever bare mens noe faktisk
     // er i bevegelse, og drepes naar alt har satt seg.
     ULONGLONG lastAnimTick;
     BOOL   animRunning;
@@ -249,13 +233,6 @@ typedef struct {
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brUp, brDown, brBox, brBoxEdge;
 
-    // Blandede farger avhenger av fade-nivaet, sa de bygges bare naar
-    // (chrome, closeHot) faktisk endrer seg - ikke hvert bilde.
-    int    cacheChrome;
-    BOOL   cacheCloseHot;
-    BOOL   cacheValid;
-    HPEN   penDim, penX;
-    HBRUSH brDim, brEdge, brHdr, brClose;
 
     // --- Vannmerke-cache ---
     // Bakgrunn + vannmerke bakt sammen i en bitmap. Denne ERSTATTER dagens
@@ -274,6 +251,8 @@ typedef struct {
 static AppContext g_Ctx;
 static int g_savedPanelW = 0;   // panelstorrelse fra registret, 0 = ubrukt
 static int g_savedPanelH = 0;
+static int g_savedPanelX = 0;   // settes av LoadConfig, GEOM_UNSET = ubrukt
+static int g_savedPanelY = 0;
 static char s_httpBuf[98304];    // 300 lys gir ~50 KB svar
 static Candle s_incoming[SEED_COUNT];
 
@@ -340,6 +319,10 @@ static DWORD NetBackoffMs(int failures, ULONGLONG tickSeed) {
     return out;
 }
 
+// Skiller "ingen lagret posisjon" fra en ekte koordinat, som godt kan vaere
+// negativ paa en skjerm til venstre for eller over den primaere.
+#define GEOM_UNSET  ((int)0x80000000)
+
 // ---------------------------------------------------------------------------
 // Registret. HKCU\Software\Ticker. Aldri en forutsetning for at appen
 // starter - feiler lesningen, faller vi tilbake pa BTC/USDT 1m.
@@ -358,12 +341,11 @@ static DWORD RegReadDword(HKEY k, const wchar_t* name, DWORD fallback) {
     return fallback;
 }
 
-static void LoadConfig(AppContext* ctx, int* outW, int* outH) {
-    // Standardverdiene settes FORST, slik at enhver feilsti nedenfor lander
-    // pa noe gyldig uten egen behandling.
+static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* outH) {
     ctx->symIdx     = 0;
     ctx->ivIdx      = 0;
     ctx->intervalMs = INTERVALS[0].ms;
+    *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
 
     HKEY k;
@@ -374,6 +356,9 @@ static void LoadConfig(AppContext* ctx, int* outW, int* outH) {
     DWORD iv = RegReadDword(k, L"IntervalIndex", 0);
     DWORD w  = RegReadDword(k, L"PanelWidth",    0);
     DWORD h  = RegReadDword(k, L"PanelHeight",   0);
+    DWORD hasPos = RegReadDword(k, L"PanelHasPos", 0);
+    DWORD px = RegReadDword(k, L"PanelX", 0);
+    DWORD py = RegReadDword(k, L"PanelY", 0);
     RegCloseKey(k);
 
     // Bundet sjekk. Et register redigert for hand, eller etterlatt av en
@@ -384,11 +369,16 @@ static void LoadConfig(AppContext* ctx, int* outW, int* outH) {
         ctx->ivIdx      = (int)iv;
         ctx->intervalMs = INTERVALS[iv].ms;
     }
-    if (w >= 240 && w <= 4096) *outW = (int)w;
-    if (h >= 160 && h <= 4096) *outH = (int)h;
+    if (w >= 240 && w <= 8192) *outW = (int)w;
+    if (h >= 160 && h <= 8192) *outH = (int)h;
+
+    // Posisjonen kan vaere negativ paa en skjerm til venstre for eller over
+    // den primaere, saa den tolkes som signed. PanelHasPos skiller "ikke
+    // lagret" fra "lagret som 0,0".
+    if (hasPos) { *outX = (int)(LONG)px; *outY = (int)(LONG)py; }
 }
 
-static void SaveConfig(const AppContext* ctx, int panelW, int panelH) {
+static void SaveConfig(const AppContext* ctx) {
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
                         KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
@@ -397,12 +387,88 @@ static void SaveConfig(const AppContext* ctx, int panelW, int panelH) {
     DWORD sy = (DWORD)ctx->symIdx, iv = (DWORD)ctx->ivIdx;
     RegSetValueExW(k, L"SymbolIndex",   0, REG_DWORD, (const BYTE*)&sy, sizeof(sy));
     RegSetValueExW(k, L"IntervalIndex", 0, REG_DWORD, (const BYTE*)&iv, sizeof(iv));
-    if (panelW > 0 && panelH > 0) {
-        DWORD w = (DWORD)panelW, h = (DWORD)panelH;
-        RegSetValueExW(k, L"PanelWidth",  0, REG_DWORD, (const BYTE*)&w, sizeof(w));
-        RegSetValueExW(k, L"PanelHeight", 0, REG_DWORD, (const BYTE*)&h, sizeof(h));
-    }
     RegCloseKey(k);
+}
+
+static void SaveGeometry(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return;
+    }
+    DWORD dw = (DWORD)w, dh = (DWORD)h;
+    DWORD dx = (DWORD)(LONG)x, dy = (DWORD)(LONG)y, one = 1;
+    RegSetValueExW(k, L"PanelWidth",  0, REG_DWORD, (const BYTE*)&dw, sizeof(dw));
+    RegSetValueExW(k, L"PanelHeight", 0, REG_DWORD, (const BYTE*)&dh, sizeof(dh));
+    RegSetValueExW(k, L"PanelX",      0, REG_DWORD, (const BYTE*)&dx, sizeof(dx));
+    RegSetValueExW(k, L"PanelY",      0, REG_DWORD, (const BYTE*)&dy, sizeof(dy));
+    RegSetValueExW(k, L"PanelHasPos", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
+    RegCloseKey(k);
+}
+
+// Lagrer posisjon og storrelse slik vinduet staar NAA. Minimert eller
+// maksimert vindu lagres ikke som saadan - da ville vi husket en
+// oppgavelinje-strimmel eller hele skjermen som "brukerens storrelse".
+// GetWindowPlacement gir den gjenopprettede geometrien i begge tilfeller.
+static void SaveWindowPlacement(HWND hwnd) {
+    if (!hwnd) return;
+    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+    if (!GetWindowPlacement(hwnd, &wp)) return;
+    RECT r = wp.rcNormalPosition;
+    SaveGeometry(r.left, r.top, r.right - r.left, r.bottom - r.top);
+}
+
+// Er den lagrede posisjonen fortsatt paa en skjerm som finnes? En posisjon
+// fra en frakoblet skjerm ville lagt vinduet utenfor alt synlig.
+static BOOL PlacementIsVisible(int x, int y, int w, int h) {
+    RECT r = { x, y, x + w, y + h };
+    return MonitorFromRect(&r, MONITOR_DEFAULTTONULL) != NULL;
+}
+
+// Sentrerer vinduet paa den skjermen det staar paa, i fabrikkstorrelse.
+// SWP_NOZORDER | SWP_NOACTIVATE: vi endrer geometri, ikke stablerekkefolge
+// eller fokus - brukeren kan ha trykket Ctrl+0 fra et annet vindu.
+static void ResetToDefaultView(HWND hwnd) {
+    if (!hwnd) return;
+
+    // Var vinduet maksimert, maa det gjenopprettes forst - ellers ville
+    // SetWindowPos skrevet en storrelse som OS-et overstyrer ved restore.
+    if (IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+
+    HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(MONITORINFO) };
+    if (!GetMonitorInfoW(hMon, &mi)) return;
+    RECT wa = mi.rcWork;
+
+    int x = wa.left + ((wa.right - wa.left) - POPUP_W) / 2;
+    int y = wa.top  + ((wa.bottom - wa.top) - POPUP_H) / 2;
+
+    SetWindowPos(hwnd, NULL, x, y, POPUP_W, POPUP_H,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    SaveWindowPlacement(hwnd);
+}
+
+// Ber DWM tegne tittellinja mork. Uten dette staar en lys systemramme rundt
+// en #0D1117-flate, og vinduet ser ut som to halvdeler fra ulike programmer.
+// Attributtet er 20 fra Windows 10 2004; feiler kallet paa eldre bygg, faar
+// vi bare standardrammen - derfor ingen feilhandtering.
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+static void UseDarkTitleBar(HWND hwnd) {
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+}
+
+// Setter tittellinja til det aktive paret. Med ekte OS-ramme er tittelen
+// synlig i baade vinduet og oppgavelinja, saa den skal si hva man ser paa.
+static void UpdatePopupTitle(AppContext* ctx) {
+    if (!ctx->hPopup) return;
+    wchar_t title[96];
+    swprintf_s(title, 96, L"%s  -  %s",
+               SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label);
+    SetWindowTextW(ctx->hPopup, title);
 }
 
 // Spennet folger zoomen - "(60m)" ville vaert feil sa snart man zoomer. Med
@@ -920,10 +986,6 @@ static COLORREF Blend(COLORREF a, COLORREF b, int t) {
     return RGB(r, g, l);
 }
 
-static RECT CloseButtonRect(int W) {
-    RECT r = { W - 6 - CLOSE_SZ, 6, W - 6, 6 + CLOSE_SZ };
-    return r;
-}
 
 static BOOL PtInRect2(const RECT* r, int x, int y) {
     return (x >= r->left && x < r->right && y >= r->top && y < r->bottom);
@@ -1057,36 +1119,6 @@ static void FormatCandleTime(long long unixMs, long long intervalMs,
     }
 }
 
-// De blandede fargene avhenger av fade-nivaet. I stedet for a bygge dem
-// paa nytt hvert bilde (60 ganger i sekundet under fading), gjenbrukes de
-// saa lenge (chrome, closeHot) staar stille.
-static void EnsureChromeCache(AppContext* ctx) {
-    if (ctx->cacheValid &&
-        ctx->cacheChrome == ctx->chrome &&
-        ctx->cacheCloseHot == ctx->closeHot) {
-        return;
-    }
-
-    if (ctx->penDim)  DeleteObject(ctx->penDim);
-    if (ctx->penX)    DeleteObject(ctx->penX);
-    if (ctx->brDim)   DeleteObject(ctx->brDim);
-    if (ctx->brEdge)  DeleteObject(ctx->brEdge);
-    if (ctx->brHdr)   DeleteObject(ctx->brHdr);
-    if (ctx->brClose) DeleteObject(ctx->brClose);
-
-    int a = ctx->chrome;
-    ctx->penDim  = CreatePen(PS_SOLID, 1, Blend(CLR_BG, CLR_DIM, a));
-    ctx->penX    = CreatePen(PS_SOLID, 1,
-                             Blend(CLR_BG, ctx->closeHot ? CLR_WHITE : CLR_DIM, a));
-    ctx->brDim   = CreateSolidBrush(Blend(CLR_BG, CLR_DIM, a));
-    ctx->brEdge  = CreateSolidBrush(Blend(CLR_BG, CLR_BOXEDGE, a));
-    ctx->brHdr   = CreateSolidBrush(Blend(CLR_BG, CLR_HDRHOT, a));
-    ctx->brClose = CreateSolidBrush(Blend(CLR_BG, CLR_CLOSEHOT, a));
-
-    ctx->cacheChrome   = a;
-    ctx->cacheCloseHot = ctx->closeHot;
-    ctx->cacheValid    = TRUE;
-}
 
 // Layout og treffdeteksjon deler en funksjon. To uavhengige utregninger av
 // samme flate ender med a peke forskjellige steder - se feil #7 i loggen.
@@ -1378,15 +1410,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     wchar_t buf[64];
 
-    // Subtil opplysning av tittellinja nar musa er over den
-    if (ctx->headerHot && ctx->chrome > 0) {
-        RECT rcHdrBg = { 1, 1, W - 1, HEADER_H };
-        EnsureChromeCache(ctx);
-        FillRect(hdc, &rcHdrBg, ctx->brHdr);
-    }
-
-    // Plass til krysset til hoyre, grip-prikkene til venstre
-    RECT rcHdr = { HDR_TEXT_L, 10, W - 12 - CLOSE_SZ, 30 };
+    // Ingen grip-prikker og ingen kryss lenger - OS-rammen har dem.
+    // Headerteksten kan bruke hele bredden.
+    RECT rcHdr = { PAD_L, 10, W - 12, 30 };
 
     SelectObject(hdc, ctx->hFontBig);
     SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
@@ -1399,7 +1425,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     DrawTextW(hdc, buf, -1, &rcHdr, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
     SetTextColor(hdc, CLR_DIM);
-    RECT rcSub = { HDR_TEXT_L, 28, W - 12 - CLOSE_SZ, 42 };
+    RECT rcSub = { PAD_L, 28, W - 12, 42 };
     if (stale) {
         swprintf_s(buf, 64, L"%s  -  %s  -  frakoblet %ds",
                    SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label, staleSecs);
@@ -1455,7 +1481,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     // Med dStart = 142,7 finnes det halve lys i begge kanter. Klippingen
     // hindrer at de blor ut i prisaksen og headeren. MAA gjenopprettes for
-    // aksetekstene og chromet tegnes - de ligger utenfor chart-flaten.
+    // aksetekstene tegnes - de ligger utenfor chart-flaten.
     IntersectClipRect(hdc, left, top, right + 1, bottom + 1);
 
     // Lokka gaar fortsatt over SYNLIGE lys, ikke over hele historikken:
@@ -1617,58 +1643,6 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     }
 }
 
-// Kryss, grip-prikker, resize-grip og ramme. Alt tones fra bakgrunnsfargen
-// (usynlig) til full farge via ctx->chrome, sa vinduet er et rent, rammelost
-// element nar musa ikke er der.
-static void DrawChrome(AppContext* ctx, HDC hdc, int W, int H) {
-    int a = ctx->chrome;
-    EnsureChromeCache(ctx);
-
-    // Ramme: dempet ved hover, aksentgronn mens vinduet flyttes/skaleres
-    int borderA = ctx->inSizeMove ? 255 : a;
-    if (borderA > 0) {
-        RECT rcB = { 0, 0, W, H };
-        // Drag-rammen er full styrke og sjelden, sa den bygges ved behov
-        if (ctx->inSizeMove) {
-            HBRUSH hBr = CreateSolidBrush(CLR_UP);
-            FrameRect(hdc, &rcB, hBr);
-            DeleteObject(hBr);
-        } else {
-            FrameRect(hdc, &rcB, ctx->brEdge);
-        }
-    }
-
-    if (a <= 0) return;
-
-    // Grip-prikker (2 x 3) ytterst til venstre i tittellinja
-    for (int col = 0; col < 2; ++col) {
-        for (int row = 0; row < 3; ++row) {
-            RECT d = { 6 + col * 4, 15 + row * 4, 8 + col * 4, 17 + row * 4 };
-            FillRect(hdc, &d, ctx->brDim);
-        }
-    }
-
-    // Kryss
-    RECT rcC = CloseButtonRect(W);
-    if (ctx->closeHot) {
-        FillRect(hdc, &rcC, ctx->brClose);
-    }
-    HPEN hOldX = (HPEN)SelectObject(hdc, ctx->penX);
-    MoveToEx(hdc, rcC.left + 6, rcC.top + 6, NULL);
-    LineTo(hdc, rcC.right - 6, rcC.bottom - 6);
-    MoveToEx(hdc, rcC.right - 7, rcC.top + 6, NULL);
-    LineTo(hdc, rcC.left + 5, rcC.bottom - 6);
-    SelectObject(hdc, hOldX);
-
-    // Resize-grip: tre diagonaler i nederste hoyre hjorne
-    HPEN hOldG = (HPEN)SelectObject(hdc, ctx->penDim);
-    for (int i = 0; i < 3; ++i) {
-        int off = 4 + i * 4;
-        MoveToEx(hdc, W - off, H - 4, NULL);
-        LineTo(hdc, W - 3, H - off - 1);
-    }
-    SelectObject(hdc, hOldG);
-}
 
 static void PaintPopup(AppContext* ctx, HWND hwnd) {
     PAINTSTRUCT ps;
@@ -1694,8 +1668,6 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     // returnerer tidlig naar bufferet er tomt - nettopp tilstanden rett
     // etter et konfigbytte.
     DrawOverlay(ctx, hdcMem, W, H);
-
-    DrawChrome(ctx, hdcMem, W, H);   // rorer ikke lysdata
 
     BitBlt(hdcDst, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
 
@@ -1746,11 +1718,12 @@ static void ApplyConfigChoice(AppContext* ctx, HWND hwnd, int hit) {
     ctx->hoverIdx = -1;
     ctx->wmValid  = FALSE;   // vannmerket viser forrige symbol/intervall
     ctx->dispValid = FALSE;  // nytt buffer: ingenting a ease fra
+    UpdatePopupTitle(ctx);   // tittellinja og oppgavelinja skal folge med
     // SetEvent staar utenfor laasen. Den er ikke PostMessage, men samme regel
     // gjelder av samme grunn: ikke hold laasen over noe som vekker den andre
     // traden.
     SetEvent(ctx->hWakeEvent);
-    SaveConfig(ctx, 0, 0);   // 0,0 = ikke ror panelstorrelsen
+    SaveConfig(ctx);
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -1763,36 +1736,6 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             PaintPopup(&g_Ctx, hwnd);
             return 0;
 
-        // Fjerner hele den ikke-klientiske rammen. WS_THICKFRAME gir oss
-        // resize-maskineriet, dette gjor selve rammen usynlig.
-        case WM_NCCALCSIZE:
-            if (wParam) return 0;
-            break;
-
-        case WM_NCHITTEST: {
-            RECT rw;
-            GetWindowRect(hwnd, &rw);
-            int x = GET_X_LPARAM(lParam) - rw.left;
-            int y = GET_Y_LPARAM(lParam) - rw.top;
-            int w = rw.right - rw.left, h = rw.bottom - rw.top;
-            int lft = (x < RESIZE_BORDER), rgt = (x >= w - RESIZE_BORDER);
-            int tp  = (y < RESIZE_BORDER), bot = (y >= h - RESIZE_BORDER);
-
-            if (tp  && lft) return HTTOPLEFT;
-            if (tp  && rgt) return HTTOPRIGHT;
-            if (bot && lft) return HTBOTTOMLEFT;
-            if (bot && rgt) return HTBOTTOMRIGHT;
-            if (lft) return HTLEFT;
-            if (rgt) return HTRIGHT;
-            if (tp)  return HTTOP;
-            if (bot) return HTBOTTOM;
-            RECT rcC = CloseButtonRect(w);
-            if (PtInRect2(&rcC, x, y)) return HTCLIENT;  // klikk, ikke drag
-
-            if (y < HEADER_H) return HTCAPTION;  // dra vinduet etter headeren
-            return HTCLIENT;
-        }
-
         case WM_GETMINMAXINFO: {
             MINMAXINFO* mmi = (MINMAXINFO*)lParam;
             mmi->ptMinTrackSize.x = POPUP_MIN_W;
@@ -1800,25 +1743,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
         }
 
-        // Drar eller endrer brukeren storrelse, blir vinduet staaende
-        // til det lukkes bevisst - ellers ville det forsvinne i det man
-        // klikket i et annet vindu.
-        case WM_ENTERSIZEMOVE:
-            g_Ctx.pinned     = TRUE;
-            g_Ctx.inSizeMove = TRUE;
-            return 0;
-
         case WM_EXITSIZEMOVE: {
-            g_Ctx.inSizeMove = FALSE;
-            // Storrelsen fanges HER, naar brukeren slipper, ikke ved
-            // avslutning: panelet eies av hovedvinduet og er allerede revet
-            // ned naar WM_DESTROY kommer dit, saa GetWindowRect har ingenting
-            // a lese. Maalt - registret sto uten PanelWidth.
-            RECT rp;
-            if (GetWindowRect(hwnd, &rp)) {
-                g_savedPanelW = rp.right - rp.left;
-                g_savedPanelH = rp.bottom - rp.top;
-            }
+            // Geometrien fanges HER, naar brukeren slipper. Ikke ved
+            // avslutning: panelet er allerede revet ned naar WM_DESTROY naar
+            // hovedvinduet, saa GetWindowRect har ingenting a lese. Maalt -
+            // registret sto uten PanelWidth for dette ble flyttet hit.
+            SaveWindowPlacement(hwnd);
             return 0;
         }
 
@@ -1841,24 +1771,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             GetClientRect(hwnd, &rc);
             ChartRect g = ChartGeometry(rc.right, rc.bottom);
 
-            RECT rcC = CloseButtonRect(rc.right);
-            BOOL wasHot   = g_Ctx.windowHot;
-            BOOL wasHdr   = g_Ctx.headerHot;
-            BOOL wasClose = g_Ctx.closeHot;
-
-            g_Ctx.windowHot = TRUE;
-            g_Ctx.closeHot  = PtInRect2(&rcC, mx, my);
-            g_Ctx.headerHot = (my < HEADER_H) && !g_Ctx.closeHot;
-
-            if (!wasHot) StartAnim(hwnd);
-            if (wasHdr != g_Ctx.headerHot || wasClose != g_Ctx.closeHot) {
-                InvalidateRect(hwnd, NULL, FALSE);
-            }
-
-            // Sperren staar HER, ikke forst i blokka: over den ligger
-            // TrackMouseEvent-armeringen og hot-tilstanden. Returnerte vi
-            // for dem, sluttet WM_MOUSELEAVE a fyre og windowHot ville
-            // hengt fast paa TRUE.
+            // Sperren staar etter TrackMouseEvent-armeringen over. Returnerte
+            // vi for den, sluttet WM_MOUSELEAVE a fyre og crosshairet ville
+            // blitt staaende etter at musa forlot vinduet.
             // Sjekker overlayOpen, ikke overlayF: under uttoning er boksen
             // fortsatt synlig, men musa skal styre grafen igjen.
             if (g_Ctx.overlayOpen) {
@@ -1971,9 +1886,6 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         case WM_MOUSELEAVE:
             g_Ctx.trackingMouse = FALSE;
-            g_Ctx.windowHot     = FALSE;
-            g_Ctx.headerHot     = FALSE;
-            g_Ctx.closeHot      = FALSE;
             g_Ctx.hoverIdx      = -1;
             g_Ctx.overlayHot    = -1;   // ellers blir en rad staaende framhevet
             StartAnim(hwnd);
@@ -1991,22 +1903,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 BOOL redraw  = FALSE;
                 BOOL settled = TRUE;
 
-                // Chrome-fade
-                double target = g_Ctx.windowHot ? 255.0 : 0.0;
-                if (g_Ctx.chromeF != target) {
-                    g_Ctx.chromeF = AnimStep(g_Ctx.chromeF, target, dt,
-                                             ANIM_TAU_CHROME, 0.5);
-                    int rounded = (int)(g_Ctx.chromeF + 0.5);
-                    if (rounded != g_Ctx.chrome) { g_Ctx.chrome = rounded; redraw = TRUE; }
-                    if (g_Ctx.chromeF != target) settled = FALSE;
-                }
-
-                // Overlay-fade. Samme kurve som chromet.
+                // Overlay-fade.
                 double ovlTarget = g_Ctx.overlayOpen ? 255.0 : 0.0;
                 if (g_Ctx.overlayF != ovlTarget) {
                     double before = g_Ctx.overlayF;
                     g_Ctx.overlayF = AnimStep(g_Ctx.overlayF, ovlTarget, dt,
-                                              ANIM_TAU_CHROME, 0.5);
+                                              ANIM_TAU_FADE, 0.5);
                     if ((int)(before + 0.5) != (int)(g_Ctx.overlayF + 0.5)) redraw = TRUE;
                     if (g_Ctx.overlayF != ovlTarget) settled = FALSE;
                 }
@@ -2103,11 +2005,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             RECT rc;
             GetClientRect(hwnd, &rc);
-            RECT rcC = CloseButtonRect(rc.right);
             int dx = GET_X_LPARAM(lParam), dy = GET_Y_LPARAM(lParam);
             ChartRect gg = ChartGeometry(rc.right, rc.bottom);
-            if (!PtInRect2(&rcC, dx, dy) &&
-                dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= gg.bottom) {
+            if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= gg.bottom) {
                 // Start panorering. SetCapture sikrer at vi faar museslipp
                 // ogsaa hvis pekeren forlater vinduet underveis.
                 int vs, vc;
@@ -2120,20 +2020,6 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 g_Ctx.panAnchorView = vs;
                 SetCapture(hwnd);
                 return 0;
-            }
-            if (PtInRect2(&rcC, dx, dy)) {
-                g_Ctx.pinned    = FALSE;
-                g_Ctx.hoverIdx  = -1;
-                g_Ctx.windowHot = FALSE;
-                g_Ctx.closeHot  = FALSE;
-                g_Ctx.headerHot = FALSE;
-                g_Ctx.chrome    = 0;
-                g_Ctx.chromeF   = 0.0;
-                g_Ctx.overlayOpen = FALSE;
-                g_Ctx.overlayF    = 0.0;
-                g_Ctx.overlayHot  = -1;
-                g_Ctx.lastHideTick = GetTickCount64();
-                ShowWindow(hwnd, SW_HIDE);
             }
             return 0;
         }
@@ -2161,32 +2047,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             return 0;
 
-        // HTCAPTION gir vanlig pil fra DefWindowProc - firevegskrysset ma
-        // settes selv. Kantene (HTLEFT osv.) handterer DefWindowProc riktig.
-        case WM_SETCURSOR:
-            if (LOWORD(lParam) == HTCAPTION) {
-                SetCursor(LoadCursorW(NULL, IDC_SIZEALL));
-                return TRUE;
-            }
-            break;
-
-        case WM_ACTIVATE:
-            if (LOWORD(wParam) == WA_INACTIVE) {
-                if (g_Ctx.pinned) return 0;   // festet: bli staaende
-                // Slaar forgrunnsbyttet feil, kommer WA_INACTIVE med en
-                // gang. Uten denne nadeperioden ville vinduet blinke opp
-                // og forsvinne i stedet for a bli staende.
-                if (GetTickCount64() - g_Ctx.shownTick < SHOW_GRACE_MS) return 0;
-                g_Ctx.lastHideTick = GetTickCount64();
-                ShowWindow(hwnd, SW_HIDE);
+        case WM_KEYDOWN:
+            // Ctrl+0: tilbake til fabrikkgeometri, sentrert paa den skjermen
+            // vinduet staar paa.
+            if (wParam == '0' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                ResetToDefaultView(hwnd);
                 return 0;
             }
-            // Ved aktivering MA DefWindowProc fa kjore - det er den som
-            // setter tastaturfokus. Returnerer vi 0 her, far vinduet aldri
-            // fokus (hwndFocus = 0) og ESC naar aldri frem til WM_KEYDOWN.
-            break;
-
-        case WM_KEYDOWN:
             // ESC lukker overlayet FOR den lukker panelet.
             if (wParam == VK_ESCAPE && g_Ctx.overlayOpen) {
                 g_Ctx.overlayOpen = FALSE;
@@ -2196,17 +2063,21 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 return 0;
             }
             if (wParam == VK_ESCAPE) {
-                g_Ctx.pinned = FALSE;
+                // ESC skjuler vinduet til systemstatusfeltet. Med ekte
+                // OS-ramme er krysset det opplagte alternativet, men
+                // tastatursnarveien er billig a beholde.
                 g_Ctx.hoverIdx = -1;
-                g_Ctx.lastHideTick = GetTickCount64();
+                SaveWindowPlacement(hwnd);
                 ShowWindow(hwnd, SW_HIDE);
             }
             return 0;
 
         case WM_CLOSE:
-            g_Ctx.pinned = FALSE;
+            // Lukkeknappen skjuler til systemstatusfeltet. Tickeren er et
+            // tray-program; "Avslutt Ticker" i tray-menyen avslutter det.
+            // Posisjonen lagres for vi forsvinner.
             g_Ctx.hoverIdx = -1;
-            g_Ctx.lastHideTick = GetTickCount64();
+            SaveWindowPlacement(hwnd);
             ShowWindow(hwnd, SW_HIDE);
             return 0;
     }
@@ -2215,46 +2086,26 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
 // Plasser popupen i hjornet av arbeidsomraadet naermest musepekeren.
 // Handterer oppgavelinje i alle kanter + flere skjermer.
-static void PositionPopup(HWND hPopup) {
-    POINT pt;
-    GetCursorPos(&pt);
 
-    HMONITOR hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi = { sizeof(MONITORINFO) };
-    if (!GetMonitorInfoW(hMon, &mi)) return;
 
-    RECT wa = mi.rcWork;
+// Plasserer vinduet forste gang det opprettes: lagret posisjon hvis den
+// finnes og fortsatt er synlig, ellers sentrert.
+static void PlacePopupInitially(HWND hwnd) {
+    int w = (g_savedPanelW > 0) ? g_savedPanelW : POPUP_W;
+    int h = (g_savedPanelH > 0) ? g_savedPanelH : POPUP_H;
 
-    // Bruk vinduets NAVAERENDE storrelse - har brukeren endret den,
-    // skal den beholdes neste gang grafen apnes.
-    RECT rw;
-    GetWindowRect(hPopup, &rw);
-    int w = rw.right - rw.left;
-    int h = rw.bottom - rw.top;
-    if (w <= 0) w = POPUP_W;
-    if (h <= 0) h = POPUP_H;
-
-    // Vannrett: sentrer paa pekeren, men hold innenfor arbeidsomraadet
-    int x = pt.x - w / 2;
-    if (x < wa.left) x = wa.left;
-    if (x + w > wa.right) x = wa.right - w;
-
-    // Loddrett: under pekeren hvis det er plass (oppgavelinje oppe),
-    // ellers over (oppgavelinje nede - det vanlige tilfellet)
-    int y;
-    if (pt.y - wa.top < h && wa.bottom - pt.y > h) {
-        y = wa.top;
-    } else {
-        y = wa.bottom - h;
+    if (g_savedPanelX != GEOM_UNSET && g_savedPanelY != GEOM_UNSET &&
+        PlacementIsVisible(g_savedPanelX, g_savedPanelY, w, h)) {
+        SetWindowPos(hwnd, NULL, g_savedPanelX, g_savedPanelY, w, h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        return;
     }
-    if (y < wa.top) y = wa.top;
-
-    SetWindowPos(hPopup, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
+    ResetToDefaultView(hwnd);
 }
 
 // Windows nekter SetForegroundWindow fra en prosess som ikke eier
-// forgrunnen. Uten dette blir popupen vist, men aldri aktivert - og far
-// WA_INACTIVE med en gang, slik at den skjuler seg selv umiddelbart.
+// forgrunnen. Uten dette blir vinduet vist, men aldri aktivert - og
+// tastaturfokus havner ingen steder, saa Ctrl+0 og ESC ikke naar frem.
 // Losningen er a koble input-koen var til forgrunnstraden mens vi bytter.
 static void ForceForeground(HWND hwnd) {
     HWND hFore = GetForegroundWindow();
@@ -2276,43 +2127,45 @@ static void ForceForeground(HWND hwnd) {
     }
 }
 
+
+// Tray-klikk. Med et vanlig vindu er den forventede oppforselen: er det
+// fremme og aktivt, skjul det; ellers vis det og gi det fokus. Minimert
+// vindu gjenopprettes.
 static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
-        ctx->pinned    = FALSE;
-        ctx->hoverIdx  = -1;
-        ctx->windowHot = FALSE;
-        ctx->chrome    = 0;
-        ctx->chromeF   = 0.0;
-        ctx->overlayOpen = FALSE;
-        ctx->overlayF    = 0.0;
-        ctx->overlayHot  = -1;
-        ctx->lastHideTick = GetTickCount64();
-        ShowWindow(ctx->hPopup, SW_HIDE);
+        if (!IsIconic(ctx->hPopup) && GetForegroundWindow() == ctx->hPopup) {
+            ctx->hoverIdx = -1;
+            ctx->overlayOpen = FALSE;
+            ctx->overlayF    = 0.0;
+            ctx->overlayHot  = -1;
+            SaveWindowPlacement(ctx->hPopup);
+            ShowWindow(ctx->hPopup, SW_HIDE);
+            return;
+        }
+        if (IsIconic(ctx->hPopup)) ShowWindow(ctx->hPopup, SW_RESTORE);
+        ForceForeground(ctx->hPopup);
         return;
     }
 
-    // Klikk paa tray-ikonet deaktiverer forst popupen (som skjuler den via
-    // WM_ACTIVATE), deretter kommer WM_LBUTTONUP hit. Uten denne sperren
-    // ville vinduet aapne seg igjen med en gang.
-    if (GetTickCount64() - ctx->lastHideTick < REOPEN_GUARD_MS) return;
-
+    BOOL created = FALSE;
     if (!ctx->hPopup) {
+        // Ekte OS-ramme: tittellinje, minimer, maksimer, lukk. Ingen
+        // WS_EX_TOOLWINDOW, saa vinduet faar knapp i oppgavelinja; ingen
+        // WS_EX_TOPMOST, saa det oppforer seg som et vanlig vindu.
         HWND hp = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            0,
             L"BTCPopupClass", L"BTC Chart",
-            WS_POPUP | WS_THICKFRAME,   // THICKFRAME = resizable; rammen skjules i WM_NCCALCSIZE
-            0, 0,
-            // Lagret storrelse fra registret. 0 betyr "ikke lagret" og gir
-            // standardmaalene. WM_SIZE fyrer som del av opprettelsen, saa
-            // vannmerke-cachen bygges for riktig flate uten et eget steg.
-            (g_savedPanelW > 0) ? g_savedPanelW : POPUP_W,
-            (g_savedPanelH > 0) ? g_savedPanelH : POPUP_H,
-            ctx->hWnd, NULL, hInst, NULL);
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, CW_USEDEFAULT, POPUP_W, POPUP_H,
+            NULL, NULL, hInst, NULL);
         if (!hp) return;
+
+        UseDarkTitleBar(hp);
 
         EnterCriticalSection(&ctx->lock);   // traden leser hPopup
         ctx->hPopup = hp;
         LeaveCriticalSection(&ctx->lock);
+        created = TRUE;
     }
 
     EnterCriticalSection(&ctx->lock);
@@ -2327,20 +2180,16 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 
     ctx->panning   = FALSE;
     ctx->hoverIdx  = -1;
-    ctx->windowHot = FALSE;
-    ctx->headerHot = FALSE;
-    ctx->closeHot  = FALSE;
-    ctx->chrome    = 0;   // apner alltid rent, uten kontroller
-    ctx->chromeF   = 0.0;
     ctx->overlayOpen = FALSE;   // overlayet skal aldri sta apent ved apning
     ctx->overlayF    = 0.0;
     ctx->overlayHot  = -1;
     ctx->dispValid   = FALSE;   // panelet skal apne ferdig, ikke gli paa plass
-    PositionPopup(ctx->hPopup);
-    ctx->shownTick = GetTickCount64();
-    ShowWindow(ctx->hPopup, SW_SHOWNA);
+
+    UpdatePopupTitle(ctx);
+    if (created) PlacePopupInitially(ctx->hPopup);
+    ShowWindow(ctx->hPopup, SW_SHOW);
     ForceForeground(ctx->hPopup);
-    SetEvent(ctx->hWakeEvent);   // hent lys na, ikke om opptil 3 sekunder // kreves for at WA_INACTIVE skal utloses senere
+    SetEvent(ctx->hWakeEvent);   // hent lys na, ikke om opptil 3 sekunder
 
     // Er linja nede idet panelet apnes, maa klokka starte her. WM_TIMER
     // lar den do mens panelet er skjult, og neste WM_APP_DATA kan vaere
@@ -2366,6 +2215,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 TogglePopup(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
             } else if (lParam == WM_RBUTTONUP) {
                 HMENU hMenu = CreatePopupMenu();
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESET, L"Standardvisning	Ctrl+0");
+                AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt Ticker");
 
                 POINT pt;
@@ -2377,6 +2228,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             break;
 
         case WM_COMMAND:
+            if (LOWORD(wParam) == ID_TRAY_RESET) {
+                // Finnes ikke vinduet enda, lag det forst - ellers ville
+                // menypunktet vaert en stille no-op.
+                if (!g_Ctx.hPopup || !IsWindowVisible(g_Ctx.hPopup)) {
+                    TogglePopup(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+                }
+                ResetToDefaultView(g_Ctx.hPopup);
+                return 0;
+            }
             if (LOWORD(wParam) == ID_TRAY_EXIT) {
                 Shell_NotifyIconW(NIM_DELETE, &g_Ctx.nid);
                 PostQuitMessage(0);
@@ -2410,7 +2270,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_DESTROY:
-            SaveConfig(&g_Ctx, g_savedPanelW, g_savedPanelH);
+            SaveConfig(&g_Ctx);
+            if (g_Ctx.hPopup) SaveWindowPlacement(g_Ctx.hPopup);
             PostQuitMessage(0);
             break;
 
@@ -2499,7 +2360,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // den poster meldinger til hWnd med en gang.
     // MA staa for CreateThread: forste henting skal gaa mot riktig par, og
     // vannmerket skal vaere korrekt fra forste bilde.
-    LoadConfig(&g_Ctx, &g_savedPanelW, &g_savedPanelH);
+    LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
+               &g_savedPanelW, &g_savedPanelH);
 
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manuell reset
@@ -2532,12 +2394,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     DeleteObject(g_Ctx.brDown);   DeleteObject(g_Ctx.brBox);
     DeleteObject(g_Ctx.brBoxEdge);
     DeleteObject(g_Ctx.penLastUp);   DeleteObject(g_Ctx.penLastDown);
-    if (g_Ctx.penDim)   DeleteObject(g_Ctx.penDim);
-    if (g_Ctx.penX)     DeleteObject(g_Ctx.penX);
-    if (g_Ctx.brDim)    DeleteObject(g_Ctx.brDim);
-    if (g_Ctx.brEdge)   DeleteObject(g_Ctx.brEdge);
-    if (g_Ctx.brHdr)    DeleteObject(g_Ctx.brHdr);
-    if (g_Ctx.brClose)  DeleteObject(g_Ctx.brClose);
 
     // Vannmerke-cachen. Rekkefolgen er viktig: bitmapen maa velges ut av
     // DC-en for begge slettes.
