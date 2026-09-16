@@ -4,13 +4,15 @@ Status per 16.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
 del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
 indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
-er levert.** Deretter er panelet flyttet fra rammelost popup til et vanlig
-OS-vindu — se **Vinduet** under. Design:
+er levert.** Deretter er panelet flyttet fra rammeløst popup til et vanlig
+OS-vindu, og så, i **fase 4**, tilbake til rammeløst — denne gangen med egne
+kontrollknapper og nativ `HTCAPTION`-flytting. Se **Vinduet** under. Plan:
+`docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-Alt ligger i **én fil**, `ticker.c` (~1516 linjer). Ingen eksterne avhengigheter
+Alt ligger i **én fil**, `ticker.c` (~2740 linjer). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
 ---
@@ -27,7 +29,8 @@ den opprinnelige exe-en). Prosessen kjører single-instance via en navngitt
 mutex, så **stopp den kjørende instansen før linking**, ellers feiler
 `LNK1104: cannot open file 'ticker.exe'`.
 
-Fotavtrykk: ~3,3 MB private bytes, ~140 KB exe.
+Fotavtrykk: ~3,6 MB private bytes, ~164 KB exe. (Panelet er 1280×720 nå, mot
+380×300 i fase 1 — dobbeltbufferet er 8× større.)
 
 ---
 
@@ -78,28 +81,111 @@ fade-fargene bare når `(chrome, closeHot)` endrer seg.
 
 ### Vinduet
 
-Panelet er et **vanlig OS-vindu**: `WS_OVERLAPPEDWINDOW` med tittellinje,
-minimer, maksimer og lukk, knapp i oppgavelinja, og ikke lenger alltid øverst.
-`WM_NCCALCSIZE`, `WM_NCHITTEST` og `WM_SETCURSOR` finnes ikke — `DefWindowProc`
-gjør jobben.
+Panelet er et **rammeløst vindu med egne kontrollknapper**:
+`WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`. Hele den
+ikke-klientaktige rammen fjernes i `WM_NCCALCSIZE`, så klientflaten er
+nøyaktig like stor som vindusrektangelet — målt 1280×720 mot 1280×720.
+Knapp i oppgavelinja, ikke alltid øverst.
 
-> **Dette erstattet det rammeløse panelet fra fase 1.** Hele hover-chromet
-> (kryss, grip-prikker, resize-grip, ramme, fade) og auto-skjul på fokustap
-> fantes *fordi* det ikke var noen OS-ramme. Alt er fjernet i `c77b6eb`. Se
-> «Fjernet i fase 3» under funksjonslista.
+> **Historikk, to omganger.** Fase 1 var rammeløs med et hover-chrome som
+> tonet inn. `c77b6eb` rev alt og gikk over til `WS_OVERLAPPEDWINDOW` med
+> OS-tittellinje. Denne omgangen går tilbake til rammeløst, men *ikke* til
+> fase 1-designet: knappene er alltid synlige, uten fade, og uten auto-skjul
+> på fokustap. Se «Fjernet i fase 3».
+
+#### Alt henger på `WM_NCHITTEST`
+
+Uten OS-ramme er det vi som avgjør hva musa står på. Dette er det bærende
+grepet — knapper, flytting og skalering faller alle ut av én funksjon:
+
+| Sone | Retur | Hvem handler |
+|---|---|---|
+| < 6 px fra en kant (`RESIZE_BORDER`) | `HTLEFT` … `HTBOTTOMRIGHT` | `DefWindowProc` skalerer |
+| Knappeboks i headeren | `HTCLIENT` | vi, i `WM_LBUTTONDOWN` |
+| Ellers i headeren (`y < 44`) | `HTCAPTION` | `DefWindowProc` flytter |
+| Resten | `HTCLIENT` | vi |
+
+**`HTCAPTION` er hele flyttemekanismen.** `DefWindowProc` genererer selv
+`WM_NCLBUTTONDOWN`/`HTCAPTION` og kjører OS-ets dra-løkke — vi skriver ingen
+dra-kode, og får Aero Snap, dobbeltklikk-maksimering og `Win`+piltast gratis.
+Alt tre er målt.
+
+> **Rekkefølgen inne i headeren er ikke kosmetikk.** Et `HTCAPTION`-område får
+> *aldri* `WM_LBUTTONDOWN`. Returnerer vi `HTCAPTION` for hele headeren, er
+> knappene tegnet, men døde — og et klikk på krysset starter en
+> vindusflytting. Se fallgruve 21.
+
+Kantene skaleres **ikke** når vinduet er maksimert: der ville et klikk 2 px
+fra skjermkanten startet en dra-skalering av noe som per definisjon fyller
+skjermen.
+
+#### Maksimering må oppgis manuelt
+
+Et `WS_POPUP`-vindu maksimerer seg til hele **skjermen**, ikke til
+arbeidsområdet — og OS-et legger rammebredden utenpå. Målt før `WM_GETMINMAXINFO`
+fikk grensene: **−7,−7 3854×1614** mot `rcWork` **0,0 3840×1552**. Panelet
+dekket oppgavelinja med 55 px, og krysset lå 7 px utenfor skjermkanten.
+
+`WM_GETMINMAXINFO` setter derfor `ptMaxPosition` og `ptMaxSize` fra `rcWork`
+selv. `ptMaxPosition` er relativ til *skjermens* hjørne, ikke til skrivebordet.
+Etterpå treffer maksimert vindu `rcWork` eksakt.
+
+> `ptMaxTrackSize` settes **ikke**. Den ville klemt *manuell* skalering til én
+> skjerms arbeidsområde, så panelet ikke lenger kunne strekkes over to
+> skjermer. Det er maksimert størrelse som skal følge `rcWork`, ikke største
+> tillatte størrelse.
+
+`DWMWA_WINDOW_CORNER_PREFERENCE = DONOTROUND`: Windows 11 runder hjørnene på
+`WS_THICKFRAME`-vinduer også når rammen er fjernet, og radien klipper krysset.
+
+#### Kontrollknappene
+
+Fire knapper oppe til høyre, 26×18 px hver, 2 px mellomrom, 8 px fra høyre
+kant. `ButtonLayout(W, out[4])` er **eneste sannhetskilde** — tegning,
+`WM_NCHITTEST`, hover og klikk leser alle den (fallgruve 14).
+
+| Knapp | Handling |
+|---|---|
+| `↺` | `ResetToDefaultView` — 1280×720 sentrert |
+| `–` | `ShowWindow(SW_MINIMIZE)` |
+| `□` | `SW_MAXIMIZE` / `SW_RESTORE` etter `IsZoomed` |
+| `×` | `WM_CLOSE` → skjuler til systemstatusfeltet |
+
+**Rene GDI-vektorer, ingen font.** En `DrawTextW` med et Unicode-tegn koster
+langt mer enn fire `LineTo`, og ville vært avhengig av at fonten *har* glyfen
+— samme problem som tray-ikonets manglende `k`.
+
+**Ingen fade.** Fargen skifter momentant på hover, og treffet henger på
+`btnHot`, ikke på noe fade-nivå (fallgruve 12). Hvile: glyf `#6E7681` på
+panelbakgrunn, ingen knappebakgrunn. Hover: `#161D27` bak `↺ – □`, `#C02A3E`
+bak `×`, med hvit glyf.
+
+**Tegnes fra `PaintPopup`, ikke fra `DrawChart`.** `DrawChart` returnerer
+tidlig når bufferet er tomt — altså mens det står «Laster data fra
+Binance...» og under hele en frakobling. Lå tegningen der, forsvant krysset
+nettopp når man vil lukke panelet. Samme grunn som `DrawOverlay` ligger der.
+
+**Headerteksten krymper med `BTN_STRIP_W`** (118 px), ellers lå den
+høyrestilte prosenten rett under krysset.
+
+#### Resten
 
 | Handling | Oppførsel |
 |---|---|
-| Maksimer / gjenopprett / minimer | `DefWindowProc`; vi fanger bare `WM_SIZE` |
-| Lukkeknapp | skjuler til systemstatusfeltet og lagrer geometrien |
 | «Avslutt Ticker» i tray-menyen | avslutter programmet |
 | Tray-klikk | fremme og aktivt → skjul; ellers vis, gjenopprett og gi fokus |
-| `Ctrl` + `0` / «Standardvisning» | sentrer 380×300 på skjermen vinduet står på |
+| `Ctrl` + `0` / «Standardvisning» / `↺` | sentrer 1280×720 på skjermen vinduet står på |
 | `ESC` | skjuler til systemstatusfeltet |
+| Dobbeltklikk i ledig headerflate | maksimerer / gjenoppretter |
+| `Win` + `↑` / `↓` / `←` | maksimer / gjenopprett / snap — virker uten `WS_SYSMENU` |
 
-**Tittellinja viser aktivt par** og følger symbolbytte, så den er riktig også i
-oppgavelinja. DWM tegner den mørk — ellers sto en lys systemramme rundt en
-`#0D1117`-flate.
+**Standardvisningen er DPI-skalert:** `MulDiv(1280, GetDpiForWindow(hwnd), 96)`,
+klemt til arbeidsområdet. Prosessen er fortsatt **DPI-uvitende**, så dette gir
+nøyaktig 1280×720 i dag — men det blir riktig automatisk dersom DPI-bevissthet
+senere skrus på. Se «Avviste forslag» for hvorfor den ikke er det.
+
+**`UpdatePopupTitle` er beholdt** selv uten tittellinje: tittelen er det
+oppgavelinja og `Alt`+`Tab` viser.
 
 **`ForceForeground` er beholdt.** Feil #1 gjelder fortsatt: et tray-klikk gir
 ikke prosessen forgrunnsrett, og uten dette får vinduet aldri tastaturfokus —
@@ -107,7 +193,8 @@ da når verken `ESC` eller `Ctrl`+`0` frem.
 
 **Panelet eies ikke av hovedvinduet.** Eierskap ville fjernet knappen i
 oppgavelinja, men det betyr også at Windows ikke river det ned for oss:
-`WM_DESTROY` på hovedvinduet gjør det selv.
+`WM_DESTROY` på hovedvinduet gjør det selv. Målt at knappen er der med panelet
+og borte når det skjules — `WS_EX_APPWINDOW` er ikke nødvendig.
 
 **Geometri i registret:** `PanelX`, `PanelY`, `PanelWidth`, `PanelHeight`,
 pluss `PanelHasPos` som skiller «ikke lagret» fra «lagret som 0,0».
@@ -116,6 +203,13 @@ primære. Lagret posisjon brukes bare hvis den fortsatt treffer en tilkoblet
 skjerm (`MonitorFromRect`), ellers sentreres vinduet. Lagringen går gjennom
 `GetWindowPlacement`, så et minimert eller maksimert vindu ikke husker en
 oppgavelinje-strimmel som «brukerens størrelse».
+
+**`ResetToDefaultView` gjenoppretter både maksimert og minimert vindu først.**
+Et minimert vindu er fortsatt `WS_VISIBLE`, så `IsWindowVisible` er `TRUE` og
+tray-menyens «Standardvisning» hopper over `TogglePopup`; uten `IsIconic`-
+sjekken satte `SetWindowPos` bare den gjenopprettede geometrien mens vinduet
+ble stående minimert på −32000,−32000. Menypunktet gjorde altså ingenting
+synlig. Feilen var der fra før, men minimer-knappen gjør stien lett å nå.
 
 ### Animasjonsklokka
 
@@ -333,12 +427,20 @@ Dette er hva som ikke lenger finnes, og hvor det ble borte:
 | `EnsureChromeCache` og seks bufrede GDI-objekter | fulgte med chromet; GDI 35 → 29 | `c77b6eb` |
 | Auto-skjul på fokustap, `pinned`, `SHOW_GRACE_MS`, `REOPEN_GUARD_MS` | et vindu med tittellinje som forsvinner når man klikker i et annet vindu er ubrukelig | `c77b6eb` |
 | `inSizeMove` (feil #6) | brukt til dragrammens farge, som er borte | `c77b6eb` |
-| `WM_NCCALCSIZE`, `WM_NCHITTEST`, `WM_SETCURSOR` | `DefWindowProc` gjør jobben igjen | `c77b6eb` |
-| `CLR_WHITE`, `CLR_HDRHOT`, `CLR_CLOSEHOT` | hadde bare chromet som bruker | `c77b6eb` |
+| `WM_SETCURSOR` | `DefWindowProc` gjør jobben igjen | `c77b6eb` |
+| `CLR_WHITE`, `CLR_HDRHOT` | hadde bare chromet som bruker | `c77b6eb` |
 
-Målingene av fade-fargene (`#0D1117 → #333D4B`) og av pekerne i ni soner
-gjelder kode som ikke finnes lenger. De står igjen som metode: *mål
-pikselfarger, ikke øyemål* er fortsatt regelen — se fallgruve #7.
+Målingene av fade-fargene (`#0D1117 → #333D4B`) gjelder kode som ikke finnes
+lenger. De står igjen som metode: *mål pikselfarger, ikke øyemål* er fortsatt
+regelen — se fallgruve #7.
+
+> **Tre av radene over kom tilbake i fase 4.** `WM_NCCALCSIZE` og
+> `WM_NCHITTEST` er nødvendige igjen så snart OS-rammen er borte, og
+> `CLR_CLOSEHOT` er farven bak krysset. `WM_SETCURSOR` er *ikke* tilbake:
+> headeren trengte `IDC_SIZEALL` i fase 1 fordi hele vinduet var en dra-flate
+> med skjult chrome; nå er vanlig pil riktig, slik den er i en tittellinje.
+> Det som ikke kom tilbake er faden, auto-skjulet og de seks bufrede
+> chrome-objektene.
 
 ---
 
@@ -697,12 +799,70 @@ Alt målt på et ekte vindu på 3840×1600:
 
 ---
 
+### Fase 4 — rammeløst vindu med egne kontrollknapper
+
+**Knappetegningen** (`QueryPerformanceCounter` rundt *kun* `DrawButtons`, i et
+instrumentert bygg med eget mutexnavn og egen vindusklasse — fallgruve 10).
+Over 1500 opptegninger per runde, drevet av kontinuerlig zoom:
+
+| Runde | Min | Median | Snitt | Maks |
+|---|---|---|---|---|
+| Peker vekk (99 %-tilfellet) | 0,0126 ms | **0,0153 ms** | 0,0158 ms | 0,1014 ms |
+| Peker på en knapp (`FillRect` med) | 0,0119 ms | **0,0139 ms** | 0,0143 ms | 0,0873 ms |
+
+QPC-parets egen kostnad ble målt til under 0,00001 ms (raskeste av 1000 tomme
+par) og er altså ikke en faktor.
+
+> **Mandatets budsjett var < 0,003 ms. Det holdes ikke — målt er ~0,015 ms,
+> altså fem ganger over.** 3 µs tilsvarer to til fire GDI-kall på en minne-DC;
+> de fire knappene er rundt ti, pluss en `FillRect` ved hover. Tallet står som
+> det er i stedet for å rundes bort.
+>
+> I sammenheng: en hel opptegning ved 1280×720 tar **0,853 ms** (median),
+> så knappene er **1,8 %** av den. Reserveveien — forhåndstegnet rad som
+> `BitBlt` — står under «Avviste forslag» med begrunnelse.
+
+**Hele `PaintPopup` ved 1280×720**, samme metode som tabellen over:
+
+| | Min | Median | Snitt | Maks |
+|---|---|---|---|---|
+| `PaintPopup`, 1280×720 | 0,5367 ms | 0,8527 ms | 0,8988 ms | 5,9505 ms |
+
+Ikke sammenliknbart med de 1,255 ms lenger oppe: den målingen var på et
+380×300-panel. Flaten er her 8× større, og opptegningen er likevel raskere,
+fordi utsnittet er det samme antallet lys fordelt over flere piksler.
+
+**Håndtak: GDI 27 → 31** for de fire nye objektene (tre penner og en rød
+lukkebakgrunn; hover-bakgrunnen gjenbruker `brBox`). Målt på samme bygg før og
+etter, ikke antatt. Loggens tidligere 29 gjaldt bygget med OS-ramme —
+rammefjerningen tok den 29 → 27. USER 14, uendret.
+
+**Stresstest:** 2 × 20 s, ~3,1 millioner operasjoner per runde, med ~79 000
+ekte musejiggler *på* krysset, så hover-stien med `FillRect` var med i lasten.
+Ingen vranglås. Håndtak 31/14 før og etter begge rundene; se fallgruve 27 om
+hvorfor de står på 34/15 *under* kjøring.
+
+**Treffsoner:** 22/22, både normalt og maksimert, spørt direkte med
+`SendMessage(WM_NCHITTEST)`. Grensene er pikselnøyaktige: `y=5` gir `HTTOP`
+og `y=6` gir `HTCLIENT` — knapperaden begynner nøyaktig der `RESIZE_BORDER`
+slutter.
+
+---
+
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
   tråden har hentet. Alle senere åpninger har data fra bufferet umiddelbart.
-- **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0` setter
-  tilbake til 380×300 sentrert.
+- **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0`, `↺` og
+  tray-menyens «Standardvisning» setter tilbake til **1280×720** sentrert,
+  klemt til arbeidsområdet om skjermen er mindre.
+- **Headerteksten klippes under ~340 px bredde.** Knapperaden tar 118 px
+  fast, og prisen i stor font trenger resten. `POPUP_MIN_W` er 260, så det
+  går an å dra panelet smalt nok til at `$75 953.38` og `+0,12 % (5t)`
+  møtes. `DrawTextW` klipper, så det er trygt — bare stygt.
+- **Kontrollknappene har ingen tastatursnarvei** ut over `Ctrl`+`0`, `ESC`
+  og `Win`+piltast. Det finnes ingen systemmeny (`Alt`+mellomrom), fordi
+  vinduet ikke har `WS_SYSMENU`.
 - **`ESC` krever tastaturfokus.** Har du klikket i et annet vindu, må panelet
   klikkes først. Lukkeknappen virker uansett.
 - **Tray-ikonets skala er implisitt.** SOL på $150 og BTC på $150 000 tegnes
@@ -729,6 +889,18 @@ Alt målt på et ekte vindu på 3840×1600:
   Gevinsten ville vært én `memmove` på 57 KB i minuttet (~5 µs) mot
   modulo-aritmetikk i all indeksering.
 - **Begrensning til synlig utsnitt:** allerede på plass siden zoom-arbeidet.
+- **DPI-manifest / `SetProcessDpiAwarenessContext`:** «DPI-skalert 1280×720»
+  i mandatet ble tolket som `MulDiv` mot `GetDpiForWindow`, ikke som å gjøre
+  prosessen DPI-bevisst. Hele layouten er i rå piksler, og vannmerkets
+  klemmegrenser ville talt skaleringen to ganger — se DPI-kommentaren i
+  `EnsureWatermark`. Skal det gjøres, er det en egen jobb som må gjennom hver
+  eneste konstant.
+- **Forhåndstegnet knapperad som `BitBlt`:** ville brakt knappetegningen
+  innenfor 0,003 ms (ett kall, ~1–2 µs) mot to GDI-håndtak til og en cache som
+  må ugyldiggjøres ved `WM_SIZE` og ved hvert hover-skifte. Målt koster
+  vektorene 0,015 ms, altså 1,8 % av en opptegning. Ikke verdt kompleksiteten
+  — men mekanismen finnes allerede i `EnsureWatermark` om budsjettet skal
+  holdes bokstavelig.
 - **WebView2 + Lightweight Charts:** ville brutt målet om lavt fotavtrykk med
   50–100× (Edge-subprosesser bruker 100–200 MB mot våre 3,3 MB).
 
@@ -797,6 +969,38 @@ Alt målt på et ekte vindu på 3840×1600:
 20. **Eierskap og oppgavelinje henger sammen.** Et eid vindu får ikke egen
     knapp i oppgavelinja. Vil du ha knappen, kan vinduet ikke eies — og da
     må du rive det ned selv ved avslutning.
+
+21. **En `HTCAPTION`-flate får aldri `WM_LBUTTONDOWN`.** Tegner du egne
+    knapper i en header som returnerer `HTCAPTION`, er de synlige og døde —
+    og et klikk på dem starter en vindusflytting. `WM_NCHITTEST` må
+    returnere `HTCLIENT` over hver knappeboks. Rekkefølgen i den ene
+    funksjonen *er* mekanismen.
+22. **Et rammeløst `WS_POPUP` maksimerer seg til hele skjermen.** Ikke til
+    arbeidsområdet, og OS-et legger rammebredden utenpå: målt
+    −7,−7 3854×1614 mot `rcWork` 0,0 3840×1552 — panelet dekket
+    oppgavelinja. `WM_GETMINMAXINFO` må oppgi `ptMaxPosition` og `ptMaxSize`
+    selv. Å trekke rammebredden fra i `WM_NCCALCSIZE` retter *ikke* dette;
+    det var første forsøk, og de 7 pikslene er ikke de 55 som mangler.
+    La `ptMaxTrackSize` være — den klemmer manuell skalering også.
+23. **`WM_MOUSELEAVE` fyrer når pekeren går fra `HTCLIENT` til `HTCAPTION`
+    i samme vindu.** Den forlater klientområdet uten å forlate vinduet. All
+    hover-tilstand må nullstilles der, ellers blir en knapp stående opplyst
+    når musa går fra den og ut i headeren.
+24. **`Arc` går mot klokka *sett på skjermen*.** Start 3 og slutt 12 gir en
+    bue i øvre høyre kvadrant, ikke tre fjerdedeler. Vil du ha en
+    sirkelpil, start på 12 og slutt på 2. Mål det, ikke resonner om
+    logiske koordinater.
+25. **`FindWindow` fant ikke appens egne vindusklasser** i dette oppsettet,
+    mens den fant `Shell_TrayWnd`. `EnumWindows` med `GetClassName` fungerte
+    hver gang. Bruk den i prober.
+26. **Knappene ligger relativt til høyre kant.** En probe med hardkodede
+    x-verdier gjelder bare den bredden den ble skrevet for, og treffer tom
+    flate så snart vinduet maksimeres. Regn bakover fra `GetWindowRect`,
+    slik `ButtonLayout` gjør.
+27. **Håndtakstellingen må leses i hvile.** Under pågående opptegning står
+    GDI på 34 og USER på 15 — dobbeltbufferet og vannmerket i flukt — mot
+    31/14 når alt har satt seg. Måler du midt i en stresstest, ser du en
+    lekkasje som ikke finnes.
 
 ---
 
