@@ -284,6 +284,26 @@ static DWORD NetBackoffMs(int failures, ULONGLONG tickSeed) {
     return out;
 }
 
+// Spennet folger zoomen - "(60m)" ville vaert feil sa snart man zoomer. Med
+// variabelt intervall holder det ikke lenger a telle lys som minutter: 300
+// lys a 1d er ti maneder, ikke fem timer.
+static void FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch) {
+    long long mins = (long long)vc * intervalMs / 60000LL;
+    if (mins < 60) {
+        swprintf_s(out, cch, L"%lldm", mins);
+        return;
+    }
+    long long hours = mins / 60, rm = mins % 60;
+    if (hours < 24) {
+        if (rm) swprintf_s(out, cch, L"%lldt %lldm", hours, rm);
+        else    swprintf_s(out, cch, L"%lldt", hours);
+        return;
+    }
+    long long days = hours / 24, rh = hours % 24;
+    if (rh) swprintf_s(out, cch, L"%lldd %lldt", days, rh);
+    else    swprintf_s(out, cch, L"%lldd", days);
+}
+
 // Slar innkommende lys sammen med bufferet paa openTime: samme tidsstempel
 // oppdaterer (det siste lyset endrer seg mens det formes), nyere legges til.
 // Dette er det som gjor panorering stabil - uten det ville indeksene
@@ -795,15 +815,24 @@ static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, do
     *outMax = mx + pad;
 }
 
-// Unix-ms -> lokal "HH:MM"
-static void FormatCandleTime(long long unixMs, wchar_t* out, size_t cch) {
+// Unix-ms -> lokal tid. Paa lange lys er "HH:MM" ikke nok - hvert 1d-lys
+// ville lest "00:00". Fra og med 1t tar vi med datoen.
+static void FormatCandleTime(long long unixMs, long long intervalMs,
+                             wchar_t* out, size_t cch) {
     ULONGLONG t = (ULONGLONG)(unixMs / 1000) * 10000000ULL + 116444736000000000ULL;
     FILETIME utc, local;
     utc.dwLowDateTime  = (DWORD)(t & 0xFFFFFFFFULL);
     utc.dwHighDateTime = (DWORD)(t >> 32);
     SYSTEMTIME st;
     if (FileTimeToLocalFileTime(&utc, &local) && FileTimeToSystemTime(&local, &st)) {
-        swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
+        if (intervalMs >= 86400000LL) {
+            swprintf_s(out, cch, L"%02d.%02d.%04d", st.wDay, st.wMonth, st.wYear);
+        } else if (intervalMs >= 3600000LL) {
+            swprintf_s(out, cch, L"%02d.%02d %02d:%02d",
+                       st.wDay, st.wMonth, st.wHour, st.wMinute);
+        } else {
+            swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
+        }
     } else {
         wcscpy_s(out, cch, L"--:--");
     }
@@ -882,15 +911,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     double chg   = (first > 0.0) ? ((last - first) / first) * 100.0 : 0.0;
     COLORREF chgClr = (chg >= 0.0) ? CLR_UP : CLR_DOWN;
 
-    // Spennet folger zoomen - "(60m)" ville vaert feil sa snart man zoomer
     wchar_t span[24];
-    if (vc < 60) {
-        swprintf_s(span, 24, L"%dm", vc);
-    } else if (vc % 60 == 0) {
-        swprintf_s(span, 24, L"%dt", vc / 60);
-    } else {
-        swprintf_s(span, 24, L"%dt %dm", vc / 60, vc % 60);
-    }
+    FormatSpan(vc, ctx->intervalMs, span, 24);
 
     wchar_t buf[64];
 
@@ -1013,8 +1035,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     DrawTextW(hdc, buf, -1, &rcTagTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     // Hover-boks med tid + OHLC
-    wchar_t tbuf[16];
-    FormatCandleTime(hc->openTime, tbuf, 16);
+    wchar_t tbuf[24];
+    FormatCandleTime(hc->openTime, ctx->intervalMs, tbuf, 24);
 
     const int BOX_W = 104, BOX_H = 74, LINE_H = 13;
     int bx = hx + 12;
