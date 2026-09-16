@@ -734,6 +734,17 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
         return TRUE;
     }
     MergeCandles(ctx, s_incoming, n);
+
+    // Lysgrenen MA ogsaa sette lastPrice. Staar panelet apent, henter traden
+    // bare lys - da ble lastPrice aldri skrevet, og etter et symbolbytte
+    // (som nullstiller den) returnerte UpdateIcon paa price <= 0. Ikonet og
+    // verktoytipset ble staaende paa FORRIGE symbols pris og etikett saa
+    // lenge panelet var apent. Maalt: 15 s etter bytte til SOL leste ikonet
+    // fortsatt 75.9 - BTC - mens panelet viste SOL.
+    if (ctx->candleCount > 0) {
+        ctx->lastPrice = ctx->candles[ctx->candleCount - 1].close;
+    }
+
     if (ctx->followLive) {
         int vc = ctx->viewCount;
         if (vc <= 0) vc = DEFAULT_VIEW;

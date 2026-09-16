@@ -285,6 +285,19 @@ to kall med samme inndata ga ulikt innhold. Ufarlig i dag — `OverlayHit` går
 bare til `count` — men enhetstesten «samme inn = samme ut» feilet, og det er
 en klasse feil verdt å lukke. Structen nullstilles nå.
 
+
+**14. Tray-ikonet ble hengende på forrige symbol.** `ApplyConfigChoice`
+nullstiller `lastPrice`, og `UpdateIcon` returnerer tidlig på `price <= 0.0`.
+Står panelet åpent henter tråden **bare lys** — og lysgrenen skrev aldri
+`lastPrice`. Etter et symbolbytte ble ikonet *og* verktøytipset derfor
+stående på forrige symbols pris og etikett så lenge panelet var åpent.
+
+> Målt: 15 s etter bytte til SOL leste ikonet fortsatt `75.9` — BTC — mens
+> panelet viste SOL. Nøyaktig den klassen designet forbyr: data under feil
+> etikett. Alle symbolbyttene i testingen ble gjort med panelet åpent og
+> uten å se på ikonet, så ingen av de tidligere målingene fanget den.
+> `WorkerFetchKlines` setter nå `lastPrice` fra det siste lysets `close`.
+
 ---
 
 ## Målinger
@@ -440,7 +453,7 @@ gikk første henting til SOL. Panelet åpnet på 520×380 med vannmerket
 
 | Feilsti | Resultat |
 |---|---|
-| `SymbolIndex=99`, `IntervalIndex=0xFFFFFFFF` | BTC/USDT 1m, ingen krasj |
+| `SymbolIndex=99`, `IntervalIndex=0x7FFFFFFF` | BTC/USDT 1m, ingen krasj |
 | `SymbolIndex` som `REG_SZ` | BTC/USDT 1m, ingen krasj |
 | Ingen nøkkel | BTC/USDT 1m, ingen krasj |
 
