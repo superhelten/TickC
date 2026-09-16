@@ -2,8 +2,11 @@
 
 Status per 16.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
-er ferdig; del B og C står igjen — se
+og del B (symbol/intervall, overlay, vannmerke, registret) er ferdige.
+**Del C — view- og Y-akse-easing — står igjen.** Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`.
+Plan for del B (mønster for del C):
+`docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md`.
 
 Alt ligger i **én fil**, `ticker.c` (~1516 linjer). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
@@ -99,6 +102,62 @@ i tray-tipset og dempede siffer i ikonet.
 **Låsen dekker i tillegg:** `lastOkTick`, `nextRetryTick`, `netFailures`.
 `hConnect` eies av arbeidertråden alene og trenger ingen lås.
 
+### Runtime-konfig: symbol og intervall
+
+`SYMBOLS[]` og `INTERVALS[]` er kuraterte tabeller. Kuratert, ikke fritekst:
+en fast liste betyr at vi kjenner prisområdet, og at ingen henting kan feile
+på et ukjent symbol. `KLINE_MS` finnes ikke lenger — alle tre bruksstedene
+leser `ctx->intervalMs`.
+
+**`configGen` er det som hindrer stille feil data.** Scenariet: tråden er midt
+i en henting for BTC, brukeren bytter til ETH, UI-tråden tømmer bufferet, og
+BTC-svaret kommer tilbake og flettes inn i et buffer som nå tilhører ETH.
+
+Arbeidertråden tar en kopi av `configGen` før hentingen og sammenligner **ved
+fletting**, ikke ved henting — svaret kan ankomme når som helst underveis.
+Sjekken står i **begge** hentefunksjonene. Prisen har nøyaktig samme kappløp og
+styrer tray-ikonet; designet nevnte bare lysene.
+
+> Et forkastet svar returnerer `TRUE`. Det er ikke en nettverksfeil, og skal
+> ikke telle opp backoffen hver gang brukeren bytter symbol.
+
+`ApplyConfigChoice` teller opp `configGen` og tømmer bufferet i **samme
+kritiske seksjon** som byttet.
+
+**Låsen dekker i tillegg:** `symIdx`, `ivIdx`, `intervalMs`, `configGen`.
+
+### Overlayet
+
+Tegnes inne i panelets klientflate. **Ingen nytt HWND** — uten et nytt vindu
+finnes det ingen aktiveringsendring, og vi går helt utenom territoriet der
+feil #1 og #2 levde.
+
+`OverlayLayout()` fyller ett array som **både** tegning og treffdeteksjon
+leser. Samme disiplin som `ChartGeometry`, av samme grunn (feil #7).
+
+Kalles fra `PaintPopup`, ikke fra `DrawChart` — `DrawChart` returnerer tidlig
+når bufferet er tomt, som er nøyaktig tilstanden rett etter et konfigbytte.
+
+Treffdeteksjonen henger på `overlayOpen` (logisk tilstand), aldri på
+`overlayF` (fade-nivå). Under uttoning er boksen fortsatt synlig, men klikk
+skal gå til grafen igjen.
+
+### Vannmerket
+
+Bakgrunn og vannmerke bakes sammen i én cachet `HBITMAP` som **erstatter**
+`FillRect`. Cachen invalideres av `WM_SIZE` og av konfigbytte, og river ned
+det gamle før den bygger nytt. Feiler bitmapen, faller `DrawChart` tilbake på
+`FillRect` — vannmerket er pynt og skal aldri hindre opptegning.
+
+### Registret
+
+`HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
+`PanelWidth`, `PanelHeight`. Leses i `WinMain` **før `CreateThread`**, slik at
+første henting går mot riktig par. Indeksene er bundet sjekket. Enhver feilsti
+lander på BTC/USDT 1m.
+
+Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11.
+
 ---
 
 ## Sentrale konstanter
@@ -120,6 +179,10 @@ i tray-tipset og dempede siffer i ikonet.
 | `NET_RETRY_MAX` | 60000 | tak for eksponentiell backoff (ms) |
 | `NET_RECONNECT_AT` | 3 | antall feil før `hConnect` slippes |
 | `STALE_AFTER` | 9000 | 3 × `TIMER_INTERVAL` = to tapte sykluser |
+| `SYMBOL_COUNT` | 4 | BTC, ETH, SOL, BNB |
+| `INTERVAL_COUNT` | 6 | 1m, 5m, 15m, 1t, 4t, 1d |
+| `CLR_WATERMARK` | `#15191F` | `CLR_BG` + 8 nivåer = ~3,1 % |
+| `OVL_ROW_H` / `OVL_COL_W` | 22 / 104 | overlay-rad og kolonnebredde |
 
 ---
 
@@ -136,6 +199,8 @@ i tray-tipset og dempede siffer i ikonet.
 8. **Akkumulerende historikk + panorering** — hjul og dra.
 9. **Arbeidertråd + GDI-cache.**
 10. **Animasjonsklokke, eksponentiell backoff og stale-indikator** (fase 2 A).
+11. **Runtime-valg av symbol og intervall**, overlay, vannmerke og registret
+    (fase 2 B).
 
 ---
 
@@ -198,6 +263,27 @@ rad. Nullstillingen henger nå på `wr == WAIT_OBJECT_0 + 1` alene.
 `IsWindowVisible(hwnd)`, og `TogglePopup` starter klokka igjen ved visning
 dersom vi er frakoblet — ellers sto telleren stille til neste `WM_APP_DATA`,
 som under backoff kan være et helt minutt unna.
+
+
+**11. Panelstørrelsen ble aldri lagret.** `SaveConfig` sto i `WM_DESTROY` og
+leste `GetWindowRect(hPopup)` der. Panelet **eies** av hovedvinduet og er
+allerede revet ned når `WM_DESTROY` når dit, så `GetWindowRect` hadde
+ingenting å lese og `PanelWidth` ble aldri skrevet. Størrelsen fanges nå i
+`WM_EXITSIZEMOVE` — når brukeren slipper.
+
+> Resonnementet i den første versjonen var «les fra vinduet selv, så kan de to
+> aldri komme i utakt». Riktig i prinsippet, feil i praksis: vinduet fantes
+> ikke lenger. Registret sto tomt; det var det som avslørte den.
+
+**12. Prisaksen antok BTC-skala.** `"%.0f"` på alle fem etikettene. SOL rundt
+97 dollar har et spenn under én dollar, så alle fem leste `97`. Desimalene
+velges nå fra *avstanden mellom etikettene* (`PriceDecimals`). Samme klasse
+feil som #5: formatet må følge tallet som faktisk skal vises.
+
+**13. `OverlayLayout` var ikke ren.** Radene bak `count` var stack-søppel, så
+to kall med samme inndata ga ulikt innhold. Ufarlig i dag — `OverlayHit` går
+bare til `count` — men enhetstesten «samme inn = samme ut» feilet, og det er
+en klasse feil verdt å lukke. Structen nullstilles nå.
 
 ---
 
@@ -292,6 +378,72 @@ nettverkssyklusene:
   (~1 %), som er hentingen hvert 3. sekund, ikke klokka.
 - **`/W4` rent, x86** (PE-maskintype `0x14C`, verifisert på den bygde exe-en).
 
+### Fase 2 del B
+
+Enhetstester: **24/24** i `test_b`, pluss del A sine **17/17** — begge kjørt
+mot kode trukket ut av gjeldende `ticker.c`.
+
+| Enhet | Hva som ble verifisert |
+|---|---|
+| `FormatSpan` | alle seks intervaller × representative `vc`, inkludert `vc = 0` og døgnovergang |
+| `FormatIconPrice` | femten prisområder fra $0,85 til $12,5 M gir alle `IconTextWidth() <= 16` |
+| `OverlayLayout` | ren funksjon, ingen overlapp, alt innenfor panelet, hjørner og midtpunkt treffer riktig rad, holder på minimumsstørrelse |
+| `PriceDecimals` | fem etiketter er alltid innbyrdes forskjellige, seks spennklasser |
+
+**Kappløpet (`configGen`).** Målt på et instrumentert bygg som logger hver
+forkasting, med 80–100 raske symbolbytter:
+
+| Gren | Forkastinger | Eksempel |
+|---|---|---|
+| Lys | 30 | `gen=1 naa=3` — to bytter rakk å skje under én henting |
+| Pris | 56 | `gen=1 naa=2 pris=2407.47` — en **ETH**-pris som ankom etter byttet |
+
+Prisgrenen måtte tvinges fram i testbygget (tråden henter lys så lenge panelet
+er åpent). Loggen er det konkrete beviset for feilen designet ville sluppet
+gjennom: uten sjekken hadde `lastPrice = 2407.47` blitt skrevet og tray-ikonet
+vist ETH-prisen under et annet symbol.
+
+**Vannmerket, målt med `GetPixel` — ikke med øyet:**
+
+| Farge | Hva | Antall piksler |
+|---|---|---|
+| `#0D1117` | ren bakgrunn | 2481 |
+| `#15191F` | vannmerket | 318 |
+
+Nøyaktig `CLR_WATERMARK`. 8 nivåers differanse = 3,1 % av full skala.
+
+**Opptegning, `BitBlt` mot `FillRect`.** Vekselvis annethvert bilde — samme
+data, samme vindu, samme utsnitt, 306 par:
+
+| | Median | Snitt |
+|---|---|---|
+| `BitBlt` (med vannmerke) | 0,341 ms | 0,355 ms |
+| `FillRect` (uten) | 0,312 ms | 0,332 ms |
+
+Parvis differanse **+0,0226 ms**, 95 % KI `[0,0062, 0,0390]`, t = 2,70.
+
+> Designet påsto at den cachede `BitBlt` «ikke er dyrere enn dagens
+> `FillRect`». Det stemmer ikke — den er målbart dyrere. Differansen er
+> reell, men liten: 0,023 ms av en opptegning på 0,34 ms, mot 0,05–0,30 ms
+> for å tegne teksten på nytt hvert bilde. Cachen er fortsatt riktig valg;
+> påstanden var for sterk.
+
+**Håndtak.** GDI 33 gjennom 30 overlay-åpninger og 20 resizer; 35 etter at
+vannmerket er bygget (+1 `HBITMAP`, +1 `HFONT`, som designet forutsa), og
+deretter flat gjennom 16 symbolbytter. USER 14 i ro — 15 mens
+animasjonsklokka går, fordi **en timer er et USER-objekt**.
+
+**Registret, tur-retur på ekte kjøring.** Valgt SOL + 520×380, avsluttet,
+startet på nytt: tray-ikonet leste `97.5` **før panelet ble åpnet** — altså
+gikk første henting til SOL. Panelet åpnet på 520×380 med vannmerket
+`SOLUSDT` / `1m`.
+
+| Feilsti | Resultat |
+|---|---|
+| `SymbolIndex=99`, `IntervalIndex=0xFFFFFFFF` | BTC/USDT 1m, ingen krasj |
+| `SymbolIndex` som `REG_SZ` | BTC/USDT 1m, ingen krasj |
+| Ingen nøkkel | BTC/USDT 1m, ingen krasj |
+
 ---
 
 ## Kjente begrensninger
@@ -302,7 +454,13 @@ nettverkssyklusene:
   = festet (auto-skjul av). Lukkes med kryss, ESC eller tray-klikk.
 - **ESC krever fokus.** Er panelet festet og du har vært i et annet vindu, må du
   klikke panelet først.
-- **Størrelsen huskes mellom åpninger, posisjonen ikke.**
+- **Størrelsen overlever omstart** (registret); posisjonen gjør det ikke.
+- **Tray-ikonets skala er implisitt.** SOL på $150 og BTC på $150 000 tegnes
+  begge som `150`. Fonten har ingen `k`-glyf — fase 1 valgte bevisst `75.8`
+  framfor `75k` — og verktøytipset bærer det eksakte tallet.
+- **`staleSecsShown` nullstilles ikke ved gjenopprettet forbindelse.** En ny
+  frakobling kan hoppe over én opptegning dersom sekundtallet tilfeldigvis er
+  det samme. Kosmetisk, ett bilde. Ryddes når del C uansett rører `WM_TIMER`.
 - **`hoverIdx` og `panAnchorView` er absolutte indekser.** Når bufferet når 1440
   (~19 t åpent) og eldste faller ut, henger de ett lys etter til neste
   musebevegelse. Bundet sjekket, så ingen krasj.
@@ -353,6 +511,18 @@ nettverkssyklusene:
     instrumentert testbygg side om side med den ekte appen, må du endre både
     mutexnavnet og vindusklassen — ellers avslutter testbygget seg selv, eller
     `FindWindow` treffer feil prosess.
+11. **Panelet auto-skjuler seg midt i en måling.** Åpnet via `PostMessage`
+    får det aldri forgrunnsrett, og `WA_INACTIVE` lukker det så snart
+    fokus flytter seg — også mellom to PowerShell-kall. Bruk et testbygg som
+    setter `pinned = TRUE` ved visning. Les alltid `GetWindowRect` **rett
+    før** du fanger skjermbildet; vinduet kan ha flyttet eller endret
+    størrelse siden sist.
+12. **Treffdeteksjon må henge på logisk tilstand, ikke på fade-nivå.** Under
+    uttoning er overlayet fortsatt synlig. Sjekker du `overlayF > 0`,
+    svelger boksen klikk den ikke lenger eier.
+13. **Sperrer i `WM_MOUSEMOVE` hører hjemme etter `TrackMouseEvent`.**
+    Returnerer du før armeringen, slutter `WM_MOUSELEAVE` å fyre og
+    `windowHot` henger fast på `TRUE`.
 
 ---
 
