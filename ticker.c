@@ -621,7 +621,17 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
 
     // Sto utsnittet ytterst til hoyre, skal det folge de nye lysene.
     // Har brukeren panorert bakover, blir det staaende i ro.
-    if (ctx->followLive && ctx->viewCount > 0) {
+    //
+    // viewCount == 0 betyr "ikke satt" - panelet ble aapnet (eller symbolet
+    // byttet) for det fantes lys. Det maa bli standardutsnittet HER: ClampView
+    // under klemmer 0 opp til MIN_VIEW, og WorkerFetchKlines' egen
+    // "0 -> DEFAULT_VIEW" kommer for sent til aa se nullen. Maalt: foerste
+    // aapning viste 8 lys i stedet for 300, i alle bygg siden fase 1 - og
+    // hvert duplikat fra [ + ] aapner nettopp foer det har data.
+    if (ctx->followLive) {
+        if (ctx->viewCount <= 0) {
+            ctx->viewCount = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
+        }
         ctx->viewStart = ctx->candleCount - ctx->viewCount;
     }
     ClampView(ctx);
