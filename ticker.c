@@ -1917,7 +1917,22 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (bot) return HTBOTTOM;
             }
 
-            if (y < HEADER_H) return HTCAPTION;
+            if (y < HEADER_H) {
+                // Knappene maa vaere HTCLIENT, ellers naar WM_LBUTTONDOWN
+                // dem aldri: et HTCAPTION-omraade gir NC-meldinger, og
+                // DefWindowProc ville startet en vindusflytting av et klikk
+                // paa krysset. Rekkefolgen her ER mekanismen i mandatets
+                // punkt 2 og 3 - HTCLIENT der knappene er, HTCAPTION paa
+                // ledig flate.
+                //
+                // NCHITTEST-koordinatene er relative til VINDUET. Med rammen
+                // fjernet i WM_NCCALCSIZE er klient og vindu samme
+                // rektangel, saa x kan brukes rett mot ButtonLayout.
+                RECT btns[BTN_COUNT];
+                ButtonLayout(w, btns);
+                if (ButtonHit(btns, x, y) >= 0) return HTCLIENT;
+                return HTCAPTION;
+            }
             return HTCLIENT;
         }
 
