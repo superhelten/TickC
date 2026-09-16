@@ -2,11 +2,12 @@
 
 Status per 16.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
-og del B (symbol/intervall, overlay, vannmerke, registret) er ferdige.
-**Del C — view- og Y-akse-easing — står igjen.** Design:
-`docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`.
-Plan for del B (mønster for del C):
-`docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md`.
+del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
+indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
+er levert.** Design:
+`docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
+«Avvik under utførelse»:
+`docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
 Alt ligger i **én fil**, `ticker.c` (~1516 linjer). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
@@ -149,6 +150,76 @@ Bakgrunn og vannmerke bakes sammen i én cachet `HBITMAP` som **erstatter**
 det gamle før den bygger nytt. Feiler bitmapen, faller `DrawChart` tilbake på
 `FillRect` — vannmerket er pynt og skal aldri hindre opptegning.
 
+### Mål vs. visning — det bærende grepet i del C
+
+`viewStart`/`viewCount` (int, låsebeskyttet) er **målet** og eies som før av
+begge tråder. Ved siden av ligger fire **rene UI-doubler** som ingen annen
+tråd rører:
+
+| Felt | Betydning |
+|---|---|
+| `dispStart` | animert posisjon, kan være brøk |
+| `dispCount` | animert bredde, kan være brøk |
+| `dispMin` / `dispMax` | animert priskant |
+
+Arbeidertråden skriver mål; UI-tråden eases mot det. **Derfor berører hele
+easingen ikke trådkontrakten** — `disp*` skal aldri inn i låsedomenet.
+
+**`DrawChart` og `HitCandle` må begge lese `disp*`.** Leser den ene målet og
+den andre visningen, peker crosshairet på feil lys midt i animasjonen. Det er
+feil #7 i ny drakt, og det er den ene regelen som ikke kan bøyes.
+
+Tegneløkka går fra `floor(dispStart)` til `ceil(dispStart + dispCount)` med
+`IntersectClipRect` mot chart-flaten, så kantlysene ikke blør ut i prisaksen.
+Klippingen gjenopprettes før aksetekstene og chromet tegnes. Løkka går
+fortsatt over **synlige** lys — `i1 - i0` er `dispCount + 1`, ikke
+`candleCount`.
+
+**Snapping er en kvart piksel**, omregnet til den enheten som eases ved hver
+tikk — ikke et fast tall i lys eller dollar. Se målingene for hvorfor.
+
+**Hva som eases og ikke:**
+
+| Handling | Oppførsel |
+|---|---|
+| Hjul-panorering, Ctrl+hjul | eases |
+| **Dra-panorering** | **X følger musa direkte**, Y eases |
+| Y-akse ved nye data | eases |
+| Symbol-/intervallbytte, panelåpning, buffer-reset | snapper (`dispValid = FALSE`) |
+| Indeksforskyvning ved utkasting | snapper (`ApplyEviction`) |
+
+`SyncDisp` markerer seg **ikke** som gyldig når bufferet er tomt. Gjorde den
+det, sto aksen på `[0, 1]` gjennom et symbolbytte og gled opp til det ekte
+spennet når dataene kom — se feil #15.
+
+### Siste-pris-indikatoren
+
+Stiplet linje fra siste lys til høyre kant, med et fylt, fargekodet stempel på
+prisaksen. Tegnes etter lysene og **før** den tidlige returen i
+crosshair-blokka, ellers ville den forsvunnet så snart musa var utenfor.
+
+Fargen følger `dP = P_t - P_t-1` — siste lukkekurs mot den forrige. Det er en
+annen regel enn lysenes egen (`close` mot `open` i *samme* lys), så de kan
+peke hver sin vei. Tilsiktet: linja svarer på «hvor står vi mot forrige
+lukking».
+
+Er prisen utenfor synlig område tegnes ingenting. Et stempel klemt mot kanten
+ville plassert prisen et sted den ikke er.
+
+### Vannmerkets fontstørrelse
+
+`klemt(chart-høyde / 5, 32, 120)`, og deretter **tilpasset bredden**: teksten
+måles med `GetTextExtentPoint32W` og høyden skaleres ned i samme forhold hvis
+den ikke får plass. Uten breddetilpasningen sto `BTCUSDT` klippet på smale
+paneler.
+
+DPI-skaleringen gjelder **klemmegrensene**, ikke `H/5`. `g.ch` er allerede
+enhetspiksler, så den proporsjonale delen skalerer seg selv; ganger man `H/5`
+med DPI også, teller man skaleringen to ganger.
+
+Bygges i `EnsureWatermark`, som per definisjon bare kjører når
+`(W, H, symIdx, ivIdx)` endrer seg. Kostnaden per bilde er null.
+
 ### Registret
 
 `HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
@@ -183,6 +254,9 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
 | `INTERVAL_COUNT` | 6 | 1m, 5m, 15m, 1t, 4t, 1d |
 | `CLR_WATERMARK` | `#15191F` | `CLR_BG` + 8 nivåer = ~3,1 % |
 | `OVL_ROW_H` / `OVL_COL_W` | 22 / 104 | overlay-rad og kolonnebredde |
+| `ANIM_TAU_VIEW` | 70,0 | tidskonstant view-easing (ms) |
+| `SNAP_PX` | 0,25 | snapp når det gjenstår under en kvart piksel |
+| `WM_FONT_DIV` / `MIN` / `MAX` | 5 / 32 / 120 | vannmerkets fonthøyde |
 
 ---
 
@@ -201,6 +275,8 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
 10. **Animasjonsklokke, eksponentiell backoff og stale-indikator** (fase 2 A).
 11. **Runtime-valg av symbol og intervall**, overlay, vannmerke og registret
     (fase 2 B).
+12. **Siste-pris-indikator, skalert vannmerke, view- og Y-akse-easing**
+    (fase 2 C).
 
 ---
 
@@ -297,6 +373,19 @@ stående på forrige symbols pris og etikett så lenge panelet var åpent.
 > etikett. Alle symbolbyttene i testingen ble gjort med panelet åpent og
 > uten å se på ikonet, så ingen av de tidligere målingene fanget den.
 > `WorkerFetchKlines` setter nå `lastPrice` fra det siste lysets `close`.
+
+
+**15. Y-aksen ville glidd opp fra null ved hvert symbolbytte.** `SyncDisp`
+markerte seg som gyldig også med tomt buffer, og satte da `dispMin`/`dispMax`
+til `[0, 1]`. Rett etter et bytte er bufferet nettopp tomt, så aksen ble
+stående *gyldig* på `[0, 1]` — og når de nye lysene kom, eases den opp til det
+ekte spennet. Altså en prisakse som glir opp fra null i et halvt sekund ved
+hvert bytte, som er nøyaktig det `SyncDisp` finnes for å hindre.
+
+> Fanget før det nådde brukeren, men først etter at koden var skrevet og
+> commitet. Målingen som avslørte det: logg `dispMin`/`dispMax` per bilde og
+> se på overgangen `candleCount` 0 → 300. Med tomt buffer blir vi nå stående
+> *ugyldige*, så første bilde med data snapper.
 
 ---
 
@@ -457,6 +546,68 @@ gikk første henting til SOL. Panelet åpnet på 520×380 med vannmerket
 | `SymbolIndex` som `REG_SZ` | BTC/USDT 1m, ingen krasj |
 | Ingen nøkkel | BTC/USDT 1m, ingen krasj |
 
+### Fase 2 del C
+
+Enhetstester: **55/55** totalt (17 del A + 24 del B + 14 del C), alle kjørt mot
+kode trukket ut av gjeldende `ticker.c`.
+
+**Hvorfor snappet er en kvart piksel og ikke et fast tall.** Målt i harnessen:
+
+| Terskel | Panorering 300 lys | SOL-spenn (1,5 $) | BTC-spenn (3000 $) |
+|---|---|---|---|
+| Fast 0,01 lys | 46 tikk (736 ms) | — | — |
+| Fast 0,5 dollar | — | 5 tikk | 39 tikk |
+| **Kvart piksel** | **33 tikk (528 ms)** | **32 tikk** | **32 tikk** |
+
+Den faste terskelen i pris er ikke bare treg, den er ubrukelig: 0,5 dollar er
+en tredel av SOLs hele spenn og under en tusendel av BTCs. `tau` er 70, ikke
+110 som planen foreslo — 110 ga en hale på over et sekund.
+
+**Crosshair mot tegning, midt i animasjonen.** Instrumentert bygg som logger
+hvilket lys `HitCandle` mente, og hvilket tegneløkkas egen formel gir for
+samme X:
+
+| | |
+|---|---|
+| Samsvar | **163 av 163, 0 avvik** |
+| Herav bilder midt i animasjonen | **43** (`dCount` 9,912 → 9,864 → … → 8,000) |
+
+**Opptegning under animasjon**, drevet med hjul-panorering:
+
+| | |
+|---|---|
+| Median | 0,462 ms |
+| p95 | 0,637 ms |
+| Maks | 0,864 ms |
+| **Bilder over 1,3 ms** | **0 av 581** |
+| Bilder med brøkdels-`dispStart` | 415 av 581 |
+
+**Siste-pris-indikatoren**, målt med og uten blokka annethvert bilde,
+351 par:
+
+| | Median | Snitt |
+|---|---|---|
+| Med | 0,2713 ms | 0,2828 ms |
+| Uten | 0,2489 ms | 0,2628 ms |
+
+Parvis **+0,0195 ms**, 95 % KI `[0,0134, 0,0255]`, t = 6,28. Spesifikasjonen
+anslo «under 0,001 ms» — det faktiske tallet er rundt tjue ganger høyere, og
+det meste er `DrawTextW` for stempelteksten. Fortsatt uproblematisk.
+
+Stempelet målt med `GetPixel`: 16 px høyt i eksakt `CLR_DOWN` `#FF4966`,
+teksten med kjerne i eksakt `CLR_BG` `#0D1117` og 13 % dekning.
+
+**Symbolbytte og Y-aksen.** Bytte SOL → BNB: `candleCount` går 302 → 0 → 300,
+og **første bilde med data har allerede riktig akse** (713,46–714,77). Ingen
+mellomverdier.
+
+**Zoom-ankring etter easing:** samme lys (indeks 297) under pekeren før og
+etter fem hakk pluss settling.
+
+**Håndtak:** GDI **35**, USER 14. Del C legger ikke til GDI-objekter; C1 gjorde
+det (to stiplede penner, 33 → 35), og vannmerkefonten bygges om ved hver
+størrelsesendring uten å lekke — verifisert flat gjennom 20 resizer.
+
 ---
 
 ## Kjente begrensninger
@@ -474,9 +625,11 @@ gikk første henting til SOL. Panelet åpnet på 520×380 med vannmerket
 - **`staleSecsShown` nullstilles ikke ved gjenopprettet forbindelse.** En ny
   frakobling kan hoppe over én opptegning dersom sekundtallet tilfeldigvis er
   det samme. Kosmetisk, ett bilde. Ryddes når del C uansett rører `WM_TIMER`.
-- **`hoverIdx` og `panAnchorView` er absolutte indekser.** Når bufferet når 1440
-  (~19 t åpent) og eldste faller ut, henger de ett lys etter til neste
-  musebevegelse. Bundet sjekket, så ingen krasj.
+- **Animasjonsklokka går i korte støt når panelet står åpent.** Er panelet
+  lukket går det ingen timer i det hele tatt. Med panelet åpent starter hver
+  datahenting klokka på nytt, fordi det levende lyset kan flytte Y-målet:
+  målt **23 tikk på 30 sekunder**, mot 1800 om den hadde gått kontinuerlig.
+  Den dør altså mellom hentingene — dette er ikke en lekkasje.
 - **Over $999 999** klippes ikonteksten (4 sifre får ikke plass på 16 px).
   Trygt — opptegningen er bundet sjekket.
 - **Historikken er «hva panelet har sett».** Nyåpnet: 5 timer. Åpent en
@@ -536,6 +689,19 @@ gikk første henting til SOL. Panelet åpnet på 520×380 med vannmerket
 13. **Sperrer i `WM_MOUSEMOVE` hører hjemme etter `TrackMouseEvent`.**
     Returnerer du før armeringen, slutter `WM_MOUSELEAVE` å fyre og
     `windowHot` henger fast på `TRUE`.
+14. **Tegning og treffdeteksjon må lese samme kilde.** `DrawChart` og
+    `HitCandle` leser begge `disp*`. Leser den ene målet og den andre
+    visningen, peker crosshairet på feil lys midt i en animasjon — feil #7 i
+    ny drakt. Gjelder alt som regner om mellom piksler og lysindekser.
+15. **Gjenopprett klippingen.** `IntersectClipRect` rundt tegneløkka må
+    følges av `SelectClipRgn(hdc, NULL)` før aksetekster og chrome tegnes —
+    de ligger utenfor chart-flaten og ville blitt borte.
+16. **En terskel i «enheter» virker ikke på tvers av symboler.** Fire symboler
+    med tre størrelsesordener mellom seg gjør ethvert fast tall i dollar
+    meningsløst. Regn om fra piksler i stedet, ved hver tikk.
+17. **Hold øye med tomt buffer i all ny tilstand.** Rett etter et
+    symbolbytte er `candleCount = 0`. Tilstand som «synkroniserer seg» da,
+    synkroniserer seg mot ingenting — se feil #15.
 
 ---
 
