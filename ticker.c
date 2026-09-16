@@ -74,6 +74,11 @@
 #define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)
 #define CLR_WHITE        RGB(0xFF, 0xFF, 0xFF)
 #define CLR_WATERMARK    RGB(0x15, 0x19, 0x1F)   // CLR_BG + ~3 %
+// Vannmerkets fonthoyde = klemt(chart-hoyde / 5, 32, 120), grensene i
+// logiske piksler.
+#define WM_FONT_DIV      5
+#define WM_FONT_MIN      32
+#define WM_FONT_MAX      120
 
 // Kuratert, ikke fritekst. En fast liste betyr at vi kjenner prisomraadet og
 // kan formatere ikon, header og prisakse riktig uten a gjette, og at ingen
@@ -233,6 +238,7 @@ typedef struct {
     HDC     wmDC;
     HBITMAP wmOldBmp;
     HFONT   hFontWm;
+    int     wmFontH;       // fonthoyden cachen ble bygget for
     int     wmW, wmH;      // storrelsen bitmapen ble bygget for
     int     wmSym, wmIv;   // konfigen den ble bygget for
     BOOL    wmValid;
@@ -1162,14 +1168,73 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     SetTextColor(ctx->wmDC, CLR_WATERMARK);
 
     ChartRect g = ChartGeometry(W, H);
-    HFONT prev = (HFONT)SelectObject(ctx->wmDC, ctx->hFontWm);
+
+    // Fonthoyden folger chart-flatens hoyde, ikke en fast verdi: et lite
+    // panel skal ikke faa vannmerket klippet, og et stort skal ikke faa en
+    // liten tekst midt i flaten.
+    //
+    // DPI-skaleringen gjelder KLEMMEGRENSENE, ikke H/5. g.ch er allerede
+    // enhetspiksler, saa den proporsjonale delen skalerer seg selv naar
+    // vinduet blir storre paa en hoy-DPI skjerm. Grensene er derimot angitt
+    // i logiske piksler, og et gulv paa 32 ville vaert 16 logiske piksler
+    // paa 200 %. Ganger vi H/5 med DPI ogsaa, teller vi skaleringen to
+    // ganger. Prosessen er DPI-uvitende i dag, saa GetDeviceCaps gir 96 og
+    // MulDiv er en identitet - dette blir levende i det et manifest legges til.
+    int dpi = GetDeviceCaps(ref, LOGPIXELSY);
+    if (dpi <= 0) dpi = 96;
+    int fMin = MulDiv(WM_FONT_MIN, dpi, 96);
+    int fMax = MulDiv(WM_FONT_MAX, dpi, 96);
+    int fh = g.ch / WM_FONT_DIV;
+    if (fh < fMin) fh = fMin;
+    if (fh > fMax) fh = fMax;
+
+    // Bygges her, ikke per bilde: EnsureWatermark kjorer bare naar
+    // (W, H, symIdx, ivIdx) faktisk endrer seg, og alle fire paavirker
+    // hoyden eller bredden teksten trenger.
+    const wchar_t* wmText = SYMBOLS[ctx->symIdx].api;
+    int wmLen = (int)wcslen(wmText);
+
+    if (ctx->hFontWm) DeleteObject(ctx->hFontWm);
+    ctx->hFontWm = CreateFontW(-fh, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                               DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                               CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                               L"Segoe UI");
+
+    // Hoydeformelen alene gir klippet tekst paa smale paneler: paa 280 px
+    // traff fh gulvet paa 32, og "BTCUSDT" ble bredere enn chart-flaten.
+    // Maalt, ikke antatt - samme disiplin som feil #5. Bredden maales paa
+    // den faktiske strengen i den faktiske fonten, og hoyden skaleres ned
+    // i samme forhold hvis den ikke faar plass.
+    HFONT prevFit = (HFONT)SelectObject(ctx->wmDC, ctx->hFontWm);
+    SIZE sz = { 0, 0 };
+    int availW = g.cw - 8;
+    if (GetTextExtentPoint32W(ctx->wmDC, wmText, wmLen, &sz) &&
+        sz.cx > availW && sz.cx > 0 && availW > 0) {
+        int fitted = MulDiv(fh, availW, sz.cx);
+        if (fitted < 8) fitted = 8;
+        if (fitted < fh) {
+            SelectObject(ctx->wmDC, prevFit);
+            DeleteObject(ctx->hFontWm);
+            ctx->hFontWm = CreateFontW(-fitted, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                       DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                       CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                                       L"Segoe UI");
+            fh = fitted;
+            prevFit = (HFONT)SelectObject(ctx->wmDC, ctx->hFontWm);
+        }
+    }
+    ctx->wmFontH = fh;
+
+    HFONT prev = prevFit;
     RECT rcSym = { g.left, g.top, g.right, g.bottom };
     DrawTextW(ctx->wmDC, SYMBOLS[ctx->symIdx].api, -1, &rcSym,
               DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
     // Intervallet under hovedlinja, i den vanlige lille fonten.
     SelectObject(ctx->wmDC, ctx->hFontSmall);
-    RECT rcIv = { g.left, g.top + (g.ch / 2) + 26, g.right, g.bottom };
+    // Avstanden ned til intervallet folger fonthoyden, ellers ville teksten
+    // ligge oppi hovedlinja paa store paneler.
+    RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + 4, g.right, g.bottom };
     DrawTextW(ctx->wmDC, INTERVALS[ctx->ivIdx].label, -1, &rcIv,
               DT_CENTER | DT_SINGLELINE | DT_TOP);
     SelectObject(ctx->wmDC, prev);
@@ -2166,11 +2231,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    // Stor, tung font til vannmerket. Rendres en gang inn i cachen, aldri
-    // per bilde.
-    g_Ctx.hFontWm = CreateFontW(-52, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    // hFontWm lages ikke her: hoyden avhenger av panelstorrelsen, saa den
+    // bygges i EnsureWatermark og bare naar hoyden endrer seg.
 
     WNDCLASSW wc = {0};
     wc.lpfnWndProc   = WndProc;
