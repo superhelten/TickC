@@ -30,7 +30,6 @@
 #define MAX_CANDLES      1440  // 24 timer med 1m-lys, bygges opp mens panelet star apent
 #define SEED_COUNT       300   // forste henting: 5 timer i ett jafs
 #define DEFAULT_VIEW     300   // synlig utsnitt ved apning
-#define KLINE_MS         60000 // ett 1m-lys i millisekunder
 #define MIN_VIEW         8     // minste antall synlige lys ved full zoom
 #define ZOOM_STEP        1.2   // per musehjul-hakk
 #define REOPEN_GUARD_MS  250   // hindrer at klikk-for-aa-lukke aapner igjen med en gang
@@ -73,6 +72,30 @@
 #define CLR_HDRHOT       RGB(0x16, 0x1D, 0x27)
 #define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)
 #define CLR_WHITE        RGB(0xFF, 0xFF, 0xFF)
+#define CLR_WATERMARK    RGB(0x15, 0x19, 0x1F)   // CLR_BG + ~3 %
+
+// Kuratert, ikke fritekst. En fast liste betyr at vi kjenner prisomraadet og
+// kan formatere ikon, header og prisakse riktig uten a gjette, og at ingen
+// henting kan feile paa et ukjent symbol.
+typedef struct { const wchar_t* api; const wchar_t* label; } SymbolDef;
+typedef struct { const wchar_t* api; const wchar_t* label; long long ms; } IntervalDef;
+
+static const SymbolDef SYMBOLS[] = {
+    { L"BTCUSDT", L"BTC/USDT" },
+    { L"ETHUSDT", L"ETH/USDT" },
+    { L"SOLUSDT", L"SOL/USDT" },
+    { L"BNBUSDT", L"BNB/USDT" },
+};
+static const IntervalDef INTERVALS[] = {
+    { L"1m",  L"1m",  60000LL },
+    { L"5m",  L"5m",  300000LL },
+    { L"15m", L"15m", 900000LL },
+    { L"1h",  L"1t",  3600000LL },
+    { L"4h",  L"4t",  14400000LL },
+    { L"1d",  L"1d",  86400000LL },
+};
+#define SYMBOL_COUNT   ((int)(sizeof(SYMBOLS) / sizeof(SYMBOLS[0])))
+#define INTERVAL_COUNT ((int)(sizeof(INTERVALS) / sizeof(INTERVALS[0])))
 
 // 4x9 piksel-font. En rad per byte, bit 3 = venstre kolonne, bit 0 = hoyre.
 // Ett linje med 9px hoye sifre er nesten dobbelt saa lesbart som to linjer
@@ -118,6 +141,15 @@ typedef struct {
     HINTERNET hConnect;
     wchar_t fullPriceStr[64];
     double lastPrice;
+
+    // --- Runtime-konfig. Laasebeskyttet: UI skriver, arbeidertraden leser. ---
+    int  symIdx;          // indeks i SYMBOLS
+    int  ivIdx;           // indeks i INTERVALS
+    long long intervalMs; // INTERVALS[ivIdx].ms, kopiert ut for rask lesing
+    // Teller opp ved hvert konfigbytte. Arbeidertraden tar en kopi for
+    // hentingen og forkaster svaret hvis telleren har endret seg naar den
+    // kommer tilbake. Uten dette flettes BTC-lys inn i et ETH-buffer.
+    unsigned configGen;
 
     Candle candles[MAX_CANDLES];
     int candleCount;
@@ -263,7 +295,7 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     // stund) -> start pa nytt. Ellers ville grafen tegnet en sammenhengende
     // kurve tvers over dodtid.
     if (ctx->candleCount > 0 &&
-        in[0].openTime > ctx->candles[ctx->candleCount - 1].openTime + 2 * KLINE_MS) {
+        in[0].openTime > ctx->candles[ctx->candleCount - 1].openTime + 2 * ctx->intervalMs) {
         ctx->candleCount = 0;
         ctx->viewStart   = 0;
         ctx->viewCount   = 0;
@@ -529,17 +561,25 @@ static int ParseKlines(const char* json, Candle* out, int maxCount) {
 
 static BOOL WorkerFetchKlines(AppContext* ctx) {
     BOOL seed;
+    unsigned gen;
+    int si, ii;
+    long long ivMs;
+
     EnterCriticalSection(&ctx->lock);
     seed = (ctx->candleCount == 0);
+    gen  = ctx->configGen;
+    si   = ctx->symIdx;
+    ii   = ctx->ivIdx;
+    ivMs = ctx->intervalMs;
     if (!seed) {
         long long lastT = ctx->candles[ctx->candleCount - 1].openTime;
-        if (NowUnixMs() - lastT > 5 * KLINE_MS) seed = TRUE;
+        if (NowUnixMs() - lastT > 5 * ivMs) seed = TRUE;
     }
     LeaveCriticalSection(&ctx->lock);
 
-    const wchar_t* path = seed
-        ? L"/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=300"
-        : L"/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=3";
+    wchar_t path[160];
+    swprintf_s(path, 160, L"/api/v3/klines?symbol=%s&interval=%s&limit=%d",
+               SYMBOLS[si].api, INTERVALS[ii].api, seed ? SEED_COUNT : 3);
 
     // Selve hentingen skjer UTEN laas - den kan ta hundrevis av
     // millisekunder, og UI-traden skal kunne tegne hele tiden.
@@ -549,29 +589,49 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     if (n <= 0) return FALSE;
 
     EnterCriticalSection(&ctx->lock);
+    // Forkastingen skjer ved FLETTING, ikke ved henting - svaret kan ankomme
+    // naar som helst underveis, ogsaa etter at brukeren har byttet symbol.
+    // Returnerer TRUE: et forkastet svar er ikke en nettverksfeil, og skal
+    // ikke telle opp backoffen hver gang brukeren bytter.
+    if (ctx->configGen != gen) {
+        LeaveCriticalSection(&ctx->lock);
+        return TRUE;
+    }
     MergeCandles(ctx, s_incoming, n);
-    if (ctx->candleCount > 0) {
-        ctx->lastPrice = ctx->candles[ctx->candleCount - 1].close;
-        if (ctx->viewCount <= 0) {
-            int vc = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
-            ctx->viewCount  = vc;
-            ctx->viewStart  = ctx->candleCount - vc;
-            ctx->followLive = TRUE;
-        }
+    if (ctx->followLive) {
+        int vc = ctx->viewCount;
+        if (vc <= 0) vc = DEFAULT_VIEW;
+        if (vc > ctx->candleCount) vc = ctx->candleCount;
+        ctx->viewCount = vc;
+        ctx->viewStart = ctx->candleCount - vc;
+        if (ctx->viewStart < 0) ctx->viewStart = 0;
     }
     LeaveCriticalSection(&ctx->lock);
     return TRUE;
 }
 
 static BOOL WorkerFetchPrice(AppContext* ctx) {
+    unsigned gen;
+    int si;
+
+    EnterCriticalSection(&ctx->lock);
+    gen = ctx->configGen;
+    si  = ctx->symIdx;
+    LeaveCriticalSection(&ctx->lock);
+
+    wchar_t path[96];
+    swprintf_s(path, 96, L"/api/v3/ticker/price?symbol=%s", SYMBOLS[si].api);
+
     char buf[512];
-    if (!HttpGet(ctx, L"/api/v3/ticker/price?symbol=BTCUSDT", buf, (DWORD)sizeof(buf))) return FALSE;
+    if (!HttpGet(ctx, path, buf, (DWORD)sizeof(buf))) return FALSE;
 
     double price = 0.0;
     if (!FastParsePrice(buf, &price)) return FALSE;
 
+    // Prisen har noyaktig samme kapplop som lysene, og den styrer tray-ikonet.
+    // Uten sjekken viser ikonet forrige symbols pris under nytt navn.
     EnterCriticalSection(&ctx->lock);
-    ctx->lastPrice = price;
+    if (ctx->configGen == gen) ctx->lastPrice = price;
     LeaveCriticalSection(&ctx->lock);
     return TRUE;
 }
@@ -857,9 +917,11 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     SetTextColor(hdc, CLR_DIM);
     RECT rcSub = { HDR_TEXT_L, 28, W - 12 - CLOSE_SZ, 42 };
     if (stale) {
-        swprintf_s(buf, 64, L"BTC/USDT  -  1m  -  frakoblet %ds", staleSecs);
+        swprintf_s(buf, 64, L"%s  -  %s  -  frakoblet %ds",
+                   SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label, staleSecs);
     } else {
-        wcscpy_s(buf, 64, L"BTC/USDT  -  1m");
+        swprintf_s(buf, 64, L"%s  -  %s",
+                   SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label);
     }
     DrawTextW(hdc, buf, -1, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
@@ -1670,6 +1732,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // Arbeidertraden startes forst naar vinduet og ikonet finnes, siden
     // den poster meldinger til hWnd med en gang.
+    // Konfigen MA staa for traden startes, ellers gaar forste henting mot
+    // feil par. Oppgave 6 bytter disse tre linjene mot LoadConfig().
+    g_Ctx.symIdx     = 0;
+    g_Ctx.ivIdx      = 0;
+    g_Ctx.intervalMs = INTERVALS[0].ms;
+
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manuell reset
     g_Ctx.hWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);  // auto reset
