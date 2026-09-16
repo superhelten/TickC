@@ -1744,10 +1744,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
 
         case WM_EXITSIZEMOVE: {
-            // Geometrien fanges HER, naar brukeren slipper. Ikke ved
-            // avslutning: panelet er allerede revet ned naar WM_DESTROY naar
-            // hovedvinduet, saa GetWindowRect har ingenting a lese. Maalt -
-            // registret sto uten PanelWidth for dette ble flyttet hit.
+            // Geometrien fanges naar brukeren slipper, ikke bare ved
+            // avslutning. Da panelet var EID av hovedvinduet var det
+            // allerede revet ned naar WM_DESTROY naadde dit, og registret
+            // sto uten PanelWidth - maalt. Panelet er uavhengig na, saa
+            // avslutningsstien virker ogsaa, men dette er fortsatt
+            // oyeblikket brukeren faktisk bestemmer storrelsen.
             SaveWindowPlacement(hwnd);
             return 0;
         }
@@ -2271,7 +2273,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_DESTROY:
             SaveConfig(&g_Ctx);
-            if (g_Ctx.hPopup) SaveWindowPlacement(g_Ctx.hPopup);
+            if (g_Ctx.hPopup) {
+                SaveWindowPlacement(g_Ctx.hPopup);
+                // Panelet er IKKE eid av hovedvinduet lenger - eierskap ville
+                // fjernet knappen i oppgavelinja. Da river ikke Windows det
+                // ned for oss, saa vi gjor det selv.
+                HWND hp = g_Ctx.hPopup;
+                // hPopup er i laasedomenet, og arbeidertraden lever fortsatt
+                // her - den stoppes forst etter meldingslokka.
+                EnterCriticalSection(&g_Ctx.lock);
+                g_Ctx.hPopup = NULL;
+                LeaveCriticalSection(&g_Ctx.lock);
+                DestroyWindow(hp);
+            }
             PostQuitMessage(0);
             break;
 
