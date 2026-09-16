@@ -40,6 +40,8 @@
 #define MIN_VIEW         8     // minste antall synlige lys ved full zoom
 #define ZOOM_STEP        1.2   // per musehjul-hakk
 #define TIMER_ANIM_ID    2
+#define TIMER_EMBED_ID   3      // skrivebordsmodus: prov WorkerW igjen
+#define EMBED_RETRY_MS   1000
 #define ANIM_INTERVAL    16     // ~60 fps
 // Tidsbasert interpolasjon, ikke fast steg per tikk: SetTimer(16) fyrer i
 // praksis hver ~15,6 ms og slaas sammen under last. Fast steglengde ville
@@ -296,6 +298,11 @@ static int g_savedPanelY = 0;
 // Registret er hovedinstansens hukommelse; ellers ville den som lukkes sist
 // bestemt hvor neste oppstart legger panelet.
 static BOOL g_isDuplicate = FALSE;
+// --desktop-mode: flaten er barn av skrivebordets WorkerW, bak ikonene, over
+// hele primaerskjermen. Samme vindusklasse og samme opptegning som panelet,
+// men ingen ramme, ingen knapper, ingen input og ingen geometri i registret.
+static BOOL g_desktopMode = FALSE;
+static UINT g_msgTaskbarCreated = 0;   // Explorer startet paa nytt
 static char s_httpBuf[98304];    // 300 lys gir ~50 KB svar
 static Candle s_incoming[SEED_COUNT];
 
@@ -434,8 +441,10 @@ static void SaveConfig(const AppContext* ctx) {
     RegCloseKey(k);
 }
 
+// Skrivebordsmodus lagrer ikke: flaten er hele skjermen i WorkerW-koordinater,
+// og den ville blitt vanlig modus' "lagrede storrelse" ved neste oppstart.
 static void SaveGeometry(int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0 || g_isDuplicate) return;
+    if (w <= 0 || h <= 0 || g_isDuplicate || g_desktopMode) return;
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
                         KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
@@ -2008,7 +2017,11 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     // DrawOverlay ligger her.
     //
     // Utenfor laasen: btnHot og knappegeometri er UI-eid.
-    DrawButtons(ctx, hdcMem, W, IsZoomed(hwnd));
+    //
+    // Ikke i skrivebordsmodus: flaten tar ikke imot klikk, og en knapp som
+    // ikke kan trykkes skal ikke vises. Hurtigstien over naas heller aldri
+    // der - uten musemeldinger blir knapperaden aldri invalidert alene.
+    if (!g_desktopMode) DrawButtons(ctx, hdcMem, W, IsZoomed(hwnd));
 
     // Overlayet tegnes UTENFOR laasen: alt det leser (overlayF, overlayHot,
     // symIdx, ivIdx) er UI-eid. Og det maa staa her, ikke i DrawChart, som
@@ -2217,6 +2230,25 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_ERASEBKGND:
             return 1; // handteres i WM_PAINT
 
+        // Vinduet forsvinner uten at vi ba om det: i skrivebordsmodus er
+        // forelderen Explorers WorkerW, og den kan rives ned (Explorer
+        // startes paa nytt). Er det vi som river ned, har WM_DESTROY i
+        // WndProc allerede nullet hPopup, og da er dette en no-op.
+        //
+        // animRunning maa ned: timeren dode med vinduet, og StartAnim ville
+        // ellers trodd at klokka fortsatt gaar paa neste flate.
+        case WM_NCDESTROY:
+            if (g_Ctx.hPopup == hwnd) {
+                EnterCriticalSection(&g_Ctx.lock);   // traden leser hPopup
+                g_Ctx.hPopup = NULL;
+                LeaveCriticalSection(&g_Ctx.lock);
+                g_Ctx.animRunning = FALSE;
+                if (g_desktopMode) {
+                    SetTimer(g_Ctx.hWnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
+                }
+            }
+            break;
+
         // Fjerner hele den ikke-klientaktige rammen: klientflaten blir like
         // stor som vindusrektangelet, og vi tegner alt selv.
         case WM_NCCALCSIZE: {
@@ -2235,6 +2267,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // gir HTCAPTION, som er det DefWindowProc trenger for aa sende
         // WM_NCLBUTTONDOWN og kjore nativ flytting med Aero Snap.
         case WM_NCHITTEST: {
+            // Skrivebordsmodus: ingenting her skal ta musa. WS_EX_TRANSPARENT
+            // gjor det samme for systemet; dette holder knappe- og
+            // kantlogikken under unna uansett hvem som spor.
+            if (g_desktopMode) return HTTRANSPARENT;
             RECT rw;
             GetWindowRect(hwnd, &rw);
             int x = GET_X_LPARAM(lParam) - rw.left;
@@ -2806,6 +2842,90 @@ static void ForceForeground(HWND hwnd) {
     }
 }
 
+// --- Skrivebordsmodus -------------------------------------------------------
+
+// Udokumentert: faar Progman til aa lage WorkerW-vinduet som skrivebordets
+// tapetovergang tegnes i.
+#define PROGMAN_SPAWN_WORKERW 0x052C
+
+// Klassisk vindustre (for Windows 11 24H2): WorkerW-en vi vil ha er et
+// TOPPNIVAvindu, soesken rett etter det vinduet som har SHELLDLL_DefView
+// (ikonene) i seg.
+static BOOL CALLBACK FindLegacyWorkerW(HWND top, LPARAM lParam) {
+    if (FindWindowExW(top, NULL, L"SHELLDLL_DefView", NULL)) {
+        *(HWND*)lParam = FindWindowExW(NULL, top, L"WorkerW", NULL);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// Finner WorkerW-en flaten skal ligge i, og lager den om noedvendig.
+//
+// Maalt paa 26100 (24H2): foer meldingen har Progman ett barn,
+// SHELLDLL_DefView. Etter meldingen har den to - DefView oeverst og WorkerW
+// under - og det finnes INGEN toppnivaa-WorkerW med DefView i seg. Den
+// klassiske traverseringen finner altsaa ingenting der, og proves bare naar
+// Progman ikke har WorkerW som barn.
+//
+// Begge meldingsvariantene sendes: (0xD, 1) er den nyere formen, (0, 0) den
+// klassiske. Kombinasjonen er det som er maalt; en av dem alene er ikke.
+// Tidsgrense 1 s: en Explorer som henger skal ikke fryse UI-traaden var.
+static HWND FindDesktopWorkerW(void) {
+    HWND progman = FindWindowW(L"Progman", NULL);
+    if (!progman) return NULL;
+
+    DWORD_PTR res;
+    SendMessageTimeoutW(progman, PROGMAN_SPAWN_WORKERW, 0xD, 0x1,
+                        SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, &res);
+    SendMessageTimeoutW(progman, PROGMAN_SPAWN_WORKERW, 0, 0,
+                        SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, &res);
+
+    HWND ww = FindWindowExW(progman, NULL, L"WorkerW", NULL);
+    if (ww) return ww;
+
+    HWND legacy = NULL;
+    EnumWindows(FindLegacyWorkerW, (LPARAM)&legacy);
+    return legacy;
+}
+
+// Gjor et nyopprettet WS_POPUP om til skrivebordsflaten.
+//
+// Rekkefolgen er maalt, ikke valgt. Et vanlig barnevindu under WorkerW blir
+// ALDRI synlig paa 24H2 - forelderen har ingen overflate aa tegne i (Progman
+// har WS_EX_NOREDIRECTIONBITMAP). Et lagdelt barn faar sin egen. Men:
+//   - WS_EX_LAYERED paa et barn krever supportedOS Windows 8+ i manifestet.
+//     Uten avvises stilen stille (exstil 0, 0 av 41 punkter synlige).
+//   - SetLayeredWindowAttributes maa kalles ETTER SetParent. Satt mens
+//     vinduet var toppnivaa, overlever stilen, men flaten vises ikke.
+// Med begge paa plass: 28 av 41 skrivebordspunkter fikk flatens farge, og
+// resten var ikoner.
+//
+// WS_EX_TRANSPARENT slipper musa gjennom. Flaten ligger uansett under
+// ikonenes SysListView32, men lagdelt maa den vaere, saa det koster ingenting.
+static BOOL AttachToDesktop(HWND hwnd) {
+    HWND ww = FindDesktopWorkerW();
+    if (!ww) return FALSE;
+
+    LONG_PTR st = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    SetWindowLongPtrW(hwnd, GWL_STYLE, (st & ~(LONG_PTR)WS_POPUP) | WS_CHILD);
+    if (!SetParent(hwnd, ww)) return FALSE;
+
+    LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED | WS_EX_TRANSPARENT);
+    if (!SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)) return FALSE;
+
+    // Primaerskjermen staar i 0,0 i skjermkoordinater, men WorkerW dekker
+    // hele den virtuelle skjermen og har sitt origo i dens hjorne. Paa et
+    // oppsett med en skjerm til venstre for den primaere er de ikke det
+    // samme.
+    POINT org = { 0, 0 };
+    MapWindowPoints(NULL, ww, &org, 1);
+    SetWindowPos(hwnd, HWND_BOTTOM, org.x, org.y,
+                 GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+                 SWP_NOACTIVATE);
+    return TRUE;
+}
+
 
 // Tray-klikk. Med et vanlig vindu er den forventede oppforselen: er det
 // fremme og aktivt, skjul det; ellers vis det og gi det fokus. Minimert
@@ -2841,15 +2961,34 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         //
         // Ingen WS_EX_TOOLWINDOW og ingen eier, saa vinduet beholder knappen
         // i oppgavelinja. Ingen WS_EX_TOPMOST.
+        //
+        // Skrivebordsmodus: WS_POPUP alene. Ingen ramme aa skalere i, og
+        // ingen minimer/maksimer - flaten er skrivebordet. AttachToDesktop
+        // gjor den om til WS_CHILD for den vises, og foer hPopup publiseres:
+        // traden skal ikke se et vindu som kanskje rives ned igjen.
+        DWORD style = g_desktopMode
+            ? WS_POPUP
+            : (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
         HWND hp = CreateWindowExW(
             0,
             L"BTCPopupClass", L"BTC Chart",
-            WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+            style,
             0, 0, POPUP_W, POPUP_H,
             NULL, NULL, hInst, NULL);
         if (!hp) return;
 
-        SquareCorners(hp);
+        if (g_desktopMode) {
+            if (!AttachToDesktop(hp)) {
+                // Ingen WorkerW (Explorer starter, eller kjorer ikke). hPopup
+                // er ikke satt, saa WM_NCDESTROY lar timeren vaere - den
+                // settes her.
+                DestroyWindow(hp);
+                SetTimer(ctx->hWnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
+                return;
+            }
+        } else {
+            SquareCorners(hp);
+        }
 
         EnterCriticalSection(&ctx->lock);   // traden leser hPopup
         ctx->hPopup = hp;
@@ -2874,9 +3013,16 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->dispValid   = FALSE;   // panelet skal apne ferdig, ikke gli paa plass
 
     UpdatePopupTitle(ctx);
-    if (created) PlacePopupInitially(ctx->hPopup);
-    ShowWindow(ctx->hPopup, SW_SHOW);
-    ForceForeground(ctx->hPopup);
+    if (g_desktopMode) {
+        // Geometrien satte AttachToDesktop. Ingen aktivering og ingen
+        // forgrunn: et barn av Explorers WorkerW skal aldri ta fokus fra
+        // det brukeren holder paa med.
+        ShowWindow(ctx->hPopup, SW_SHOWNA);
+    } else {
+        if (created) PlacePopupInitially(ctx->hPopup);
+        ShowWindow(ctx->hPopup, SW_SHOW);
+        ForceForeground(ctx->hPopup);
+    }
     SetEvent(ctx->hWakeEvent);   // hent lys na, ikke om opptil 3 sekunder
 
     // Er linja nede idet panelet apnes, maa klokka starte her. WM_TIMER
@@ -2899,12 +3045,17 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_TRAYICON:
-            if (lParam == WM_LBUTTONUP) {
+            // Skrivebordsmodus: flaten skal ikke skjules eller faa fokus, og
+            // "Standardvisning" ville gjort den om til et 1280x720-vindu inne
+            // i WorkerW. Ikonet er eneste vei ut, saa menyen har bare det.
+            if (lParam == WM_LBUTTONUP && !g_desktopMode) {
                 TogglePopup(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
             } else if (lParam == WM_RBUTTONUP) {
                 HMENU hMenu = CreatePopupMenu();
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESET, L"Standardvisning	Ctrl+0");
-                AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+                if (!g_desktopMode) {
+                    AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESET, L"Standardvisning	Ctrl+0");
+                    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+                }
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt Ticker");
 
                 POINT pt;
@@ -2975,7 +3126,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             PostQuitMessage(0);
             break;
 
+        // Skrivebordsmodus uten flate: WorkerW fantes ikke, eller Explorer
+        // rev den ned. Proeves til den sitter; TogglePopup setter timeren
+        // paa nytt selv om det feiler igjen.
+        case WM_TIMER:
+            if (wParam == TIMER_EMBED_ID) {
+                KillTimer(hwnd, TIMER_EMBED_ID);
+                if (g_desktopMode && !g_Ctx.hPopup) {
+                    TogglePopup(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+                }
+                return 0;
+            }
+            break;
+
         default:
+            // Explorer er startet paa nytt. Ikonet er borte fra
+            // systemstatusfeltet, og i skrivebordsmodus er WorkerW-en flaten
+            // satt i, en annen enn den som finnes naa. Flaten rives ned og
+            // bygges paa nytt - WM_NCDESTROY i PopupProc starter timeren.
+            if (msg == g_msgTaskbarCreated && g_msgTaskbarCreated != 0) {
+                Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
+                if (g_desktopMode) {
+                    if (g_Ctx.hPopup) DestroyWindow(g_Ctx.hPopup);
+                    else SetTimer(hwnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
+                }
+                return 0;
+            }
             return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     return 0;
@@ -3030,7 +3206,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     pwc.style         = CS_DBLCLKS;   // dobbeltklikk nullstiller zoom og panorering
     RegisterClassW(&pwc);
 
-    g_Ctx.hWnd = CreateWindowExW(0, wc.lpszClassName, L"BTC Core Engine", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    // Kringkastes til toppnivaavinduer naar Explorer har startet paa nytt.
+    g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+
+    g_Ctx.hWnd =CreateWindowExW(0, wc.lpszClassName, L"BTC Core Engine", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
 
     g_Ctx.nid.cbSize           = sizeof(NOTIFYICONDATAW);
     g_Ctx.nid.hWnd             = g_Ctx.hWnd;
@@ -3078,6 +3257,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     {
         int argc = 0;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        // Skrivebordsmodus tar ingen argumenter og kan ikke kombineres med
+        // --dup: et duplikat startes fra [ + ], som ikke finnes her.
+        if (argv && argc == 2 && wcscmp(argv[1], L"--desktop-mode") == 0) {
+            g_desktopMode = TRUE;
+        }
         if (argv && argc == 8 && wcscmp(argv[1], L"--dup") == 0) {
             int v[6];
             for (int i = 0; i < 6; ++i) v[i] = _wtoi(argv[2 + i]);
@@ -3104,8 +3288,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // Et duplikat er startet fra et klikk og skal vise seg med en gang - en
     // hovedinstans starter i systemstatusfeltet. Etter laasen og hendelsene:
-    // TogglePopup gaar inn i laasen og vekker traden.
-    if (g_isDuplicate) TogglePopup(&g_Ctx, hInstance);
+    // TogglePopup gaar inn i laasen og vekker traden. Skrivebordsflaten
+    // likesaa - den finnes bare mens den vises.
+    if (g_isDuplicate || g_desktopMode) TogglePopup(&g_Ctx, hInstance);
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {

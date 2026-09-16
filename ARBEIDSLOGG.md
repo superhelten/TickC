@@ -30,8 +30,12 @@ utover Win32 og WinHTTP.
 
 ```
 "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars32.bat"
-cl /nologo /W4 /O2 ticker.c /link /SUBSYSTEM:WINDOWS /OUT:ticker.exe
+cl /nologo /W4 /O2 ticker.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:ticker.manifest /OUT:ticker.exe
 ```
+
+**Manifestet er ikke valgfritt** (fase 9). Uten `supportedOS` Windows 8+ blir
+skrivebordsmodusens flate usynlig. Bygget lykkes likevel, og vanlig modus ser
+lik ut, så feilen merkes ikke før `--desktop-mode` kjøres.
 
 Bygger **rent på `/W4`** — hold det sånn. Målarkitektur er **x86** (matcher
 den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
