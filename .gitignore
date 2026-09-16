@@ -1,0 +1,9 @@
+# Byggeartefakter
+*.obj
+*.exe
+*.pdb
+*.ilk
+
+# Historiske sikkerhetskopier - erstattet av git, beholdt paa disk
+*.bak
+*.bak[0-9]
