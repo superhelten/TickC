@@ -47,6 +47,22 @@
 #define ANIM_TAU_CHROME  55.0   // tidskonstant chrome-fade (ms)
 #define ANIM_DT_MAX      100.0  // klemmer dt, saa en lang pause gir ett hopp
 
+// View-easing. Litt lengre tau enn chromet - en panorering er en storre
+// bevegelse enn en fade - men ikke mye: 2,3*tau er der oyet ser den som
+// ferdig, altsaa ~160 ms.
+#define ANIM_TAU_VIEW    70.0
+
+// Snapp naar det som gjenstaar er mindre enn en kvart piksel PAA SKJERMEN.
+// Terskelen regnes derfor om fra piksler til lys (X) og til pris (Y) ved hver
+// tikk, i stedet for a vaere et fast tall i enhetene.
+//
+// Maalt hvorfor: med en fast terskel paa 0,01 lys tok en panorering paa 300
+// lys 71 tikk - 1,14 s - for klokka kunne do, og de siste 40 tikkene flyttet
+// under en tidels piksel. Og et fast tall i PRIS virker ikke i det hele tatt
+// paa tvers av fire symboler: 0,5 dollar er en tredel av SOLs hele spenn og
+// under en tusendel av BTCs.
+#define SNAP_PX          0.25
+
 // --- Nettverksrobusthet ---
 #define NET_RETRY_MAX    60000  // tak for eksponentiell backoff (ms)
 #define NET_RECONNECT_AT 3      // antall feil for hConnect slippes (ny DNS)
@@ -203,6 +219,15 @@ typedef struct {
     double overlayF;      // 0-255
     int    overlayHot;    // indeks i rows[], -1 = ingen
 
+    // --- View- og Y-akse-easing ---
+    // Rene UI-doubler. Arbeidertraden ser dem ALDRI. viewStart/viewCount er
+    // maalet og er laasebeskyttet; disse er visningen og eies av UI-traden
+    // alene. Det er derfor easingen ikke rorer traadkontrakten.
+    double dispStart, dispCount;   // brokdels-utsnitt
+    double dispMin, dispMax;       // animert prisakse
+    BOOL   dispValid;              // FALSE = snap ved neste oppdatering
+    long long dispEvictedSeen;     // utkastinger UI har kompensert for
+
     // --- Arbeidertrad ---
     // Laasen dekker candles[], candleCount, viewStart, viewCount,
     // followLive, lastPrice og hPopup. Alt annet rores kun av UI-traden.
@@ -215,6 +240,7 @@ typedef struct {
     ULONGLONG lastOkTick;    // GetTickCount64 ved siste vellykkede henting
     ULONGLONG nextRetryTick; // naar neste forsok er planlagt
     int       netFailures;   // sammenhengende feil, driver backoffen
+    long long evictedTotal;  // lys som har falt ut i front, monotont
 
     // --- Bufrede GDI-objekter ---
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
@@ -415,6 +441,7 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
         ctx->viewStart   = 0;
         ctx->viewCount   = 0;
         ctx->followLive  = TRUE;
+        ctx->dispValid   = FALSE;   // nytt buffer: ingenting a ease fra
     }
 
     for (int i = 0; i < count; ++i) {
@@ -439,6 +466,7 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
                 memmove(ctx->candles, ctx->candles + 1, (size_t)(n - 1) * sizeof(Candle));
                 n--;
                 ctx->candleCount = n;
+                ctx->evictedTotal++;   // UI-traden forskyver disp-indeksene mot denne
                 if (ctx->viewStart > 0) ctx->viewStart--;
             }
             ctx->candles[n]  = *c;
@@ -954,6 +982,44 @@ static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, do
     double pad = range * 0.08;
     *outMin = mn - pad;
     *outMax = mx + pad;
+}
+
+// Faller lys ut i front, flyttes ALT som er en absolutt indeks like mye.
+// Uten dette hopper grafen ett lys til venstre hvert minutt saa snart
+// bufferet har naadd taket, og hoverIdx peker paa nabolyset.
+// Idempotent: delta blir 0 andre gang. Kalles under laas.
+static void ApplyEviction(AppContext* ctx) {
+    long long delta = ctx->evictedTotal - ctx->dispEvictedSeen;
+    if (delta <= 0) return;
+    ctx->dispEvictedSeen = ctx->evictedTotal;
+
+    // Ingen easing: en utkasting er ikke en bevegelse brukeren skal se.
+    ctx->dispStart -= (double)delta;
+    if (ctx->dispStart < 0.0) ctx->dispStart = 0.0;
+    if (ctx->hoverIdx >= 0) {
+        ctx->hoverIdx -= (int)delta;
+        if (ctx->hoverIdx < 0) ctx->hoverIdx = -1;
+    }
+    ctx->panAnchorView -= (int)delta;
+    if (ctx->panAnchorView < 0) ctx->panAnchorView = 0;
+}
+
+// Setter visningen lik maalet uten animasjon. Brukes naar en animasjon ikke
+// gir mening: forste bilde, nytt buffer etter konfigbytte, panelet apnes.
+// Kalles under laas.
+static void SyncDisp(AppContext* ctx) {
+    int vs, vc;
+    GetView(ctx, &vs, &vc);
+    ctx->dispStart = (double)vs;
+    ctx->dispCount = (vc > 0) ? (double)vc : 1.0;
+    if (ctx->candleCount > 0 && vc > 0) {
+        PriceRange(ctx, vs, vc, &ctx->dispMin, &ctx->dispMax);
+    } else {
+        ctx->dispMin = 0.0;
+        ctx->dispMax = 1.0;
+    }
+    ctx->dispEvictedSeen = ctx->evictedTotal;
+    ctx->dispValid = TRUE;
 }
 
 // Unix-ms -> lokal tid. Paa lange lys er "HH:MM" ikke nok - hvert 1d-lys
@@ -2273,6 +2339,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     memset(&g_Ctx, 0, sizeof(AppContext));
     g_Ctx.hoverIdx = -1;   // 0 fra memset ville betydd "hover pa forste lys"
     g_Ctx.overlayHot = -1; // samme grunn: 0 ville betydd "forste rad framhevet"
+    g_Ctx.dispValid  = FALSE; // snap paa forste bilde
 
     g_Ctx.hSession = WinHttpOpen(L"BTCTicker Engine/2.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
