@@ -1726,7 +1726,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 // Ingen fade. Knappene skifter farge momentant paa hover: en fade ville
 // krevd enda en animert verdi i WM_TIMER, og et treff som henger paa
 // fade-niva i stedet for paa btnHot er nettopp fallgruve 12.
-static void DrawButtons(AppContext* ctx, HDC hdc, int W) {
+static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
     RECT b[BTN_COUNT];
     ButtonLayout(W, b);
 
@@ -1771,8 +1771,31 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W) {
                 LineTo(hdc, cx + g + 1, cy + 3);
                 break;
             case BTN_MAX:
-                // NULL_BRUSH er valgt over, saa Rectangle tegner kun omriss.
-                Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
+                if (zoomed) {
+                    // Gjenopprett: to overlappende rektangler. Det bakre
+                    // tegnes som en APEN polylinje - kun de kantene som ikke
+                    // ligger bak det fremre - saa vi slipper aa fylle det
+                    // fremre ugjennomsiktig for aa skjule overlappet. To
+                    // GDI-kall, ikke fire.
+                    //
+                    // Bakre rekt er x[-1..+4] y[-4..+1], fremre x[-4..+1]
+                    // y[-1..+4]. Synlig del av det bakre er alt utenfor det
+                    // fremre: venstre kant ned til overlappet, toppen, hoyre
+                    // kant, og stubben av bunnen.
+                    POINT bak[5] = {
+                        { cx - 1, cy - 1 },
+                        { cx - 1, cy - 4 },
+                        { cx + 4, cy - 4 },
+                        { cx + 4, cy + 1 },
+                        { cx + 1, cy + 1 },
+                    };
+                    Polyline(hdc, bak, 5);
+                    // NULL_BRUSH er valgt over, saa Rectangle gir kun omriss.
+                    Rectangle(hdc, cx - 4, cy - 1, cx + 2, cy + 5);
+                } else {
+                    // NULL_BRUSH er valgt over, saa Rectangle gir kun omriss.
+                    Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
+                }
                 break;
             case BTN_CLOSE:
                 MoveToEx(hdc, cx - g, cy - g, NULL);
@@ -1813,7 +1836,7 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     // DrawOverlay ligger her.
     //
     // Utenfor laasen: btnHot og knappegeometri er UI-eid.
-    DrawButtons(ctx, hdcMem, W);
+    DrawButtons(ctx, hdcMem, W, IsZoomed(hwnd));
 
     // Overlayet tegnes UTENFOR laasen: alt det leser (overlayF, overlayHot,
     // symIdx, ivIdx) er UI-eid. Og det maa staa her, ikke i DrawChart, som
@@ -2283,9 +2306,32 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                             ShowWindow(hwnd, SW_MINIMIZE);
                             break;
                         case BTN_MAX:
-                            // Geometrien lagres for vi maksimerer.
-                            SaveWindowPlacement(hwnd);
-                            ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+                            if (IsZoomed(hwnd)) {
+                                ShowWindow(hwnd, SW_RESTORE);
+                                // Mandatets "eller DPI-skalert 1280x720":
+                                // OS-et eier den gjenopprettede rekta, og
+                                // SW_RESTORE bruker den. Men var den lagret
+                                // paa en skjerm som siden er koblet fra,
+                                // havner vinduet utenfor alt synlig. Samme
+                                // sjekk som PlacePopupInitially gjor ved
+                                // apning.
+                                {
+                                    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+                                    if (GetWindowPlacement(hwnd, &wp)) {
+                                        RECT* nr = &wp.rcNormalPosition;
+                                        if (!PlacementIsVisible(nr->left, nr->top,
+                                                                nr->right - nr->left,
+                                                                nr->bottom - nr->top)) {
+                                            ResetToDefaultView(hwnd);
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Geometrien lagres for vi maksimerer. Ved
+                                // gjenoppretting er den allerede lagret.
+                                SaveWindowPlacement(hwnd);
+                                ShowWindow(hwnd, SW_MAXIMIZE);
+                            }
                             break;
                         case BTN_CLOSE:
                             // WM_CLOSE, ikke DestroyWindow: den eksisterende
