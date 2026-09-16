@@ -244,6 +244,12 @@ typedef struct {
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
     // per opptegning.
     HPEN   penGrid, penUp, penDown, penCross;
+    HPEN   penBtn, penBtnHot, penBtnWhite;
+    HBRUSH brClose;
+    // Hvilken knapp musa staar paa, -1 for ingen. UI-eid, aldri roert av
+    // arbeidertraden. Treffdeteksjonen henger paa DENNE, ikke paa noe
+    // fade-niva - knappene har ingen fade, de skifter farge momentant.
+    int    btnHot;
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brUp, brDown, brBox, brBoxEdge;
 
@@ -1471,9 +1477,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     wchar_t buf[64];
 
-    // Ingen grip-prikker og ingen kryss lenger - OS-rammen har dem.
-    // Headerteksten kan bruke hele bredden.
-    RECT rcHdr = { PAD_L, 10, W - 12, 30 };
+    // Knapperaden ligger oppe til hoyre. Headerteksten maa vike for den,
+    // ellers tegnes den hoyrestilte prosenten rett under krysset.
+    RECT rcHdr = { PAD_L, 10, W - BTN_STRIP_W - 8, 30 };
 
     SelectObject(hdc, ctx->hFontBig);
     SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
@@ -1705,6 +1711,75 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 }
 
 
+// Kontrollknappene. Rene GDI-vektorer - ingen font, ingen glyfoppslag. En
+// DrawTextW med et Unicode-tegn koster langt mer enn fire LineTo, og ville
+// dessuten vaert avhengig av at fonten HAR glyfen (tray-ikonets manglende
+// k-glyf er samme problem lenger nede i loggen).
+//
+// Ingen fade. Knappene skifter farge momentant paa hover: en fade ville
+// krevd enda en animert verdi i WM_TIMER, og et treff som henger paa
+// fade-niva i stedet for paa btnHot er nettopp fallgruve 12.
+static void DrawButtons(AppContext* ctx, HDC hdc, int W) {
+    RECT b[BTN_COUNT];
+    ButtonLayout(W, b);
+
+    HPEN   oldPen = (HPEN)SelectObject(hdc, ctx->penBtn);
+    HBRUSH oldBr  = (HBRUSH)SelectObject(hdc, (HBRUSH)GetStockObject(NULL_BRUSH));
+
+    for (int i = 0; i < BTN_COUNT; ++i) {
+        RECT* r = &b[i];
+        BOOL hot = (ctx->btnHot == i);
+
+        // Bakgrunn kun ved hover. I hvile er knappen bare en glyf paa
+        // panelets egen bakgrunn - det er det ultrakompakte uttrykket.
+        if (hot) {
+            FillRect(hdc, r, (i == BTN_CLOSE) ? ctx->brClose : ctx->brBox);
+        }
+
+        SelectObject(hdc, hot ? ((i == BTN_CLOSE) ? ctx->penBtnWhite : ctx->penBtnHot)
+                              : ctx->penBtn);
+
+        int cx = (r->left + r->right) / 2;
+        int cy = (r->top + r->bottom) / 2;
+        int g  = 4;   // halv glyfbredde: 9x9 piksler totalt
+
+        switch (i) {
+            case BTN_RESET: {
+                // Sirkelpil. Arc gaar mot klokka SETT PAA SKJERMEN - maalt,
+                // ikke antatt: start 3 og slutt 12 ga en bue i ovre hoyre
+                // kvadrant. Vi starter derfor paa 12 og slutter paa 2, som
+                // er ~300 grader med et gap oppe til hoyre. En 90-graders
+                // bue leses som en tilfeldig strek, ikke som "gjenopprett".
+                Arc(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1,
+                         cx,     cy - g,      // start: 12
+                         cx + 3, cy - 2);     // slutt: ca. 2
+                // Pilspiss i gapet, paa buens startende.
+                MoveToEx(hdc, cx - 3, cy - g - 2, NULL);
+                LineTo(hdc, cx + 1, cy - g);
+                LineTo(hdc, cx - 3, cy - g + 2);
+                break;
+            }
+            case BTN_MIN:
+                MoveToEx(hdc, cx - g, cy + 3, NULL);
+                LineTo(hdc, cx + g + 1, cy + 3);
+                break;
+            case BTN_MAX:
+                // NULL_BRUSH er valgt over, saa Rectangle tegner kun omriss.
+                Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
+                break;
+            case BTN_CLOSE:
+                MoveToEx(hdc, cx - g, cy - g, NULL);
+                LineTo(hdc, cx + g + 1, cy + g + 1);
+                MoveToEx(hdc, cx + g, cy - g, NULL);
+                LineTo(hdc, cx - g - 1, cy + g + 1);
+                break;
+        }
+    }
+
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBr);
+}
+
 static void PaintPopup(AppContext* ctx, HWND hwnd) {
     PAINTSTRUCT ps;
     HDC hdcDst = BeginPaint(hwnd, &ps);
@@ -1723,6 +1798,15 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     EnterCriticalSection(&ctx->lock);
     DrawChart(ctx, hdcMem, W, H);
     LeaveCriticalSection(&ctx->lock);
+
+    // Knappene tegnes HER, ikke i DrawChart. DrawChart returnerer tidlig naar
+    // bufferet er tomt - altsaa mens det staar "Laster data fra Binance..."
+    // og under hele en frakobling. Laa tegningen der, ville krysset
+    // forsvunnet nettopp naar brukeren vil lukke panelet. Samme grunn som
+    // DrawOverlay ligger her.
+    //
+    // Utenfor laasen: btnHot og knappegeometri er UI-eid.
+    DrawButtons(ctx, hdcMem, W);
 
     // Overlayet tegnes UTENFOR laasen: alt det leser (overlayF, overlayHot,
     // symIdx, ivIdx) er UI-eid. Og det maa staa her, ikke i DrawChart, som
@@ -2494,6 +2578,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.penUp     = CreatePen(PS_SOLID, 1, CLR_UP);
     g_Ctx.penDown   = CreatePen(PS_SOLID, 1, CLR_DOWN);
     g_Ctx.penCross  = CreatePen(PS_DOT,   1, CLR_CROSS);
+    g_Ctx.penBtn      = CreatePen(PS_SOLID, 1, CLR_DIM);
+    g_Ctx.penBtnHot   = CreatePen(PS_SOLID, 1, CLR_TEXT);
+    g_Ctx.penBtnWhite = CreatePen(PS_SOLID, 1, CLR_BTNHOT);
+    g_Ctx.brClose     = CreateSolidBrush(CLR_CLOSEHOT);
+    g_Ctx.btnHot      = -1;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
     // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
@@ -2542,6 +2631,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     DeleteObject(g_Ctx.brDown);   DeleteObject(g_Ctx.brBox);
     DeleteObject(g_Ctx.brBoxEdge);
     DeleteObject(g_Ctx.penLastUp);   DeleteObject(g_Ctx.penLastDown);
+    DeleteObject(g_Ctx.penBtn);      DeleteObject(g_Ctx.penBtnHot);
+    DeleteObject(g_Ctx.penBtnWhite); DeleteObject(g_Ctx.brClose);
 
     // Vannmerke-cachen. Rekkefolgen er viktig: bitmapen maa velges ut av
     // DC-en for begge slettes.
