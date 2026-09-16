@@ -8,14 +8,15 @@ er levert.** Deretter er panelet flyttet fra rammeløst popup til et vanlig
 OS-vindu, og så, i **fase 4**, tilbake til rammeløst — denne gangen med egne
 kontrollknapper og nativ `HTCAPTION`-flytting. **Fase 5** la til
 tilstandsavhengig gjenopprettingsglyf, inkrementell hover-opptegning og
-firevegspeker under panorering. Se **Vinduet** under. Planer:
+firevegspeker under panorering. **Fase 6** strammet klippingen av grafen til
+`rcChart` og flyttet gjenopprettingsglyfen til 2 px forskyvning. Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md` og
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-Alt ligger i **én fil**, `ticker.c` (~2740 linjer). Ingen eksterne avhengigheter
+Alt ligger i **én fil**, `ticker.c` (~2910 linjer). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
 ---
@@ -472,6 +473,7 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
 | `ANIM_TAU_VIEW` | 70,0 | tidskonstant view-easing (ms) |
 | `SNAP_PX` | 0,25 | snapp når det gjenstår under en kvart piksel |
 | `WM_FONT_DIV` / `MIN` / `MAX` | 5 / 32 / 120 | vannmerkets fonthøyde |
+| `CHART_TOP_MIN` | 32 | minste `rcChart.top`, sjekket med `#error` |
 
 ---
 
@@ -977,18 +979,21 @@ maksimert ga `❐` i maksimer-knappen, ikke `□`, med minimer lyst opp i
      normal                   maksimert
    .............           .............
    .............           .............
-   ..#########..           .....######..
-   ..#.......#..           .....#....#..
-   ..#.......#..           .....#....#..
-   ..#.......#..           ..######..#..
-   ..#.......#..           ..#....#..#..
-   ..#.......#..           ..#....####..
-   ..#.......#..           ..#....#.....
-   ..#.......#..           ..#....#.....
-   ..#########..           ..######.....
+   ..#########..           ....#######..
+   ..#.......#..           ....#.....#..
+   ..#.......#..           ..#######.#..
+   ..#.......#..           ..#.....#.#..
+   ..#.......#..           ..#.....#.#..
+   ..#.......#..           ..#.....#.#..
+   ..#.......#..           ..#.....###..
+   ..#.......#..           ..#.....#....
+   ..#########..           ..#######....
    .............           .............
    .............           .............
 ```
+
+> Rutenettet over er etter fase 6: to 7×7-rektangler forskjøvet **2 px**.
+> Fase 5 tegnet to 6×6 forskjøvet 3 px.
 
 Ingen streker gjennom det fremre rektangelet: det bakre tegnes som en åpen
 polylinje, ikke som et helt rektangel.
@@ -1007,6 +1012,59 @@ knapp, som er hurtigstiens tyngste last. Private bytes 3,53 MB, exe 164 KB,
 **Regresjon:** 28/28 enhetstester, 22/22 treffsoner, fire knappeklikk med ekte
 mus, 11/11 hover-farger, panorering, zoom, crosshair, overlay, ESC, tray,
 skalering — alle grønne.
+
+### Fase 6 — klipping av grafen og glyfpolering
+
+Mandatet kom fra et skjermbilde i maksimert tilstand: lys som blør inn i
+Y-aksemargen eller headeren, en utydelig `❐`, og krav om minst 32 px
+klaring over grafen.
+
+**Blødningen var ekte, men 1 px, og bare mens grafen beveger seg.** Et
+stillbilde med `PrintWindow` ved 3840×1552 viste ingenting. Den ble funnet
+med en stressprobe: postet `WM_MOUSEWHEEL` (panorering og Ctrl-zoom), fanget
+med `PrintWindow` 15/30/45/90 ms etter hvert hakk, altså midt i easingen der
+`dStart` er brøk og halve lys ligger i kantene. Hvert bilde skannes for
+eksakt `CLR_UP`/`CLR_DOWN` i fem regioner utenfor `rcChart`: kolonnen
+`x = right`, aksemargen `x > right` (utenom stempelradene), båndet
+`y ∈ [31, 44)`, alt under `bottom` og venstre marg.
+
+| Bygg | Tilstand | Bilder | Bilder med lyspiksler utenfor | Piksler |
+|---|---|---|---|---|
+| før | 3840×1552 | 240 | **21** — alle i kolonnen `x = right` | 1819 |
+| etter | 3840×1552 | 240 + 480 | **0** | 0 |
+| etter | 1030×581 | 480 | **0** | 0 |
+
+Årsaken var `IntersectClipRect(..., right + 1, bottom + 1)`. Kolonnen
+`x = right` hører til aksemargen — rutenettet slutter på `right − 1` — men
+klippet slapp lyskropper gjennom der. Topp- og bunnbåndet var aldri berørt.
+
+**Endret i `DrawChart`:**
+- `RECT rcChart = { left, top, right, bottom + 1 }` settes med
+  `IntersectClipRect` **før rutenettet**, ikke bare før lysene.
+- Høyre kant er eksklusiv. Bunnen er **inklusiv** med vilje: rutenettlinje
+  `i = 4` og veken til laveste pris ligger begge på `y = bottom`, og et
+  `[top, bottom)`-klipp ville visket ut den nederste linja.
+- Prisetikettene er skilt ut i en egen løkke etter `SelectClipRgn(NULL)`.
+  Lå de igjen i rutenettløkka, ville klippet tatt dem.
+
+**Endret i `DrawButtons`:** knappeflaten fylles **alltid** før vektorene —
+`brBg` i hvile, `brBox`/`brClose` på hover. Pennene var allerede kosmetiske
+1 px `PS_SOLID` (`CreatePen(PS_SOLID, 1, …)`) og er urørt. Gjenopprettings-
+glyfen er to 7×7-rektangler forskjøvet 2 px innenfor samme 9×9-fotavtrykk,
+fortsatt med det bakre som åpen polylinje. Se rutenettet under Fase 5.
+
+**Topp-klaring:** `rcChart.top = HEADER_H = 44` oppfylte allerede kravet.
+Det er nå sikret ved kompilering: `CHART_TOP_MIN 32` og
+`#if HEADER_H < CHART_TOP_MIN #error`.
+
+**Hurtigstien er fortsatt piksel-identisk** etter at `FillRect` kom inn i den
+delte `DrawButtons`: knapperaden lest fra skjermen etter en tvunget full
+opptegning, så etter 24 hover-inn/hover-ut: **0 avvik av 1980** i begge
+tilstander, med hover faktisk opplyst 4/4 maksimert. Gjenopprettet lyste den
+bare 1/4 og 3/4 — brukeren var aktiv ved maskinen under målingen og flyttet
+både peker og vindu, så den raden er svakere bevis enn den maksimerte.
+
+`/W4` rent, x86, 168 KB exe.
 
 ---
 
@@ -1189,10 +1247,24 @@ skalering — alle grønne.
 32. **`GetCursorInfo` med feil `cbSize` lyver stille** — returnerer `TRUE` og
     `hCursor = 0`. Samme felle som fallgruve 19, ny melding. `CURSORINFO` er
     24 byte i en 64-bits prosess, ikke 20. Sett `cbSize` fra **typen**.
+33. **`IntersectClipRect` er eksklusiv i høyre og nedre kant — sjekk hva som
+    faktisk bor på grensen.** `right + 1` slapp lys inn i aksemargens første
+    kolonne; `bottom` uten `+ 1` ville fjernet nederste rutenettlinje. Samme
+    funksjon, motsatt svar i de to aksene, fordi grafen er `[left, right)` i
+    x og `[top, bottom]` i y.
+34. **En klippefeil viser seg ikke i et stillbilde.** Halve lys i kantene
+    finnes bare når `dStart` er brøk, altså midt i easingen. Post hjulhakk og
+    fang innen ~90 ms, mange ganger, og skann regioner for eksakte lysfarger.
+35. **En postet `WM_MOUSEMOVE` holder ikke hover hvis den ekte pekeren står
+    utenfor klientflaten.** `TrackMouseEvent` ser at pekeren ikke er der og
+    sender `WM_MOUSELEAVE` med én gang, som nullstiller `btnHot`. Det gjelder
+    også når pekeren står i headeren, som er `HTCAPTION` (fallgruve 23).
+    Parker den ekte pekeren på en knapp — `HTCLIENT` — og legg den tilbake
+    etterpå.
 
 ---
 
 ## Sikkerhetskopier
 
-`ticker.c.bak` … `ticker.c.bak6` ligger i mappa, ett per større endring.
+`ticker.c.bak` … `ticker.c.bak7` ligger i mappa, ett per større endring.
 De eldste kan trygt slettes.

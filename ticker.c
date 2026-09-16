@@ -73,6 +73,13 @@
 #define PAD_L            10
 #define PAD_R            54
 #define HEADER_H         44
+// rcChart.top = HEADER_H. Grafen skal aldri kunne krype opp i headerteksten
+// eller kontrollknappene (de slutter paa BTN_TOP + BTN_H = 24), saa et gulv
+// sjekkes ved kompilering i stedet for aa klemmes ved kjoring.
+#define CHART_TOP_MIN    32
+#if HEADER_H < CHART_TOP_MIN
+#error HEADER_H maa gi rcChart minst CHART_TOP_MIN px klaring fra toppen
+#endif
 
 // Kontrollknapper i headeren. Ultrakompakt: 26x18 er nok til en 9 px glyf
 // med luft rundt, og lar headerens 44 px fortsatt baere to tekstlinjer.
@@ -1547,20 +1554,29 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     double range = maxP - minP;
     if (range < 1e-9) range = 1.0;
 
-    // --- Rutenett + prisetiketter ---
-    HPEN hOldPen = (HPEN)SelectObject(hdc, ctx->penGrid);
-    SelectObject(hdc, ctx->hFontSmall);
+    // --- Klipping til chart-flaten ---
+    // Med dStart = 142,7 finnes det halve lys i begge kanter, og midt i
+    // Y-easingen ligger veker over maxP og under minP. Rutenett og lys tegnes
+    // derfor innenfor en klipperegion avgrenset til rcChart, og ingenting
+    // annet: aksetekstene, stempelet og headeren ligger utenfor flaten og
+    // tegnes etter SelectClipRgn(NULL).
+    //
+    // Hoyre kant er EKSKLUSIV: kolonnen x = right hoerer til aksemargen, og
+    // rutenettet slutter paa right - 1. Med right + 1 her maalte vi lyspiksler
+    // i den kolonnen i 21 av 240 bilder under panorering, maksimert.
+    //
+    // Bunnen er INKLUSIV (bottom + 1): rutenettlinje i = 4 ligger paa
+    // y = bottom, og det samme gjor veken til lyset med laveste pris. Et
+    // [top, bottom)-klipp ville visket ut den nederste linja.
+    RECT rcChart = { left, top, right, bottom + 1 };
+    IntersectClipRect(hdc, rcChart.left, rcChart.top, rcChart.right, rcChart.bottom);
 
+    // --- Rutenett ---
+    HPEN hOldPen = (HPEN)SelectObject(hdc, ctx->penGrid);
     for (int i = 0; i <= 4; ++i) {
         int y = top + (ch * i) / 4;
         MoveToEx(hdc, left, y, NULL);
         LineTo(hdc, right, y);
-
-        double p = maxP - (range * i) / 4.0;
-        swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
-        RECT rcLbl = { right + 4, y - 8, W - 4, y + 8 };
-        SetTextColor(hdc, CLR_DIM);
-        DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
     SelectObject(hdc, hOldPen);
 
@@ -1569,11 +1585,6 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     int bodyW = (int)(slot * 0.62);
     if (bodyW < 1)  bodyW = 1;
     if (bodyW > 18) bodyW = 18;   // hindrer klumpete lys ved full innzoom
-
-    // Med dStart = 142,7 finnes det halve lys i begge kanter. Klippingen
-    // hindrer at de blor ut i prisaksen og headeren. MAA gjenopprettes for
-    // aksetekstene tegnes - de ligger utenfor chart-flaten.
-    IntersectClipRect(hdc, left, top, right + 1, bottom + 1);
 
     // Lokka gaar fortsatt over SYNLIGE lys, ikke over hele historikken:
     // i1 - i0 er dCount + 1 avrundet. Ytelseskarakteristikken fra fase 1
@@ -1607,10 +1618,24 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         Rectangle(hdc, cx - bodyW / 2, yTop, cx - bodyW / 2 + bodyW, yBot);
     }
 
+    // Klippingen MAA vekk for aksetekstene - de ligger i margen til hoyre.
     SelectClipRgn(hdc, NULL);
 
     SelectObject(hdc, GetStockObject(BLACK_PEN));
     SelectObject(hdc, GetStockObject(NULL_BRUSH));
+
+    // --- Prisetiketter ---
+    // Egen lokke etter klippingen, ikke i rutenettlokka: der ville de blitt
+    // klippet bort sammen med alt annet utenfor rcChart.
+    SelectObject(hdc, ctx->hFontSmall);
+    SetTextColor(hdc, CLR_DIM);
+    for (int i = 0; i <= 4; ++i) {
+        int y = top + (ch * i) / 4;
+        double p = maxP - (range * i) / 4.0;
+        swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
+        RECT rcLbl = { right + 4, y - 8, W - 4, y + 8 };
+        DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
 
     // --- Siste pris: stiplet linje + aksestempel ---
     // Staar HER med vilje: over lysene og rutenettet, under traadkorset og
@@ -1754,11 +1779,14 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         RECT* r = &b[i];
         BOOL hot = (ctx->btnHot == i);
 
-        // Bakgrunn kun ved hover. I hvile er knappen bare en glyf paa
-        // panelets egen bakgrunn - det er det ultrakompakte uttrykket.
-        if (hot) {
-            FillRect(hdc, r, (i == BTN_CLOSE) ? ctx->brClose : ctx->brBox);
-        }
+        // Knappeflaten toemmes ALLTID for vektorene tegnes, ogsaa i hvile:
+        // i hvile med CLR_BG, saa knappen fortsatt bare er en glyf paa
+        // panelets egen bakgrunn. Da kan ingen tidligere glyf eller
+        // hover-farge ligge igjen under, uansett hva DC-en inneholdt fra for.
+        // Begge stiene i PaintPopup gaar hit, saa hurtigstien og den trege
+        // tegner fortsatt identisk.
+        FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->brBox)
+                             : ctx->brBg);
 
         SelectObject(hdc, hot ? ((i == BTN_CLOSE) ? ctx->penBtnWhite : ctx->penBtnHot)
                               : ctx->penBtn);
@@ -1795,20 +1823,23 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                     // fremre ugjennomsiktig for aa skjule overlappet. To
                     // GDI-kall, ikke fire.
                     //
-                    // Bakre rekt er x[-1..+4] y[-4..+1], fremre x[-4..+1]
-                    // y[-1..+4]. Synlig del av det bakre er alt utenfor det
-                    // fremre: venstre kant ned til overlappet, toppen, hoyre
-                    // kant, og stubben av bunnen.
+                    // To 7x7-rektangler forskjovet 2 px diagonalt, innenfor
+                    // samme 9x9-fotavtrykk som de andre glyfene. Bakre rekt
+                    // er x[-2..+4] y[-4..+2], fremre x[-4..+2] y[-2..+4].
+                    // Synlig del av det bakre er alt utenfor det fremre:
+                    // venstre kant ned til overlappet, toppen, hoyre kant, og
+                    // stubben av bunnen. Polyline tegner ikke siste punkt, saa
+                    // den stopper rett for det fremres hoyre kant.
                     POINT bak[5] = {
-                        { cx - 1, cy - 1 },
-                        { cx - 1, cy - 4 },
+                        { cx - 2, cy - 2 },
+                        { cx - 2, cy - 4 },
                         { cx + 4, cy - 4 },
-                        { cx + 4, cy + 1 },
-                        { cx + 1, cy + 1 },
+                        { cx + 4, cy + 2 },
+                        { cx + 2, cy + 2 },
                     };
                     Polyline(hdc, bak, 5);
                     // NULL_BRUSH er valgt over, saa Rectangle gir kun omriss.
-                    Rectangle(hdc, cx - 4, cy - 1, cx + 2, cy + 5);
+                    Rectangle(hdc, cx - 4, cy - 2, cx + 3, cy + 5);
                 } else {
                     // NULL_BRUSH er valgt over, saa Rectangle gir kun omriss.
                     Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
