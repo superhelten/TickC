@@ -14,6 +14,7 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 
 #define WM_TRAYICON      (WM_USER + 1)
@@ -238,6 +239,8 @@ typedef struct {
 } AppContext;
 
 static AppContext g_Ctx;
+static int g_savedPanelW = 0;   // panelstorrelse fra registret, 0 = ubrukt
+static int g_savedPanelH = 0;
 static char s_httpBuf[98304];    // 300 lys gir ~50 KB svar
 static Candle s_incoming[SEED_COUNT];
 
@@ -302,6 +305,71 @@ static DWORD NetBackoffMs(int failures, ULONGLONG tickSeed) {
     // denne klemmingen ga failures>=5 opptil 67,5 s - maalt, ikke antatt.
     if (out > NET_RETRY_MAX) out = NET_RETRY_MAX;
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// Registret. HKCU\Software\Ticker. Aldri en forutsetning for at appen
+// starter - feiler lesningen, faller vi tilbake pa BTC/USDT 1m.
+// Plassert her, blant de rene hjelpefunksjonene, fordi ApplyConfigChoice
+// lenger nede kaller SaveConfig. Fila har ingen forward-deklarasjoner.
+// ---------------------------------------------------------------------------
+
+#define REG_PATH L"Software\\Ticker"
+
+static DWORD RegReadDword(HKEY k, const wchar_t* name, DWORD fallback) {
+    DWORD v = 0, cb = sizeof(v), type = 0;
+    if (RegQueryValueExW(k, name, NULL, &type, (BYTE*)&v, &cb) == ERROR_SUCCESS &&
+        type == REG_DWORD && cb == sizeof(v)) {
+        return v;
+    }
+    return fallback;
+}
+
+static void LoadConfig(AppContext* ctx, int* outW, int* outH) {
+    // Standardverdiene settes FORST, slik at enhver feilsti nedenfor lander
+    // pa noe gyldig uten egen behandling.
+    ctx->symIdx     = 0;
+    ctx->ivIdx      = 0;
+    ctx->intervalMs = INTERVALS[0].ms;
+    *outW = 0; *outH = 0;
+
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return;
+    }
+    DWORD sy = RegReadDword(k, L"SymbolIndex",   0);
+    DWORD iv = RegReadDword(k, L"IntervalIndex", 0);
+    DWORD w  = RegReadDword(k, L"PanelWidth",    0);
+    DWORD h  = RegReadDword(k, L"PanelHeight",   0);
+    RegCloseKey(k);
+
+    // Bundet sjekk. Et register redigert for hand, eller etterlatt av en
+    // nyere versjon med flere symboler, skal ikke kunne indeksere utenfor
+    // tabellen.
+    if (sy < (DWORD)SYMBOL_COUNT)   ctx->symIdx = (int)sy;
+    if (iv < (DWORD)INTERVAL_COUNT) {
+        ctx->ivIdx      = (int)iv;
+        ctx->intervalMs = INTERVALS[iv].ms;
+    }
+    if (w >= 240 && w <= 4096) *outW = (int)w;
+    if (h >= 160 && h <= 4096) *outH = (int)h;
+}
+
+static void SaveConfig(const AppContext* ctx, int panelW, int panelH) {
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return;   // ingen skriverett: stille, appen fungerer likevel
+    }
+    DWORD sy = (DWORD)ctx->symIdx, iv = (DWORD)ctx->ivIdx;
+    RegSetValueExW(k, L"SymbolIndex",   0, REG_DWORD, (const BYTE*)&sy, sizeof(sy));
+    RegSetValueExW(k, L"IntervalIndex", 0, REG_DWORD, (const BYTE*)&iv, sizeof(iv));
+    if (panelW > 0 && panelH > 0) {
+        DWORD w = (DWORD)panelW, h = (DWORD)panelH;
+        RegSetValueExW(k, L"PanelWidth",  0, REG_DWORD, (const BYTE*)&w, sizeof(w));
+        RegSetValueExW(k, L"PanelHeight", 0, REG_DWORD, (const BYTE*)&h, sizeof(h));
+    }
+    RegCloseKey(k);
 }
 
 // Spennet folger zoomen - "(60m)" ville vaert feil sa snart man zoomer. Med
@@ -1441,6 +1509,7 @@ static void ApplyConfigChoice(AppContext* ctx, HWND hwnd, int hit) {
     // gjelder av samme grunn: ikke hold laasen over noe som vekker den andre
     // traden.
     SetEvent(ctx->hWakeEvent);
+    SaveConfig(ctx, 0, 0);   // 0,0 = ikke ror panelstorrelsen
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -1498,9 +1567,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             g_Ctx.inSizeMove = TRUE;
             return 0;
 
-        case WM_EXITSIZEMOVE:
+        case WM_EXITSIZEMOVE: {
             g_Ctx.inSizeMove = FALSE;
+            // Storrelsen fanges HER, naar brukeren slipper, ikke ved
+            // avslutning: panelet eies av hovedvinduet og er allerede revet
+            // ned naar WM_DESTROY kommer dit, saa GetWindowRect har ingenting
+            // a lese. Maalt - registret sto uten PanelWidth.
+            RECT rp;
+            if (GetWindowRect(hwnd, &rp)) {
+                g_savedPanelW = rp.right - rp.left;
+                g_savedPanelH = rp.bottom - rp.top;
+            }
             return 0;
+        }
 
         case WM_SIZE:
             g_Ctx.wmValid = FALSE;   // bitmapen er bygget for forrige storrelse
@@ -1929,7 +2008,12 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             L"BTCPopupClass", L"BTC Chart",
             WS_POPUP | WS_THICKFRAME,   // THICKFRAME = resizable; rammen skjules i WM_NCCALCSIZE
-            0, 0, POPUP_W, POPUP_H,
+            0, 0,
+            // Lagret storrelse fra registret. 0 betyr "ikke lagret" og gir
+            // standardmaalene. WM_SIZE fyrer som del av opprettelsen, saa
+            // vannmerke-cachen bygges for riktig flate uten et eget steg.
+            (g_savedPanelW > 0) ? g_savedPanelW : POPUP_W,
+            (g_savedPanelH > 0) ? g_savedPanelH : POPUP_H,
             ctx->hWnd, NULL, hInst, NULL);
         if (!hp) return;
 
@@ -2031,6 +2115,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_DESTROY:
+            SaveConfig(&g_Ctx, g_savedPanelW, g_savedPanelH);
             PostQuitMessage(0);
             break;
 
@@ -2115,11 +2200,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // Arbeidertraden startes forst naar vinduet og ikonet finnes, siden
     // den poster meldinger til hWnd med en gang.
-    // Konfigen MA staa for traden startes, ellers gaar forste henting mot
-    // feil par. Oppgave 6 bytter disse tre linjene mot LoadConfig().
-    g_Ctx.symIdx     = 0;
-    g_Ctx.ivIdx      = 0;
-    g_Ctx.intervalMs = INTERVALS[0].ms;
+    // MA staa for CreateThread: forste henting skal gaa mot riktig par, og
+    // vannmerket skal vaere korrekt fra forste bilde.
+    LoadConfig(&g_Ctx, &g_savedPanelW, &g_savedPanelH);
 
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manuell reset
