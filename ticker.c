@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -34,9 +35,22 @@
 #define ZOOM_STEP        1.2   // per musehjul-hakk
 #define REOPEN_GUARD_MS  250   // hindrer at klikk-for-aa-lukke aapner igjen med en gang
 #define SHOW_GRACE_MS    400   // ignorer fokustap rett etter apning
-#define TIMER_FADE_ID    2
-#define FADE_INTERVAL    16    // ~60 fps
-#define FADE_STEP        36    // 255/36 = 8 steg = ~130ms inn/ut
+#define TIMER_ANIM_ID    2
+#define ANIM_INTERVAL    16     // ~60 fps
+// Tidsbasert interpolasjon, ikke fast steg per tikk: SetTimer(16) fyrer i
+// praksis hver ~15,6 ms og slaas sammen under last. Fast steglengde ville
+// gitt ulik hastighet avhengig av systembelastning.
+// Eksponentiell kurve har en hale: tau=55 gir ~90 % pa 130 ms (der oyet
+// ser faden som ferdig) og full innsetting paa ~340 ms. Halen koster kun
+// timer-tikk, ikke opptegninger - vi tegner bare naar det avrundede
+// niva faktisk endrer seg.
+#define ANIM_TAU_CHROME  55.0   // tidskonstant chrome-fade (ms)
+#define ANIM_DT_MAX      100.0  // klemmer dt, saa en lang pause gir ett hopp
+
+// --- Nettverksrobusthet ---
+#define NET_RETRY_MAX    60000  // tak for eksponentiell backoff (ms)
+#define NET_RECONNECT_AT 3      // antall feil for hConnect slippes (ny DNS)
+#define STALE_AFTER      (3 * TIMER_INTERVAL)  // 9 s = to tapte sykluser
 #define CLOSE_SZ         20
 #define HDR_TEXT_L       (PAD_L + 12)  // plass til grip-prikkene
 
@@ -132,7 +146,16 @@ typedef struct {
     BOOL windowHot;
     BOOL headerHot;
     BOOL closeHot;
-    int  chrome;
+    int  chrome;          // avrundet fade-niva, brukes av tegning og GDI-cache
+    double chromeF;       // selve den animerte verdien
+
+    // --- Animasjonsklokke ---
+    // En timer driver alt tidsavhengig: chrome-fade, stale-telleren og
+    // (fra del C) view- og Y-akse-easing. Den lever bare mens noe faktisk
+    // er i bevegelse, og drepes naar alt har satt seg.
+    ULONGLONG lastAnimTick;
+    BOOL   animRunning;
+    int    staleSecsShown;   // sist tegnede sekundtall, hindrer 60 fps paa en teller
 
     // --- Arbeidertrad ---
     // Laasen dekker candles[], candleCount, viewStart, viewCount,
@@ -141,6 +164,11 @@ typedef struct {
     HANDLE hThread;
     HANDLE hStopEvent;   // manuell reset: signaliserer avslutning
     HANDLE hWakeEvent;   // auto reset: hent NA (panelet ble apnet)
+
+    // Nettverkshelse. Laasebeskyttet - arbeidertraden skriver, UI leser.
+    ULONGLONG lastOkTick;    // GetTickCount64 ved siste vellykkede henting
+    ULONGLONG nextRetryTick; // naar neste forsok er planlagt
+    int       netFailures;   // sammenhengende feil, driver backoffen
 
     // --- Bufrede GDI-objekter ---
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
@@ -182,6 +210,46 @@ static long long NowUnixMs(void) {
     GetSystemTimeAsFileTime(&ft);
     ULONGLONG t = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     return (long long)((t - 116444736000000000ULL) / 10000ULL);
+}
+
+// ---------------------------------------------------------------------------
+// Animasjon og nettverkshelse - rene funksjoner, ingen tilstand.
+// Begge er enhetstestbare uten Win32.
+// ---------------------------------------------------------------------------
+
+// Eksponentiell interpolasjon mot et mal. Rammeratefri: dobbelt saa lang dt
+// gir samme resultat som to halve steg, saa animasjonen gaar like fort enten
+// timeren fyrer jevnt eller meldingene slaas sammen under last.
+static double AnimStep(double cur, double target, double dt, double tau, double snap) {
+    if (dt <= 0.0) return cur;
+    if (dt > ANIM_DT_MAX) dt = ANIM_DT_MAX;
+
+    cur += (target - cur) * (1.0 - exp(-dt / tau));
+    if (fabs(target - cur) < snap) cur = target;
+    return cur;
+}
+
+// Eksponentiell backoff med jitter. 3s, 6s, 12s, 24s, 48s, deretter tak paa
+// 60s. Jitteren hindrer at mange klienter synkroniserer seg mot serveren
+// etter et felles avbrudd - den hentes fra klokkas lavbiter, saa vi slipper
+// rand() og global tilstand.
+static DWORD NetBackoffMs(int failures, ULONGLONG tickSeed) {
+    if (failures <= 0) return TIMER_INTERVAL;
+
+    // Skift i stedet for pow, og stopp for overflow kan bli et tema.
+    DWORD base = TIMER_INTERVAL;
+    for (int i = 0; i < failures && base < NET_RETRY_MAX; ++i) base *= 2;
+    if (base > NET_RETRY_MAX) base = NET_RETRY_MAX;
+
+    // +/- 12,5 %: base/8 spredt over 256 trinn.
+    DWORD span  = base / 4;
+    DWORD delta = (DWORD)(tickSeed & 0xFF) * span / 255;
+    DWORD out   = base - span / 2 + delta;
+
+    // Jitteren legges PAA basen, saa den kan skyve oss over taket. Uten
+    // denne klemmingen ga failures>=5 opptil 67,5 s - maalt, ikke antatt.
+    if (out > NET_RETRY_MAX) out = NET_RETRY_MAX;
+    return out;
 }
 
 // Slar innkommende lys sammen med bufferet paa openTime: samme tidsstempel
@@ -268,7 +336,9 @@ static int IconTextWidth(const char* s) {
     return total;
 }
 
-static HICON RenderMicroFontIcon(const char* str) {
+// argb: fargen sifrene tegnes med. Dempes naar forbindelsen er borte, slik
+// at ikonet forteller at tallet ikke lenger er ferskt.
+static HICON RenderMicroFontIcon(const char* str, unsigned int argb) {
     int width = 16;
     int height = 16;
 
@@ -304,7 +374,7 @@ static HICON RenderMicroFontIcon(const char* str) {
         if (glyphIdx == IDX_DOT) {
             int px = cx, py = startY + GLYPH_H - 1;
             if (px >= 0 && px < width && py >= 0 && py < height) {
-                pixels[py * width + px] = 0xFF00FF66;
+                pixels[py * width + px] = argb;
             }
         } else if (glyphIdx != IDX_SPACE) {
             for (int r = 0; r < GLYPH_H; ++r) {
@@ -313,7 +383,7 @@ static HICON RenderMicroFontIcon(const char* str) {
                     if ((row >> (GLYPH_W - 1 - c)) & 1) {
                         int px = cx + c, py = startY + r;
                         if (px >= 0 && px < width && py >= 0 && py < height) {
-                            pixels[py * width + px] = 0xFF00FF66; // Neon gronn
+                            pixels[py * width + px] = argb;
                         }
                     }
                 }
@@ -457,7 +527,7 @@ static int ParseKlines(const char* json, Candle* out, int maxCount) {
 // WinHTTP, og blir derfor aldri staaende og vente paa linja.
 // ---------------------------------------------------------------------------
 
-static void WorkerFetchKlines(AppContext* ctx) {
+static BOOL WorkerFetchKlines(AppContext* ctx) {
     BOOL seed;
     EnterCriticalSection(&ctx->lock);
     seed = (ctx->candleCount == 0);
@@ -473,10 +543,10 @@ static void WorkerFetchKlines(AppContext* ctx) {
 
     // Selve hentingen skjer UTEN laas - den kan ta hundrevis av
     // millisekunder, og UI-traden skal kunne tegne hele tiden.
-    if (!HttpGet(ctx, path, s_httpBuf, (DWORD)sizeof(s_httpBuf))) return;
+    if (!HttpGet(ctx, path, s_httpBuf, (DWORD)sizeof(s_httpBuf))) return FALSE;
 
     int n = ParseKlines(s_httpBuf, s_incoming, SEED_COUNT);
-    if (n <= 0) return;
+    if (n <= 0) return FALSE;
 
     EnterCriticalSection(&ctx->lock);
     MergeCandles(ctx, s_incoming, n);
@@ -490,18 +560,20 @@ static void WorkerFetchKlines(AppContext* ctx) {
         }
     }
     LeaveCriticalSection(&ctx->lock);
+    return TRUE;
 }
 
-static void WorkerFetchPrice(AppContext* ctx) {
+static BOOL WorkerFetchPrice(AppContext* ctx) {
     char buf[512];
-    if (!HttpGet(ctx, L"/api/v3/ticker/price?symbol=BTCUSDT", buf, (DWORD)sizeof(buf))) return;
+    if (!HttpGet(ctx, L"/api/v3/ticker/price?symbol=BTCUSDT", buf, (DWORD)sizeof(buf))) return FALSE;
 
     double price = 0.0;
-    if (!FastParsePrice(buf, &price)) return;
+    if (!FastParsePrice(buf, &price)) return FALSE;
 
     EnterCriticalSection(&ctx->lock);
     ctx->lastPrice = price;
     LeaveCriticalSection(&ctx->lock);
+    return TRUE;
 }
 
 static DWORD WINAPI NetworkThread(LPVOID param) {
@@ -514,26 +586,64 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
         LeaveCriticalSection(&ctx->lock);
 
         // Star grafen apen trenger vi lys; ellers holder det med prisen.
-        if (hp && IsWindowVisible(hp)) WorkerFetchKlines(ctx);
-        else                           WorkerFetchPrice(ctx);
+        BOOL ok = (hp && IsWindowVisible(hp)) ? WorkerFetchKlines(ctx)
+                                              : WorkerFetchPrice(ctx);
+
+        ULONGLONG now = GetTickCount64();
+        DWORD wait;
+        int failures;
+
+        EnterCriticalSection(&ctx->lock);
+        if (ok) {
+            ctx->netFailures = 0;
+            ctx->lastOkTick  = now;
+        } else if (ctx->netFailures < 32) {
+            ctx->netFailures++;   // taket hindrer overflow ved lang nedetid
+        }
+        failures = ctx->netFailures;
+        wait = NetBackoffMs(failures, now);
+        ctx->nextRetryTick = now + wait;
+        LeaveCriticalSection(&ctx->lock);
+
+        // Henger vi fast paa en IP som ikke lenger svarer, hjelper det ikke
+        // aa prove igjen mot samme handtak. Slipper forbindelsen saa HttpGet
+        // bygger den paa nytt og DNS slaas opp igjen. hConnect eies av denne
+        // traden alene, saa den trenger ingen laas - failures derimot maa
+        // leses av under laasen over.
+        if (!ok && failures == NET_RECONNECT_AT && ctx->hConnect) {
+            WinHttpCloseHandle(ctx->hConnect);
+            ctx->hConnect = NULL;
+        }
 
         // PostMessage MA staa utenfor laasen - ellers kan UI-traden sitte
         // og vente paa laasen mens vi venter paa den.
         PostMessageW(ctx->hWnd, WM_APP_DATA, 0, 0);
 
-        if (WaitForMultipleObjects(2, waits, FALSE, TIMER_INTERVAL) == WAIT_OBJECT_0) {
-            break;  // hStopEvent
+        DWORD wr = WaitForMultipleObjects(2, waits, FALSE, wait);
+        if (wr == WAIT_OBJECT_0) break;   // hStopEvent
+
+        // Nullstillingen MA henge paa hWakeEvent alene. Sto den etter
+        // hele ventekallet, traff den ogsaa WAIT_TIMEOUT - altsaa hver
+        // eneste syklus - og netFailures kom aldri hoyere enn 1.
+        // Backoffen sto da fast paa ~6 s og hConnect ble aldri sluppet.
+        // Maalt, ikke antatt: logg med feil=1 i 20 sykluser paa rad.
+        if (wr == WAIT_OBJECT_0 + 1) {
+            // Panelet ble apnet. Brukeren skal faa et forsok med en gang,
+            // ikke vente ut et minutt med backoff.
+            EnterCriticalSection(&ctx->lock);
+            ctx->netFailures = 0;
+            LeaveCriticalSection(&ctx->lock);
         }
-        // WAIT_OBJECT_0 + 1 = hWakeEvent: panelet ble apnet, hent med en gang
     }
     return 0;
 }
 
 // Tegner ikon og verktoytips ut fra en pris. Skilt fra hentingen slik at
 // vi kan gjenbruke prisen vi allerede har, i stedet for a hente den paa nytt.
-static void UpdateIcon(AppContext* ctx, double price) {
+static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
     if (price <= 0.0) return;
-    swprintf_s(ctx->fullPriceStr, 64, L"BTC/USDT: $%.2f", price);
+    swprintf_s(ctx->fullPriceStr, 64, L"BTC/USDT: $%.2f%s", price,
+               stale ? L" (frakoblet)" : L"");
 
     // "75.8" = 4 glyfer = noyaktig 16px. Dropper desimalen naar den ikke
     // faar plass ("104"). Malingen ma skje PA den ferdig formaterte
@@ -545,7 +655,9 @@ static void UpdateIcon(AppContext* ctx, double price) {
         snprintf(iconStr, sizeof(iconStr), "%.0f", price / 1000.0);
     }
 
-    HICON hNewIcon = RenderMicroFontIcon(iconStr);
+    // Dempede siffer naar tallet ikke lenger er ferskt. Gronn 0xFF00FF66
+    // blandet ned mot bakgrunnen gir en synlig, men udramatisk forskjell.
+    HICON hNewIcon = RenderMicroFontIcon(iconStr, stale ? 0xFF2F6B45 : 0xFF00FF66);
     if (hNewIcon) {
         if (ctx->nid.hIcon) DestroyIcon(ctx->nid.hIcon);
         ctx->nid.hIcon = hNewIcon;
@@ -674,12 +786,29 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     SetBkMode(hdc, TRANSPARENT);
 
+    // Kalles under laas, saa helsefeltene kan leses direkte.
+    ULONGLONG nowTick = GetTickCount64();
+    BOOL stale = (ctx->lastOkTick != 0) &&
+                 (nowTick - ctx->lastOkTick > STALE_AFTER);
+    int staleSecs = stale ? (int)((nowTick - ctx->lastOkTick) / 1000) : 0;
+
     int n = ctx->candleCount;
     if (n <= 0) {
+        wchar_t msg[96];
         SelectObject(hdc, ctx->hFontSmall);
         SetTextColor(hdc, CLR_DIM);
-        DrawTextW(hdc, L"Laster data fra Binance...", -1, &rcAll,
-                  DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+        // Uten forbindelse sto det tidligere "Laster data fra Binance..." i
+        // all evighet. Meldingen loy om tilstanden - naa sier den hva som
+        // faktisk skjer, og naar vi prover igjen.
+        if (ctx->netFailures > 0) {
+            ULONGLONG nx = ctx->nextRetryTick;
+            int in_s = (nx > nowTick) ? (int)((nx - nowTick + 999) / 1000) : 0;
+            swprintf_s(msg, 96, L"Ingen forbindelse - prover igjen om %ds", in_s);
+        } else {
+            wcscpy_s(msg, 96, L"Laster data fra Binance...");
+        }
+        DrawTextW(hdc, msg, -1, &rcAll, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
         return;
     }
 
@@ -716,7 +845,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     RECT rcHdr = { HDR_TEXT_L, 10, W - 12 - CLOSE_SZ, 30 };
 
     SelectObject(hdc, ctx->hFontBig);
-    SetTextColor(hdc, CLR_TEXT);
+    SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
     swprintf_s(buf, 64, L"$%.2f", last);
     DrawTextW(hdc, buf, -1, &rcHdr, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
@@ -727,7 +856,12 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     SetTextColor(hdc, CLR_DIM);
     RECT rcSub = { HDR_TEXT_L, 28, W - 12 - CLOSE_SZ, 42 };
-    DrawTextW(hdc, L"BTC/USDT  -  1m", -1, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    if (stale) {
+        swprintf_s(buf, 64, L"BTC/USDT  -  1m  -  frakoblet %ds", staleSecs);
+    } else {
+        wcscpy_s(buf, 64, L"BTC/USDT  -  1m");
+    }
+    DrawTextW(hdc, buf, -1, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     // --- Chart-geometri ---
     ChartRect g = ChartGeometry(W, H);
@@ -939,8 +1073,15 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
 // Popup-vindu
 // ---------------------------------------------------------------------------
 
-static void StartChromeFade(HWND hwnd) {
-    SetTimer(hwnd, TIMER_FADE_ID, FADE_INTERVAL, NULL);
+// Starter animasjonsklokka. Idempotent - SetTimer paa en id som allerede
+// gaar, restarter den bare. lastAnimTick nullstilles kun naar klokka var
+// stanset, ellers ville et nytt kall midt i en animasjon gitt dt = 0.
+static void StartAnim(HWND hwnd) {
+    if (!g_Ctx.animRunning) {
+        g_Ctx.animRunning  = TRUE;
+        g_Ctx.lastAnimTick = GetTickCount64();
+        SetTimer(hwnd, TIMER_ANIM_ID, ANIM_INTERVAL, NULL);
+    }
 }
 
 static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1028,7 +1169,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             g_Ctx.closeHot  = PtInRect2(&rcC, mx, my);
             g_Ctx.headerHot = (my < HEADER_H) && !g_Ctx.closeHot;
 
-            if (!wasHot) StartChromeFade(hwnd);
+            if (!wasHot) StartAnim(hwnd);
             if (wasHdr != g_Ctx.headerHot || wasClose != g_Ctx.closeHot) {
                 InvalidateRect(hwnd, NULL, FALSE);
             }
@@ -1126,25 +1267,58 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             g_Ctx.headerHot     = FALSE;
             g_Ctx.closeHot      = FALSE;
             g_Ctx.hoverIdx      = -1;
-            StartChromeFade(hwnd);
+            StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
 
+        // Animasjonsklokka. Driver alt tidsavhengig fra ett sted, og dor
+        // naar alt har satt seg - i hvile gaar det ingen timer.
         case WM_TIMER:
-            if (wParam == TIMER_FADE_ID) {
-                int target = g_Ctx.windowHot ? 255 : 0;
-                if (g_Ctx.chrome == target) {
-                    KillTimer(hwnd, TIMER_FADE_ID);
-                    return 0;
+            if (wParam == TIMER_ANIM_ID) {
+                ULONGLONG now = GetTickCount64();
+                double dt = (double)(now - g_Ctx.lastAnimTick);
+                g_Ctx.lastAnimTick = now;
+
+                BOOL redraw  = FALSE;
+                BOOL settled = TRUE;
+
+                // Chrome-fade
+                double target = g_Ctx.windowHot ? 255.0 : 0.0;
+                if (g_Ctx.chromeF != target) {
+                    g_Ctx.chromeF = AnimStep(g_Ctx.chromeF, target, dt,
+                                             ANIM_TAU_CHROME, 0.5);
+                    int rounded = (int)(g_Ctx.chromeF + 0.5);
+                    if (rounded != g_Ctx.chrome) { g_Ctx.chrome = rounded; redraw = TRUE; }
+                    if (g_Ctx.chromeF != target) settled = FALSE;
                 }
-                if (g_Ctx.chrome < target) {
-                    g_Ctx.chrome += FADE_STEP;
-                    if (g_Ctx.chrome > target) g_Ctx.chrome = target;
-                } else {
-                    g_Ctx.chrome -= FADE_STEP;
-                    if (g_Ctx.chrome < target) g_Ctx.chrome = target;
+
+                // Stale-telleren. Klokka maa ga mens vi er frakoblet, men
+                // teksten endrer seg bare en gang i sekundet - vi tegner
+                // derfor kun naar sifferet faktisk blir et annet.
+                ULONGLONG okTick;
+                EnterCriticalSection(&g_Ctx.lock);
+                okTick = g_Ctx.lastOkTick;
+                LeaveCriticalSection(&g_Ctx.lock);
+
+                // IsWindowVisible er avgjorende: uten den holder en frakoblet
+                // linje klokka i live paa et skjult panel, og vi tikker 60
+                // ganger i sekundet uten a tegne noe. TogglePopup starter den
+                // igjen naar panelet vises.
+                if (okTick != 0 && now - okTick > STALE_AFTER &&
+                    IsWindowVisible(hwnd)) {
+                    int secs = (int)((now - okTick) / 1000);
+                    if (secs != g_Ctx.staleSecsShown) {
+                        g_Ctx.staleSecsShown = secs;
+                        redraw = TRUE;
+                    }
+                    settled = FALSE;   // hold klokka i live mens vi er borte
                 }
-                InvalidateRect(hwnd, NULL, FALSE);
+
+                if (redraw) InvalidateRect(hwnd, NULL, FALSE);
+                if (settled) {
+                    KillTimer(hwnd, TIMER_ANIM_ID);
+                    g_Ctx.animRunning = FALSE;
+                }
             }
             return 0;
 
@@ -1176,6 +1350,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 g_Ctx.closeHot  = FALSE;
                 g_Ctx.headerHot = FALSE;
                 g_Ctx.chrome    = 0;
+                g_Ctx.chromeF   = 0.0;
                 g_Ctx.lastHideTick = GetTickCount64();
                 ShowWindow(hwnd, SW_HIDE);
             }
@@ -1302,6 +1477,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         ctx->hoverIdx  = -1;
         ctx->windowHot = FALSE;
         ctx->chrome    = 0;
+        ctx->chromeF   = 0.0;
         ctx->lastHideTick = GetTickCount64();
         ShowWindow(ctx->hPopup, SW_HIDE);
         return;
@@ -1342,11 +1518,25 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->headerHot = FALSE;
     ctx->closeHot  = FALSE;
     ctx->chrome    = 0;   // apner alltid rent, uten kontroller
+    ctx->chromeF   = 0.0;
     PositionPopup(ctx->hPopup);
     ctx->shownTick = GetTickCount64();
     ShowWindow(ctx->hPopup, SW_SHOWNA);
     ForceForeground(ctx->hPopup);
     SetEvent(ctx->hWakeEvent);   // hent lys na, ikke om opptil 3 sekunder // kreves for at WA_INACTIVE skal utloses senere
+
+    // Er linja nede idet panelet apnes, maa klokka starte her. WM_TIMER
+    // lar den do mens panelet er skjult, og neste WM_APP_DATA kan vaere
+    // opptil en hel backoff-periode unna - sekundtelleren ville statt
+    // stille helt til da.
+    ULONGLONG okTick;
+    EnterCriticalSection(&ctx->lock);
+    okTick = ctx->lastOkTick;
+    LeaveCriticalSection(&ctx->lock);
+    if (okTick != 0 && GetTickCount64() - okTick > STALE_AFTER) {
+        StartAnim(ctx->hPopup);
+    }
+
     InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
@@ -1380,12 +1570,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         // prisen under laas og tegne - ingen nettverkstrafikk.
         case WM_APP_DATA: {
             double price;
+            ULONGLONG okTick;
             EnterCriticalSection(&g_Ctx.lock);
-            price = g_Ctx.lastPrice;
+            price  = g_Ctx.lastPrice;
+            okTick = g_Ctx.lastOkTick;
             LeaveCriticalSection(&g_Ctx.lock);
 
-            UpdateIcon(&g_Ctx, price);
+            // okTick == 0 betyr at vi aldri har lykkes enda. Da er vi ikke
+            // "frakoblet" - vi har bare ikke kommet i gang.
+            BOOL stale = (okTick != 0) &&
+                         (GetTickCount64() - okTick > STALE_AFTER);
+
+            UpdateIcon(&g_Ctx, price, stale);
             if (g_Ctx.hPopup && IsWindowVisible(g_Ctx.hPopup)) {
+                // Klokka maa ga mens vi er frakoblet, ellers fryser
+                // sekundtelleren i undertittelen.
+                if (stale) StartAnim(g_Ctx.hPopup);
                 InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
             }
             return 0;
@@ -1452,7 +1652,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.nid.uID              = 42;
     g_Ctx.nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_Ctx.nid.uCallbackMessage = WM_TRAYICON;
-    g_Ctx.nid.hIcon            = RenderMicroFontIcon("...");
+    g_Ctx.nid.hIcon            = RenderMicroFontIcon("...", 0xFF00FF66);
     wcscpy_s(g_Ctx.nid.szTip, 128, L"Kobler til Binance...");
 
     Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);

@@ -1,6 +1,9 @@
 # BTC Ticker — arbeidslogg
 
 Status per 16.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
+Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
+er ferdig; del B og C står igjen — se
+`docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`.
 
 Alt ligger i **én fil**, `ticker.c` (~1516 linjer). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
@@ -68,6 +71,34 @@ tegnearbeidet er derfor uavhengig av hvor mye historikk som er lagret.
 GDI-objekter er bufret: ni faste farger lages ved oppstart, de blandede
 fade-fargene bare når `(chrome, closeHot)` endrer seg.
 
+### Animasjonsklokka
+
+Én timer (`TIMER_ANIM_ID`, 16 ms) driver alt tidsavhengig. Den er **tidsbasert,
+ikke stegbasert**: hver tikk måler faktisk forløpt tid mot `lastAnimTick` og
+interpolerer eksponentielt gjennom `AnimStep()`. `SetTimer(16)` fyrer i praksis
+hver ~15,6 ms og slås sammen under last — fast steglengde ville gitt ulik
+hastighet avhengig av systembelastning.
+
+Klokka **lever bare mens noe er i bevegelse**. `StartAnim()` er idempotent og
+nullstiller `lastAnimTick` kun når klokka faktisk var stanset; `WM_TIMER` dreper
+seg selv når alt har satt seg. I hvile går det ingen timer — verifisert, se
+målingene.
+
+### Nettverkshelse
+
+Arbeidertråden teller sammenhengende feil i `netFailures` og venter
+`NetBackoffMs()` i stedet for faste 3 s. Ved tre sammenhengende feil slippes
+`hConnect`, slik at `HttpGet` bygger forbindelsen på nytt og DNS slås opp igjen
+— uten det henger vi fast på en IP som ikke lenger svarer.
+
+`lastOkTick` driver stale-tilstanden (`> 3 * TIMER_INTERVAL` = 9 s, altså to
+tapte sykluser, slik at én treg forespørsel ikke blinker indikatoren). Stale
+vises fire steder: dempet header-pris, sekundteller i undertittelen, `(frakoblet)`
+i tray-tipset og dempede siffer i ikonet.
+
+**Låsen dekker i tillegg:** `lastOkTick`, `nextRetryTick`, `netFailures`.
+`hConnect` eies av arbeidertråden alene og trenger ingen lås.
+
 ---
 
 ## Sentrale konstanter
@@ -83,6 +114,12 @@ fade-fargene bare når `(chrome, closeHot)` endrer seg.
 | `REOPEN_GUARD_MS` | 250 | hindrer at lukkeklikk åpner igjen |
 | `SHOW_GRACE_MS` | 400 | ignorer fokustap rett etter åpning |
 | `s_httpBuf` | 98304 | 1,94× margin mot 50,7 KB svar |
+| `ANIM_INTERVAL` | 16 | animasjonsklokke (~60 fps) |
+| `ANIM_TAU_CHROME` | 55,0 | tidskonstant chrome-fade (ms) |
+| `ANIM_DT_MAX` | 100,0 | klemmer `dt`, lang pause gir ett hopp |
+| `NET_RETRY_MAX` | 60000 | tak for eksponentiell backoff (ms) |
+| `NET_RECONNECT_AT` | 3 | antall feil før `hConnect` slippes |
+| `STALE_AFTER` | 9000 | 3 × `TIMER_INTERVAL` = to tapte sykluser |
 
 ---
 
@@ -98,6 +135,7 @@ fade-fargene bare når `(chrome, closeHot)` endrer seg.
 7. **Ctrl + hjul = zoom**, ankret mot musepekeren.
 8. **Akkumulerende historikk + panorering** — hjul og dra.
 9. **Arbeidertråd + GDI-cache.**
+10. **Animasjonsklokke, eksponentiell backoff og stale-indikator** (fase 2 A).
 
 ---
 
@@ -140,6 +178,26 @@ ble oppdatert. Zoom og panorering regner nå om via `HitCandle()`.
 
 **8. WinHTTP-timeouts manglet.** Standard mottakstimeout er 30 s; ved avslutning
 venter vi bare 3 s på tråden og lukket sesjonen under den. Nå satt til 5 s.
+
+**9. Backoffen eskalerte aldri.** Nullstillingen av `netFailures` sto etter hele
+`WaitForMultipleObjects`-kallet, med bare en sjekk på `WAIT_OBJECT_0` (stopp)
+over seg. Den traff derfor også `WAIT_TIMEOUT` — altså hver eneste syklus.
+`netFailures` kom aldri høyere enn 1, ventetiden sto fast på ~6 s, og
+`hConnect` ble aldri sluppet fordi `failures == NET_RECONNECT_AT` aldri ble
+sant. Koden så riktig ut ved lesing; loggen viste `feil=1` i tjue sykluser på
+rad. Nullstillingen henger nå på `wr == WAIT_OBJECT_0 + 1` alene.
+
+> Dette er grunnen til at del A ble målt mot en faktisk blokkert linje og ikke
+> bare enhetstestet. `NetBackoffMs()` var grønn på alle sytten testene hele
+> tiden — feilen lå i *hvem som kalte den med hvilken teller*.
+
+**10. Animasjonsklokka gikk videre på et skjult panel.** Stale-grenen satte
+`settled = FALSE` for å holde sekundtelleren i live. Begge skjulestiene
+(`WM_ACTIVATE` og `TogglePopup`) dreper ikke timeren, så en frakoblet linje ga
+60 tikk i sekundet på et panel ingen så. Grenen er nå betinget av
+`IsWindowVisible(hwnd)`, og `TogglePopup` starter klokka igjen ved visning
+dersom vi er frakoblet — ellers sto telleren stille til neste `WM_APP_DATA`,
+som under backoff kan være et helt minutt unna.
 
 ---
 
@@ -194,6 +252,46 @@ liten harness, så testene kjører mot **den faktiske koden**, ikke en kopi.
   16 ganger per bilde).
 - **Avslutning:** 134–228 ms, ingen etterlatt prosess.
 
+### Fase 2 del A
+
+Enhetstester mot kode trukket ut av `ticker.c` med `sed` — **17/17 grønne**:
+
+| Enhet | Hva som ble verifisert |
+|---|---|
+| `NetBackoffMs` | skjema 3/6/12/24/48/60/60/60 s, jitter innenfor ±12,5 %, aldri over taket, `failures` 8–40 uten overflow |
+| `AnimStep` | konvergens med snap, ingen oversving, `dt == 2 × dt/2` (rammeratefri), `dt` klemt til 100 ms, `dt = 0` er no-op, ~90 % av veien på 130 ms |
+
+Backoff målt mot en faktisk blokkert linje (`api.binance.com` blokkert, først
+via hosts, så via brannmurregel mot den oppslåtte IP-en):
+
+| Feil nr. | Ventetid målt | Forventet ±12,5 % | `hConnect` |
+|---|---|---|---|
+| 1 | 6 491 ms | 5 250–6 750 | beholdt |
+| 2 | 10 770 ms | 10 500–13 500 | beholdt |
+| 3 | 21 470 ms | 21 000–27 000 | **sluppet** |
+| 4 | 52 541 ms | 42 000–54 000 | ny |
+| 5 | 52 617 ms | 52 500–60 000 (klemt) | ny |
+| 6 | 59 264 ms | 52 500–60 000 | ny |
+| 7 | 60 000 ms | tak | ny |
+
+Ved taket er jitteren ensidig — klemmingen kutter alt over 60 000 ms. Ved
+gjenopprettet linje: `feil=0` og 3 s-kadens tilbake på første vellykkede kall.
+
+**Animasjonsklokka i hvile.** Egen teller på `WM_TIMER` logget sammen med
+nettverkssyklusene:
+
+| Tilstand | Tikk |
+|---|---|
+| Panel åpnet, alt satt seg | 14, deretter flat |
+| Panel åpent + frakoblet | 624 → 1 527 (~35 tikk/s, driver sekundtelleren) |
+| **Panel skjult + frakoblet, 54 s** | **2 124 → 2 124 (null bevegelse)** |
+| Linje gjenopprettet | 2 124, fortsatt flat |
+
+- **Fotavtrykk etter del A:** GDI 30 før panelet åpnes, 31 etter — samme nivå som
+  fase 1. USER 14. Private bytes 3,98–4,04 MB. CPU i hvile 312 ms per 30 s
+  (~1 %), som er hentingen hvert 3. sekund, ikke klokka.
+- **`/W4` rent, x86** (PE-maskintype `0x14C`, verifisert på den bygde exe-en).
+
 ---
 
 ## Kjente begrensninger
@@ -242,6 +340,19 @@ liten harness, så testene kjører mot **den faktiske koden**, ikke en kopi.
    straks skjule seg i testoppsett. Sjekk `IsWindowVisible` og prøv på nytt i løkke.
 7. **Ikke stol på øyemål for de subtile kontrollene.** Mål pikselfarger med
    `GetPixel` — jeg konkluderte feil to ganger på nedskalerte skjermbilder.
+8. **`WaitForMultipleObjects` returnerer mer enn to ting.** `WAIT_TIMEOUT`
+   (`0x102`) er ikke `WAIT_OBJECT_0 + n`. Sjekk den faktiske returverdien;
+   kode som bare tester for stopp-hendelsen og lar resten falle gjennom,
+   behandler hver eneste timeout som en vekking. Se feil #9.
+9. **Blokkering via hosts-fila stopper ikke en åpen forbindelse.** WinHTTP
+   holder på `hConnect` og keep-alive mot en IP som allerede er slått opp, så
+   hentingen fortsetter å lykkes. Skal du bryte linja på en app som *allerede
+   kjører*, må du blokkere IP-en i brannmuren. Hosts-fila virker bare hvis du
+   starter appen etterpå.
+10. **Én navngitt mutex, ett vindusklassenavn.** Skal du kjøre et
+    instrumentert testbygg side om side med den ekte appen, må du endre både
+    mutexnavnet og vindusklassen — ellers avslutter testbygget seg selv, eller
+    `FindWindow` treffer feil prosess.
 
 ---
 
