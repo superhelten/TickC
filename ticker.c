@@ -28,8 +28,11 @@
 // --- Popup / graf ---
 #define POPUP_W          1280
 #define POPUP_H          720
-#define POPUP_MIN_W      260
-#define POPUP_MIN_H      180
+// Minste storrelse ved manuell skalering, i logiske piksler (96 dpi).
+// 400x250 er der headeren fortsatt har plass til pris, prosent og knapperad
+// paa en rad, og chart-flaten til hover-boksen (104x74).
+#define POPUP_MIN_W      400
+#define POPUP_MIN_H      250
 #define RESIZE_BORDER    6     // bredde pa sonen som starter storrelsesendring
 #define MAX_CANDLES      1440  // 24 timer med 1m-lys, bygges opp mens panelet star apent
 #define SEED_COUNT       300   // forste henting: 5 timer i ett jafs
@@ -88,10 +91,12 @@
 #define BTN_GAP          2
 #define BTN_TOP          6
 #define BTN_MARGIN_R     8
-// Samlet bredde knapperaden opptar fra hoyre kant, inkludert margen.
-// DrawChart krymper headertekstens rektangel med denne, ellers ville den
-// hoyrestilte prosenten ligget rett under krysset.
-#define BTN_STRIP_W      (BTN_MARGIN_R + 4 * BTN_W + 3 * BTN_GAP)
+// Knapperadens venstre kant leses fra ButtonStrip, ikke fra en egen
+// breddekonstant - DrawChart maaler headeren mot den.
+//
+// Minste luft mellom to headertekster paa samme rad, og mellom tekst og
+// knapperaden.
+#define HDR_GAP          8
 #define PAD_B            10
 
 // Palett (matcher tray-ikonet)
@@ -1089,6 +1094,13 @@ static void ButtonStrip(int W, RECT* out) {
     out->bottom = b[0].bottom;
 }
 
+// Kollisjonsregelen i headeren, som ren funksjon: et venstrestilt element som
+// slutter paa rightBound og et hoyrestilt som begynner paa leftBound faar
+// staa paa samme rad bare med minst HDR_GAP px luft imellom.
+static BOOL HeaderFits(int rightBound, int leftBound) {
+    return rightBound < leftBound - HDR_GAP;
+}
+
 // Felles geometri for tegning og muse-treff.
 static ChartRect ChartGeometry(int W, int H) {
     ChartRect g;
@@ -1507,23 +1519,70 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     FormatSpan(vc, ctx->intervalMs, span, 24);
 
     wchar_t buf[64];
+    ChartRect g = ChartGeometry(W, H);
 
-    // Knapperaden ligger oppe til hoyre. Headerteksten maa vike for den,
-    // ellers tegnes den hoyrestilte prosenten rett under krysset.
-    RECT rcHdr = { PAD_L, 10, W - BTN_STRIP_W - 8, 30 };
+    // --- Header-layout, maalt ---
+    // Tidligere delte prisen og prosenten ETT rektangel, venstre- og
+    // hoyrestilt. Paa et smalt panel moettes de da midt i og tegnes oppi
+    // hverandre - DrawTextW klipper mot rektangelet, ikke mot naboteksten.
+    // Naa maales hver tekst paa den ferdig formaterte strengen i sin egen font
+    // (feil #5), og rad for rad sammenliknes hoyre grense for det
+    // venstrestilte med venstre grense for det hoyrestilte.
+    //
+    // Rad 1 (y 10-30): pris til venstre, prosent og knapperad til hoyre.
+    // Rad 2 (y 28-42): symbollinja til venstre. Til hoyre ligger ikke
+    // knappene (de slutter paa y = 24), men prisaksens overste etikett, som
+    // staar paa y = top +- 8 fra x = right + 4.
+    RECT strip;
+    ButtonStrip(W, &strip);
+    int btnLeft = strip.left;          // X_left_bound for knapperaden
 
+    // Rad 1, venstre: prisen. Rektangelet slutter ved knapperaden, saa selv
+    // en pris som ikke faar plass aldri tegnes under knappene.
     SelectObject(hdc, ctx->hFontBig);
     SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
     swprintf_s(buf, 64, L"$%.2f", last);
-    DrawTextW(hdc, buf, -1, &rcHdr, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    int lenPrice = (int)wcslen(buf);
+    SIZE szPrice = { 0, 0 };
+    GetTextExtentPoint32W(hdc, buf, lenPrice, &szPrice);
+    int priceRight = PAD_L + szPrice.cx;   // X_right_bound
+    RECT rcPrice = { PAD_L, 10, btnLeft - HDR_GAP, 30 };
+    DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
+    // Rad 1, hoyre: prosenten i tre trinn. Hel med spenn, saa uten spenn,
+    // saa skjult. Aldri klippet midt i et tall - "+0,5" der det staar
+    // "+0,50 %" er en feil verdi, ikke en kortere.
     SelectObject(hdc, ctx->hFontSmall);
-    SetTextColor(hdc, chgClr);
-    swprintf_s(buf, 64, L"%+.2f%%  (%s)", chg, span);
-    DrawTextW(hdc, buf, -1, &rcHdr, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+    int pctRight = btnLeft - HDR_GAP;
+    wchar_t pctFull[48], pctShort[24];
+    swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
+    swprintf_s(pctShort, 24, L"%+.2f%%", chg);
+    int lenFull = (int)wcslen(pctFull), lenShort = (int)wcslen(pctShort);
+    SIZE szFull = { 0, 0 }, szShort = { 0, 0 };
+    GetTextExtentPoint32W(hdc, pctFull, lenFull, &szFull);
 
+    // Den korte formen maales bare naar den hele ikke fikk plass. Hver
+    // GetTextExtentPoint32W er ~20 us, og over minstebredden faar den hele
+    // plass med god margin - maalt ved 400 px: ~115 px luft til prisen.
+    const wchar_t* pct = NULL;
+    int lenPct = 0;
+    if (HeaderFits(priceRight, pctRight - szFull.cx)) {
+        pct = pctFull;  lenPct = lenFull;
+    } else {
+        GetTextExtentPoint32W(hdc, pctShort, lenShort, &szShort);
+        if (HeaderFits(priceRight, pctRight - szShort.cx)) {
+            pct = pctShort; lenPct = lenShort;
+        }
+    }
+    if (pct) {
+        SetTextColor(hdc, chgClr);
+        RECT rcPct = { priceRight + HDR_GAP, 10, pctRight, 30 };
+        DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+    }
+
+    // Rad 2: symbollinja. Den kortes med ellipse mot prisaksens etikett;
+    // her er det en merkelapp, ikke et tall, saa en ellipse loyer ikke.
     SetTextColor(hdc, CLR_DIM);
-    RECT rcSub = { PAD_L, 28, W - 12, 42 };
     if (stale) {
         swprintf_s(buf, 64, L"%s  -  %s  -  frakoblet %ds",
                    SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label, staleSecs);
@@ -1531,10 +1590,16 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         swprintf_s(buf, 64, L"%s  -  %s",
                    SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label);
     }
-    DrawTextW(hdc, buf, -1, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    int lenSub = (int)wcslen(buf);
+    SIZE szSub = { 0, 0 };
+    GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
+    int subLimit = (g.right + 4) - HDR_GAP;   // X_left_bound for aksetiketten
+    RECT rcSub = { PAD_L, 28, subLimit, 42 };
+    UINT subFlags = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
+    if (!HeaderFits(PAD_L + szSub.cx, subLimit + HDR_GAP)) subFlags |= DT_END_ELLIPSIS;
+    DrawTextW(hdc, buf, lenSub, &rcSub, subFlags);
 
     // --- Chart-geometri ---
-    ChartRect g = ChartGeometry(W, H);
     int left = g.left, top = g.top, right = g.right, bottom = g.bottom;
     int cw = g.cw, ch = g.ch;
     if (cw <= 0 || ch <= 0) return;
@@ -2080,8 +2145,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         case WM_GETMINMAXINFO: {
             MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-            mmi->ptMinTrackSize.x = POPUP_MIN_W;
-            mmi->ptMinTrackSize.y = POPUP_MIN_H;
+            // DPI-skalert av samme grunn som PlacePopupInitially: prosessen er
+            // DPI-uvitende i dag, saa dette er 400x250, men grensen skal
+            // folge med den dagen et manifest legges til.
+            UINT dpi = GetDpiForWindow(hwnd);
+            if (dpi == 0) dpi = 96;
+            mmi->ptMinTrackSize.x = MulDiv(POPUP_MIN_W, (int)dpi, 96);
+            mmi->ptMinTrackSize.y = MulDiv(POPUP_MIN_H, (int)dpi, 96);
 
             // Et WS_POPUP-vindu maksimerer seg til hele SKJERMEN, ikke til
             // arbeidsomraadet - og OS-et legger rammebredden utenpaa. Maalt

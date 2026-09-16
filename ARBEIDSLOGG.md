@@ -9,14 +9,15 @@ OS-vindu, og så, i **fase 4**, tilbake til rammeløst — denne gangen med egne
 kontrollknapper og nativ `HTCAPTION`-flytting. **Fase 5** la til
 tilstandsavhengig gjenopprettingsglyf, inkrementell hover-opptegning og
 firevegspeker under panorering. **Fase 6** strammet klippingen av grafen til
-`rcChart` og flyttet gjenopprettingsglyfen til 2 px forskyvning. Se **Vinduet** under. Planer:
+`rcChart` og flyttet gjenopprettingsglyfen til 2 px forskyvning. **Fase 7**
+måler headerteksten og hever minstestørrelsen til 400×250. Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md` og
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-Alt ligger i **én fil**, `ticker.c` (~2910 linjer). Ingen eksterne avhengigheter
+Alt ligger i **én fil**, `ticker.c` (~2980 linjer). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
 ---
@@ -474,6 +475,8 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
 | `SNAP_PX` | 0,25 | snapp når det gjenstår under en kvart piksel |
 | `WM_FONT_DIV` / `MIN` / `MAX` | 5 / 32 / 120 | vannmerkets fonthøyde |
 | `CHART_TOP_MIN` | 32 | minste `rcChart.top`, sjekket med `#error` |
+| `POPUP_MIN_W` / `H` | 400 / 250 | minste størrelse, DPI-skalert i `WM_GETMINMAXINFO` |
+| `HDR_GAP` | 8 | minste luft mellom headertekster og mot knapperaden |
 
 ---
 
@@ -1066,6 +1069,77 @@ både peker og vindu, så den raden er svakere bevis enn den maksimerte.
 
 `/W4` rent, x86, 168 KB exe.
 
+### Fase 7 — målt header-layout og minstestørrelse 400×250
+
+**Feilen, målt før endringen.** Ved 300×200 smeltet pris og prosent sammen
+til én blekkflate: `$75534.98-0.27%  (5t 1m)`. De delte ett rektangel,
+venstre- og høyrestilt, og `DrawTextW` klipper mot rektangelet, ikke mot
+naboteksten. Blekkklynger i raden y 6–27, med sammenslåing under 8 px:
+`[11-173]` der det skulle vært to.
+
+**Endret i `DrawChart`.** Hver headertekst måles med
+`GetTextExtentPoint32W` på den ferdig formaterte strengen i sin egen font.
+Kollisjonsregelen er den rene funksjonen
+`HeaderFits(rightBound, leftBound) = rightBound < leftBound − HDR_GAP`, med
+`HDR_GAP` = 8.
+- **Rad 1:** prisen står til venstre, med høyre grense `PAD_L + bredde`.
+  Prosenten står til høyre og slutter ved `ButtonStrip().left − 8`. Den
+  prøves i tre trinn: hel (`−0,27 %  (5t 1m)`), kort (`−0,27 %`) og skjult.
+  Den klippes aldri midt i et tall. Den korte formen måles bare når den hele
+  ikke får plass. Prisens rektangel slutter også ved knapperaden.
+- **Rad 2:** symbollinja begrenses mot prisaksens øverste etikett
+  (`right + 4 − 8`), ikke mot knappene, som slutter på y = 24. Den får
+  `DT_END_ELLIPSIS` når den målte bredden ikke får plass.
+- `BTN_STRIP_W` er fjernet. Knapperadens kant leses fra `ButtonStrip`.
+
+**`WM_GETMINMAXINFO`:** `ptMinTrackSize` =
+`MulDiv(400|250, GetDpiForWindow, 96)`. `SetWindowPos` håndhever den også:
+et forsøk på 300×200 ga **400×250**. Et lagret register med mindre størrelse
+klemmes derfor av seg selv.
+
+**Verifisert i testbygg** (fallgruve 10: eget mutexnavn, egne klasser, egen
+registernøkkel), kjørt av `PrintWindow`:
+
+| Størrelse | Rad 1, blekkklynger | Prosent | Klippestress |
+|---|---|---|---|
+| 1280×720 | pris `11-103`, prosent `1093-1153`, knapper fra `1171` | hel | 0/80 |
+| 3840×1552 | pris `11-102`, prosent `3634-3713`, knapper fra `3731` | hel | 0/80 |
+| 400×250 | pris `11-102`, prosent `218-273`, knapper fra `291` | hel | 0/80 |
+| 300×200 forsøkt | klemt til 400×250 | hel | 0/80 |
+
+Trinnene kan ikke nås over 400 px. De ble derfor kjørt i et eget bygg med
+`POPUP_MIN_W` 200:
+
+| Bredde | Pris | Prosent | Luft til neste |
+|---|---|---|---|
+| 340 | `11-100` | hel `153-213` | 52 / 17 px |
+| 310 | `11-100` | hel `117-183` | 16 / 17 px |
+| 280 | `11-103` | **kort** `120-153` | 16 / 17 px |
+| 250 | `11-103` | **skjult** | 37 px til knappene |
+
+**Opptegning.** QPC rundt `DrawChart` og hele den trege stien, og rundt
+header-blokka alene. Samme markører i gammel og ny kode. To gjennomløp, med
+gammel og ny vekselvis, drevet kun av hjulhakk uten samtidig skjermfangst.
+Tallene er fra andre gjennomløp:
+
+| | Header, median | Hele bildet, median | p95 |
+|---|---|---|---|
+| før, 1280×720 | 124 µs | 0,820 ms | 1,275 ms |
+| **etter, 1280×720** | **192 µs** | **0,871 ms** | 1,404 ms |
+| før, 3840×1552 | 129 µs | 9,281 ms | 10,667 ms |
+| **etter, 3840×1552** | **221 µs** | **9,988 ms** | 10,800 ms |
+| før, 400×250 | 115 µs | 0,952 ms | 1,243 ms |
+| **etter, 400×250** | **187 µs** | **1,011 ms** | 1,328 ms |
+
+> **Mandatets budsjett var < 0,46 ms. Det holdes ikke, og det holdt heller
+> ikke før endringen.** Header-layouten koster **~70 µs** ekstra, hovedsakelig
+> tre `GetTextExtentPoint32W`. Hele bildet var allerede 0,82 ms ved 1280×720
+> og 9,3 ms maksimert. I første gjennomløp, før den korte målingen ble lat,
+> var header-tillegget ~95 µs. Maksimert varierer hele bildet med ±0,7 ms
+> mellom gjennomløp, så den raden viser ikke header-tillegget.
+
+`/W4` rent, x86, 169 KB exe.
+
 ---
 
 ## Kjente begrensninger
@@ -1075,10 +1149,14 @@ både peker og vindu, så den raden er svakere bevis enn den maksimerte.
 - **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0`, `↺` og
   tray-menyens «Standardvisning» setter tilbake til **1280×720** sentrert,
   klemt til arbeidsområdet om skjermen er mindre.
-- **Headerteksten klippes under ~340 px bredde.** Knapperaden tar 118 px
-  fast, og prisen i stor font trenger resten. `POPUP_MIN_W` er 260, så det
-  går an å dra panelet smalt nok til at `$75 953.38` og `+0,12 % (5t)`
-  møtes. `DrawTextW` klipper, så det er trygt — bare stygt.
+- **Opptegningen holder ikke 0,46 ms, og har ikke gjort det siden panelet
+  ble 1280×720.** Median for hele bildet er ~0,85 ms ved 1280×720 og
+  **~9,5 ms maksimert** (3840×1552), målt likt før og etter fase 7. Tallet
+  0,462 ms fra del C ble målt på ~380×300, før `9785c3f`. Header-blokka er ~0,2 ms
+  av det; resten er ikke undersøkt. Se Fase 7.
+- **Symbollinjas ellipse er ikke sett i drift.** Selv den lengste formen,
+  med «frakoblet Ns», får plass ved 400 px. Grenen er der for DPI-skalering
+  og framtidige lengre etiketter.
 - **Kontrollknappene har ingen tastatursnarvei** ut over `Ctrl`+`0`, `ESC`
   og `Win`+piltast. Det finnes ingen systemmeny (`Alt`+mellomrom), fordi
   vinduet ikke har `WS_SYSMENU`.
@@ -1261,6 +1339,14 @@ både peker og vindu, så den raden er svakere bevis enn den maksimerte.
     også når pekeren står i headeren, som er `HTCAPTION` (fallgruve 23).
     Parker den ekte pekeren på en knapp — `HTCLIENT` — og legg den tilbake
     etterpå.
+36. **`DrawTextW` klipper mot sitt eget rektangel, ikke mot naboteksten.** To
+    tekster i samme rektangel, venstre- og høyrestilt, tegnes oppi hverandre
+    så snart de møtes. Mål begge og regn grensene selv.
+37. **Et latensbudsjett uten målebetingelser er ikke et budsjett.** 0,462 ms
+    fra del C var median under animasjon på ~380×300. Ved 1280×720 er
+    hele bildet ~0,85 ms, og maksimert ~9,5 ms. Mål alltid før og etter i
+    samme kjøring, vekselvis, og ikke mens en probe tar skjermbilder
+    samtidig: `PrintWindow` gjorde hver runde merkbart tregere.
 
 ---
 
