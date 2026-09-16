@@ -6,8 +6,11 @@ del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
 indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
 er levert.** Deretter er panelet flyttet fra rammeløst popup til et vanlig
 OS-vindu, og så, i **fase 4**, tilbake til rammeløst — denne gangen med egne
-kontrollknapper og nativ `HTCAPTION`-flytting. Se **Vinduet** under. Plan:
-`docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`. Design:
+kontrollknapper og nativ `HTCAPTION`-flytting. **Fase 5** la til
+tilstandsavhengig gjenopprettingsglyf, inkrementell hover-opptegning og
+firevegspeker under panorering. Se **Vinduet** under. Planer:
+`docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md` og
+`docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
@@ -153,8 +156,25 @@ kant. `ButtonLayout(W, out[4])` er **eneste sannhetskilde** — tegning,
 |---|---|
 | `↺` | `ResetToDefaultView` — 1280×720 sentrert |
 | `–` | `ShowWindow(SW_MINIMIZE)` |
-| `□` | `SW_MAXIMIZE` / `SW_RESTORE` etter `IsZoomed` |
+| `□` / `❑` | `SW_MAXIMIZE` / `SW_RESTORE` etter `IsZoomed`. **Glyfen folger tilstanden:** maksimert vindu viser to overlappende rektangler |
 | `×` | `WM_CLOSE` → skjuler til systemstatusfeltet |
+
+**Gjenopprettingsglyfen tegnes som to rektangler, ikke fire streker.** Det
+bakre er en *apen* polylinje med fem punkter — kun de kantene som ikke ligger
+bak det fremre — saa vi slipper aa fylle det fremre ugjennomsiktig for aa
+skjule overlappet. To GDI-kall mot ett for `□`.
+
+`zoomed` sendes inn i `DrawButtons` og caches **ikke** i `AppContext`:
+tilstanden eies av OS-et, og en kopi ville vaert enda en ting som kan komme ut
+av synk. `WM_SIZE` invaliderer hele vinduet ved maksimering, saa glyfen byttes
+av seg selv.
+
+**Gjenoppretting verner om geometrien.** Etter `SW_RESTORE` sjekkes at den
+gjenopprettede rekta fortsatt treffer en tilkoblet skjerm (`PlacementIsVisible`
+paa `GetWindowPlacement`-resultatet); ellers `ResetToDefaultView`. Samme sjekk
+som `PlacePopupInitially` gjor ved apning. `SaveWindowPlacement` kalles kun i
+maksimer-grenen — ved gjenoppretting er geometrien allerede lagret, og et kall
+der ville lagret den maksimerte.
 
 **Rene GDI-vektorer, ingen font.** En `DrawTextW` med et Unicode-tegn koster
 langt mer enn fire `LineTo`, og ville vært avhengig av at fonten *har* glyfen
@@ -172,6 +192,47 @@ nettopp når man vil lukke panelet. Samme grunn som `DrawOverlay` ligger der.
 
 **Headerteksten krymper med `BTN_STRIP_W`** (118 px), ellers lå den
 høyrestilte prosenten rett under krysset.
+
+#### Hurtigsti for hover-opptegning
+
+Et hover-skifte invaliderer **kun knapperaden** (`ButtonStrip(W)`), ikke hele
+vinduet. `PaintPopup` har én gren for det: ligger hele `ps.rcPaint` innenfor
+stripa, bygges et 110×18-buffer og bare knappene tegnes — `DrawChart` og
+`DrawOverlay` hoppes over.
+
+> Uten grenen ville invalideringen ikke spart noe som helst utover den siste
+> blitten. GDI klipper den, men hele 1280×720-bufferet ville fortsatt blitt
+> bygget og grafen tegnet om. **Målt: 0,979 ms → 0,062 ms, altså 16×.**
+
+Bakgrunnen i stripa hentes fra **vannmerkebitmapen**, ikke fra `FillRect`. Da
+er den garantert identisk med det den trege stien ville lagt der, uten at vi
+trenger å vite at vannmerketeksten aldri når opp i headeren. `SetViewportOrgEx`
+lar `DrawButtons` fortsette å regne i vinduskoordinater, og nullstilles før
+blitten — ellers ville kildepunktet `(0,0)` blitt tolket logisk.
+
+To unntak, begge målt:
+
+| Tilfelle | Hvorfor | Hva som skjer |
+|---|---|---|
+| Overlayet åpent | det dimmer **hele** klientflaten, headeren inkludert | betingelsen sjekker `!overlayOpen`, så vi tar den trege stien |
+| Animasjonsklokka går | dens `InvalidateRect(NULL)` unionerer med stripa | `rcPaint` blir hele flaten, og vi faller til den trege stien av oss selv |
+
+#### Pekeren under panorering
+
+`WM_SETCURSOR` er **delvis tilbake** — mot det «Fjernet i fase 3» sier. Den
+griper inn når `panning` er sann **og** treffsonen er `HTCLIENT`, og setter
+`IDC_SIZEALL`. Alt annet går videre med `break`, så `DefWindowProc` beholder
+sine seks skaleringspekere i kantene og vanlig pil i headeren.
+
+> `IDC_SIZEALL`, ikke `IDC_HAND`. Sistnevnte er lenkepekeren og betyr «dette
+> kan klikkes», ikke «dette dras». Windows har ingen lukket-hånd blant
+> standardpekerne.
+
+`SetCursor` kalles også direkte ved panoreringsstart og -slutt: `WM_SETCURSOR`
+fyrer først ved neste musebevegelse, så uten det viste første bilde av draget
+fortsatt pil. Pekerne bufres i `AppContext`; `LoadCursorW` gir et **delt**
+håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
+`DestroyCursor`.
 
 #### Resten
 
@@ -441,7 +502,9 @@ regelen — se fallgruve #7.
 
 > **Tre av radene over kom tilbake i fase 4.** `WM_NCCALCSIZE` og
 > `WM_NCHITTEST` er nødvendige igjen så snart OS-rammen er borte, og
-> `CLR_CLOSEHOT` er farven bak krysset. `WM_SETCURSOR` er *ikke* tilbake:
+> `CLR_CLOSEHOT` er farven bak krysset. `WM_SETCURSOR` er **delvis** tilbake
+> i fase 5 — kun under panorering, for å sette `IDC_SIZEALL`. Den er ikke
+> tilbake for headeren:
 > headeren trengte `IDC_SIZEALL` i fase 1 fordi hele vinduet var en dra-flate
 > med skjult chrome; nå er vanlig pil riktig, slik den er i en tittellinje.
 > Det som ikke kom tilbake er faden, auto-skjulet og de seks bufrede
@@ -869,6 +932,65 @@ slutter.
 
 ---
 
+### Fase 5 — glyf, inkrementell hover og pan-cursor
+
+**Hover-opptegning**, malt i et instrumentert bygg som logger hvilken gren i
+`PaintPopup` som ble tatt, og `rcPaint` med:
+
+| Gren | `rcPaint` | Min | Median | Snitt | Maks |
+|---|---|---|---|---|---|
+| `STRIP` (kun hover) | `1162,6,1272,24` | 0,0376 ms | **0,0616 ms** | 0,0654 ms | 0,1544 ms |
+| `full` (hover under animasjon) | `0,0,1280,720` | 0,6487 ms | 0,9787 ms | 1,0639 ms | 6,3758 ms |
+
+`rcPaint` er **nøyaktig** knapperaden ved 1280 bred: `W−118, 6, W−8, 24`.
+Hover-opptegningen er altså **16× billigere** enn før. Den andre raden er
+beviset på at animasjonsunionen virker: med klokka i gang blir `rcPaint` hele
+klientflaten, og vi faller til den trege stien av oss selv.
+
+**Hurtigstien gir piksel-identisk resultat.** Hele knapperaden (110×18 =
+1980 piksler) lest etter en tvunget full opptegning, deretter 24 hurtigsti-
+opptegninger, så lest igjen: **0 avvik av 1980**. En hurtigsti som tegner
+*nesten* likt er verre enn ingen.
+
+**Glyfen**, som pikselrutenett rundt knappesenteret `(W−49, 15)`:
+
+```
+     normal                   maksimert
+   .............           .............
+   .............           .............
+   ..#########..           .....######..
+   ..#.......#..           .....#....#..
+   ..#.......#..           .....#....#..
+   ..#.......#..           ..######..#..
+   ..#.......#..           ..#....#..#..
+   ..#.......#..           ..#....####..
+   ..#.......#..           ..#....#.....
+   ..#.......#..           ..#....#.....
+   ..#########..           ..######.....
+   .............           .............
+   .............           .............
+```
+
+Ingen streker gjennom det fremre rektangelet: det bakre tegnes som en åpen
+polylinje, ikke som et helt rektangel.
+
+Verifisert både med `SC_MAXIMIZE`/`SC_RESTORE` og med ekte museklikk.
+
+**Pekeren**, malt med `GetCursorInfo`, 11/11: `IDC_ARROW` i hvile,
+`IDC_SIZEALL` midt i draget, `IDC_ARROW` etter slipp, og alle seks
+skaleringspekere i kantene urort.
+
+**Budsjetter.** GDI 31 / USER 14 i hvile, uendret — også etter en 20 s
+stresstest med ~3,2 millioner operasjoner og ~79 000 ekte musejiggler *på* en
+knapp, som er hurtigstiens tyngste last. Private bytes 3,53 MB, exe 164 KB,
+`/W4` rent, x86. Alt uendret fra før omgangen.
+
+**Regresjon:** 28/28 enhetstester, 22/22 treffsoner, fire knappeklikk med ekte
+mus, 11/11 hover-farger, panorering, zoom, crosshair, overlay, ESC, tray,
+skalering — alle grønne.
+
+---
+
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
@@ -880,6 +1002,9 @@ slutter.
   fast, og prisen i stor font trenger resten. `POPUP_MIN_W` er 260, så det
   går an å dra panelet smalt nok til at `$75 953.38` og `+0,12 % (5t)`
   møtes. `DrawTextW` klipper, så det er trygt — bare stygt.
+- **Vernet mot frakoblet skjerm er uverifisert.** Faller den gjenopprettede
+  rekta utenfor alle tilkoblede skjermer, sentrerer `□`-knappen vinduet i
+  stedet. Maskinen har én skjerm, så grenen er aldri kjørt.
 - **Kontrollknappene har ingen tastatursnarvei** ut over `Ctrl`+`0`, `ESC`
   og `Win`+piltast. Det finnes ingen systemmeny (`Alt`+mellomrom), fordi
   vinduet ikke har `WS_SYSMENU`.
@@ -1021,6 +1146,33 @@ slutter.
     GDI på 34 og USER på 15 — dobbeltbufferet og vannmerket i flukt — mot
     31/14 når alt har satt seg. Måler du midt i en stresstest, ser du en
     lekkasje som ikke finnes.
+
+28. **`WM_SETCURSOR` må returnere `TRUE` for å holde pekeren, og `break` for
+    alt annet.** Returnerer du `0` i default-grenen, mister kantsonene sine
+    skaleringspekere — de kommer fra `DefWindowProc`. Og uten `return TRUE`
+    setter OS-et vindusklassens peker tilbake ved neste musebevegelse, så et
+    `SetCursor` fra `WM_MOUSEMOVE` blir overskrevet med én gang.
+29. **En hurtigsti må lese bakgrunnen fra samme kilde som den trege.**
+    `FillRect(brBg)` i knappestripa *ville* gitt riktig resultat i dag, men
+    bare fordi vannmerketeksten tilfeldigvis aldri når opp i headeren. Vi
+    blitter fra vannmerkebitmapen i stedet, og beviser likheten: 0 avvik av
+    1980 piksler.
+30. **Et vindu foran panelet ugyldiggjør all skjermbasert måling.** `GetPixel`
+    på skjermen, `GetCursorInfo` og muse-/hjulmeldinger går alle til det som
+    faktisk ligger øverst. Målt: `IDC_HAND` over grafen og `IDC_IBEAM` over
+    headeren — begge fra et Chrome-vindu bak, bekreftet med `WindowFromPoint`.
+    `BringWindowToTop` og `SetForegroundWindow` virker **ikke** fra en probe
+    som ikke eier forgrunnen; `SetWindowPos` med `HWND_TOPMOST` gjør, og må
+    settes tilbake etterpå. `PrintWindow` er immun og skal brukes når man kan.
+31. **Ett piksel er ikke en test.** Tre påstander i regresjonsproben feilet
+    falskt fordi de hang på én koordinat: ett punkt som lå på bakgrunn i
+    begge tilstander, en telling som tilfeldigvis ga samme tall, og ett punkt
+    som var crosshair-farget både før og etter en panorering. Sammenlikn en
+    **region**, og etablér fasit med `PrintWindow` før du tror på et rødt
+    resultat.
+32. **`GetCursorInfo` med feil `cbSize` lyver stille** — returnerer `TRUE` og
+    `hCursor = 0`. Samme felle som fallgruve 19, ny melding. `CURSORINFO` er
+    24 byte i en 64-bits prosess, ikke 20. Sett `cbSize` fra **typen**.
 
 ---
 
