@@ -26,8 +26,8 @@
 #define TIMER_INTERVAL   3000 // 3 sekunder
 
 // --- Popup / graf ---
-#define POPUP_W          380
-#define POPUP_H          300
+#define POPUP_W          1280
+#define POPUP_H          720
 #define POPUP_MIN_W      260
 #define POPUP_MIN_H      180
 #define RESIZE_BORDER    6     // bredde pa sonen som starter storrelsesendring
@@ -455,24 +455,45 @@ static void ResetToDefaultView(HWND hwnd) {
     if (!GetMonitorInfoW(hMon, &mi)) return;
     RECT wa = mi.rcWork;
 
-    int x = wa.left + ((wa.right - wa.left) - POPUP_W) / 2;
-    int y = wa.top  + ((wa.bottom - wa.top) - POPUP_H) / 2;
+    // "DPI-skalert 1280x720". Prosessen er DPI-uvitende i dag, saa
+    // GetDpiForWindow gir 96 og MulDiv er identitet. Skrudde vi paa
+    // DPI-bevissthet ville dette vaert riktig uten flere endringer - i
+    // motsetning til et hardkodet 1280, som ville gitt et lite vindu paa en
+    // 200 %-skjerm. Vi skrur den IKKE paa her: hele layouten er i raa
+    // piksler, og vannmerkets klemmegrenser ville talt skaleringen to
+    // ganger (se DPI-kommentaren i EnsureWatermark).
+    UINT dpi = GetDpiForWindow(hwnd);
+    if (dpi == 0) dpi = 96;
+    int w = MulDiv(POPUP_W, (int)dpi, 96);
+    int h = MulDiv(POPUP_H, (int)dpi, 96);
 
-    SetWindowPos(hwnd, NULL, x, y, POPUP_W, POPUP_H,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    // Faar ikke fabrikkstorrelsen plass, klem den. En 1280x720 sentrert paa
+    // en 1366x768-skjerm ville ellers lagt knapperaden utenfor
+    // arbeidsomraadet.
+    int aw = wa.right - wa.left, ah = wa.bottom - wa.top;
+    if (w > aw) w = aw;
+    if (h > ah) h = ah;
+
+    int x = wa.left + (aw - w) / 2;
+    int y = wa.top  + (ah - h) / 2;
+
+    SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     SaveWindowPlacement(hwnd);
 }
 
-// Ber DWM tegne tittellinja mork. Uten dette staar en lys systemramme rundt
-// en #0D1117-flate, og vinduet ser ut som to halvdeler fra ulike programmer.
-// Attributtet er 20 fra Windows 10 2004; feiler kallet paa eldre bygg, faar
-// vi bare standardrammen - derfor ingen feilhandtering.
-#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
-#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+// Windows 11 runder hjornene paa alle vinduer med WS_THICKFRAME, ogsaa naar
+// rammen er fjernet i WM_NCCALCSIZE. Radien paa ~8 px spiser hjornet av
+// krysset. Attributtet er 33 fra Windows 11 21H2; feiler kallet paa Windows
+// 10, finnes det ingen runding aa slaa av - derfor ingen feilhandtering.
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
 #endif
-static void UseDarkTitleBar(HWND hwnd) {
-    BOOL dark = TRUE;
-    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+#ifndef DWMWCP_DONOTROUND
+#define DWMWCP_DONOTROUND 1
+#endif
+static void SquareCorners(HWND hwnd) {
+    DWORD pref = DWMWCP_DONOTROUND;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
 }
 
 // Setter tittellinja til det aktive paret. Med ekte OS-ramme er tittelen
@@ -1772,6 +1793,50 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_ERASEBKGND:
             return 1; // handteres i WM_PAINT
 
+        // Fjerner hele den ikke-klientaktige rammen: klientflaten blir like
+        // stor som vindusrektangelet, og vi tegner alt selv.
+        case WM_NCCALCSIZE: {
+            if (!wParam) break;
+            // Maksimert vindu trenger ingen sarbehandling her -
+            // WM_GETMINMAXINFO under gir OS-et eksakt arbeidsomraadet, saa
+            // det finnes ikke noe overheng aa trekke fra. Maalt: uten den
+            // maksimerte et WS_POPUP seg til hele SKJERMEN utvidet med
+            // rammebredden (-7,-7 3854x1614 mot rcWork 0,0 3840x1552), og
+            // panelet la seg over oppgavelinja.
+            return 0;
+        }
+
+        // Uten OS-ramme er det vi som avgjor hva musa staar paa.
+        // RESIZE_BORDER-sonene gir OS-ets egen skalering; ledig headerflate
+        // gir HTCAPTION, som er det DefWindowProc trenger for aa sende
+        // WM_NCLBUTTONDOWN og kjore nativ flytting med Aero Snap.
+        case WM_NCHITTEST: {
+            RECT rw;
+            GetWindowRect(hwnd, &rw);
+            int x = GET_X_LPARAM(lParam) - rw.left;
+            int y = GET_Y_LPARAM(lParam) - rw.top;
+            int w = rw.right - rw.left, h = rw.bottom - rw.top;
+
+            // Maksimert vindu skal ikke kunne skaleres i kantene - da ville
+            // et klikk 2 px fra skjermkanten startet en dra-skalering av noe
+            // som per definisjon fyller skjermen.
+            if (!IsZoomed(hwnd)) {
+                int lft = (x < RESIZE_BORDER), rgt = (x >= w - RESIZE_BORDER);
+                int tp  = (y < RESIZE_BORDER), bot = (y >= h - RESIZE_BORDER);
+                if (tp  && lft) return HTTOPLEFT;
+                if (tp  && rgt) return HTTOPRIGHT;
+                if (bot && lft) return HTBOTTOMLEFT;
+                if (bot && rgt) return HTBOTTOMRIGHT;
+                if (lft) return HTLEFT;
+                if (rgt) return HTRIGHT;
+                if (tp)  return HTTOP;
+                if (bot) return HTBOTTOM;
+            }
+
+            if (y < HEADER_H) return HTCAPTION;
+            return HTCLIENT;
+        }
+
         case WM_PAINT:
             PaintPopup(&g_Ctx, hwnd);
             return 0;
@@ -1780,6 +1845,26 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             MINMAXINFO* mmi = (MINMAXINFO*)lParam;
             mmi->ptMinTrackSize.x = POPUP_MIN_W;
             mmi->ptMinTrackSize.y = POPUP_MIN_H;
+
+            // Et WS_POPUP-vindu maksimerer seg til hele SKJERMEN, ikke til
+            // arbeidsomraadet - og OS-et legger rammebredden utenpaa. Maalt
+            // for denne blokka fantes: -7,-7 3854x1614, mot rcWork
+            // 0,0 3840x1552. Panelet dekket oppgavelinja, og krysset laa 7 px
+            // utenfor skjermkanten. Et WS_OVERLAPPEDWINDOW ville faatt dette
+            // gratis; det gjor ikke vi, saa vi oppgir grensene selv.
+            //
+            // ptMaxPosition er relativ til SKJERMENS hjorne, ikke til
+            // skrivebordet - derfor trekkes rcMonitor fra.
+            HMONITOR hm = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi = { sizeof(MONITORINFO) };
+            if (GetMonitorInfoW(hm, &mi)) {
+                mmi->ptMaxPosition.x  = mi.rcWork.left - mi.rcMonitor.left;
+                mmi->ptMaxPosition.y  = mi.rcWork.top  - mi.rcMonitor.top;
+                mmi->ptMaxSize.x      = mi.rcWork.right  - mi.rcWork.left;
+                mmi->ptMaxSize.y      = mi.rcWork.bottom - mi.rcWork.top;
+                mmi->ptMaxTrackSize.x = mmi->ptMaxSize.x;
+                mmi->ptMaxTrackSize.y = mmi->ptMaxSize.y;
+            }
             return 0;
         }
 
@@ -2191,18 +2276,27 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 
     BOOL created = FALSE;
     if (!ctx->hPopup) {
-        // Ekte OS-ramme: tittellinje, minimer, maksimer, lukk. Ingen
-        // WS_EX_TOOLWINDOW, saa vinduet faar knapp i oppgavelinja; ingen
-        // WS_EX_TOPMOST, saa det oppforer seg som et vanlig vindu.
+        // Rammelost vindu i TradingView/Bloomberg-tradisjon. WS_THICKFRAME
+        // beholder OS-ets egen skalering; hele den synlige rammen fjernes i
+        // WM_NCCALCSIZE. WS_MINIMIZEBOX og WS_MAXIMIZEBOX tegner ingenting
+        // uten tittellinje, men de er det som lar Win+Pil, Aero Snap og
+        // gjenoppretting fra oppgavelinje-miniatyren virke.
+        //
+        // 0,0 og ikke CW_USEDEFAULT: CW_USEDEFAULT er udefinert for WS_POPUP
+        // og kan legge vinduet utenfor skjermen. PlacePopupInitially setter
+        // riktig geometri like etter.
+        //
+        // Ingen WS_EX_TOOLWINDOW og ingen eier, saa vinduet beholder knappen
+        // i oppgavelinja. Ingen WS_EX_TOPMOST.
         HWND hp = CreateWindowExW(
             0,
             L"BTCPopupClass", L"BTC Chart",
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT, CW_USEDEFAULT, POPUP_W, POPUP_H,
+            WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+            0, 0, POPUP_W, POPUP_H,
             NULL, NULL, hInst, NULL);
         if (!hp) return;
 
-        UseDarkTitleBar(hp);
+        SquareCorners(hp);
 
         EnterCriticalSection(&ctx->lock);   // traden leser hPopup
         ctx->hPopup = hp;
