@@ -1968,8 +1968,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 mmi->ptMaxPosition.y  = mi.rcWork.top  - mi.rcMonitor.top;
                 mmi->ptMaxSize.x      = mi.rcWork.right  - mi.rcWork.left;
                 mmi->ptMaxSize.y      = mi.rcWork.bottom - mi.rcWork.top;
-                mmi->ptMaxTrackSize.x = mmi->ptMaxSize.x;
-                mmi->ptMaxTrackSize.y = mmi->ptMaxSize.y;
+                // ptMaxTrackSize settes IKKE. Den ville klemt manuell
+                // skalering til en skjerms arbeidsomraade, saa panelet ikke
+                // lenger kunne strekkes over to skjermer. Det er MAKSIMERT
+                // storrelse som skal folge rcWork, ikke storste tillatte
+                // storrelse.
             }
             return 0;
         }
@@ -2349,10 +2352,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 return 0;
             }
             if (wParam == VK_ESCAPE) {
-                // ESC skjuler vinduet til systemstatusfeltet. Med ekte
-                // OS-ramme er krysset det opplagte alternativet, men
-                // tastatursnarveien er billig a beholde.
+                // ESC skjuler vinduet til systemstatusfeltet. Krysset i
+                // headeren er det opplagte alternativet, men tastatur-
+                // snarveien er billig a beholde.
                 g_Ctx.hoverIdx = -1;
+                g_Ctx.btnHot   = -1;
                 SaveWindowPlacement(hwnd);
                 ShowWindow(hwnd, SW_HIDE);
             }
@@ -2363,6 +2367,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // tray-program; "Avslutt Ticker" i tray-menyen avslutter det.
             // Posisjonen lagres for vi forsvinner.
             g_Ctx.hoverIdx = -1;
+            g_Ctx.btnHot   = -1;
             SaveWindowPlacement(hwnd);
             ShowWindow(hwnd, SW_HIDE);
             return 0;
@@ -2424,6 +2429,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ctx->overlayOpen = FALSE;
             ctx->overlayF    = 0.0;
             ctx->overlayHot  = -1;
+            ctx->btnHot      = -1;
             SaveWindowPlacement(ctx->hPopup);
             ShowWindow(ctx->hPopup, SW_HIDE);
             return;
@@ -2478,6 +2484,13 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->overlayOpen = FALSE;   // overlayet skal aldri sta apent ved apning
     ctx->overlayF    = 0.0;
     ctx->overlayHot  = -1;
+    // btnHot nullstilles av samme grunn som overlayHot over: tilstanden er
+    // hover, og hover eier ingenting naar vinduet forsvinner eller aapnes paa
+    // nytt. WM_MOUSELEAVE fyrer riktignok paa SW_HIDE og SW_MINIMIZE - maalt,
+    // ingen av de to stiene etterlot en opplyst knapp - men det er en
+    // meldingsrekkefolge vi ikke styrer, og en rod lukkeknapp som henger igjen
+    // ved gjenapning er ikke verdt aa vaere avhengig av den.
+    ctx->btnHot      = -1;
     ctx->dispValid   = FALSE;   // panelet skal apne ferdig, ikke gli paa plass
 
     UpdatePopupTitle(ctx);
