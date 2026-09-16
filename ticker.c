@@ -245,6 +245,11 @@ typedef struct {
     // per opptegning.
     HPEN   penGrid, penUp, penDown, penCross;
     HPEN   penBtn, penBtnHot, penBtnWhite;
+    // Standardpekere. LoadCursorW returnerer et DELT handtak for disse - de
+    // telles ikke som vaare, og skal ikke gjennom DestroyCursor. Bufres
+    // likevel: WM_SETCURSOR fyrer ved hver musebevegelse, og et oppslag per
+    // melding er unodig arbeid i en sti som ellers er gratis.
+    HCURSOR curPan, curArrow;
     HBRUSH brClose;
     // Hvilken knapp musa staar paa, -1 for ingen. UI-eid, aldri roert av
     // arbeidertraden. Treffdeteksjonen henger paa DENNE, ikke paa noe
@@ -2023,6 +2028,21 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return HTCLIENT;
         }
 
+        // Pekeren under panorering. Uten denne tilbakestiller OS-et pekeren
+        // til vindusklassens IDC_ARROW ved hver eneste musebevegelse, og et
+        // SetCursor fra WM_MOUSEMOVE ville blitt overskrevet med en gang.
+        //
+        // Kun HTCLIENT og kun mens vi panorerer: kantsonene skal beholde sine
+        // egne skaleringspekere, som DefWindowProc gir gratis, og headeren
+        // skal ha vanlig pil slik en tittellinje har. Derfor break og ikke
+        // return 0 for alt annet.
+        case WM_SETCURSOR:
+            if (g_Ctx.panning && LOWORD(lParam) == HTCLIENT) {
+                SetCursor(g_Ctx.curPan);
+                return TRUE;
+            }
+            break;
+
         case WM_PAINT:
             PaintPopup(&g_Ctx, hwnd);
             return 0;
@@ -2421,6 +2441,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 g_Ctx.panAnchorX    = dx;
                 g_Ctx.panAnchorView = vs;
                 SetCapture(hwnd);
+                // WM_SETCURSOR fyrer forst ved neste musebevegelse. Uten
+                // dette kallet viser forste bilde av draget fortsatt pil.
+                SetCursor(g_Ctx.curPan);
                 return 0;
             }
             return 0;
@@ -2446,6 +2469,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (g_Ctx.panning) {
                 g_Ctx.panning = FALSE;
                 ReleaseCapture();
+                // Samme grunn som ved start, motsatt vei: uten dette viser
+                // forste bilde etter slipp fortsatt firevegskrysset.
+                SetCursor(g_Ctx.curArrow);
             }
             return 0;
 
@@ -2783,6 +2809,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.penBtnHot   = CreatePen(PS_SOLID, 1, CLR_TEXT);
     g_Ctx.penBtnWhite = CreatePen(PS_SOLID, 1, CLR_BTNHOT);
     g_Ctx.brClose     = CreateSolidBrush(CLR_CLOSEHOT);
+    g_Ctx.curArrow    = LoadCursorW(NULL, IDC_ARROW);
+    g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
     g_Ctx.btnHot      = -1;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
     // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
