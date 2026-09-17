@@ -41,7 +41,10 @@
 #define ZOOM_STEP        1.2   // per musehjul-hakk
 #define TIMER_ANIM_ID    2
 #define TIMER_EMBED_ID   3      // skrivebordsmodus: prov WorkerW igjen
-#define EMBED_RETRY_MS   1000
+// 250 ms: ved omstart av Explorer er ny Progman paa plass etter 290-480 ms
+// (maalt). Med 1000 ms sto skrivebordet uten graf i 1,1 s. Timeren gaar bare
+// mens flaten mangler.
+#define EMBED_RETRY_MS   250
 #define ANIM_INTERVAL    16     // ~60 fps
 // Tidsbasert interpolasjon, ikke fast steg per tikk: SetTimer(16) fyrer i
 // praksis hver ~15,6 ms og slaas sammen under last. Fast steglengde ville
