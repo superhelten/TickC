@@ -261,7 +261,7 @@ typedef struct {
     // --- Bufrede GDI-objekter ---
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
     // per opptegning.
-    HPEN   penGrid, penUp, penDown, penCross;
+    HPEN   penGrid, penCross;
     HPEN   penBtn, penBtnHot, penBtnWhite;
     // Standardpekere. LoadCursorW returnerer et DELT handtak for disse - de
     // telles ikke som vaare, og skal ikke gjennom DestroyCursor. Bufres
@@ -274,13 +274,27 @@ typedef struct {
     // fade-niva - knappene har ingen fade, de skifter farge momentant.
     int    btnHot;
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
-    HBRUSH brBg, brUp, brDown, brBox, brBoxEdge;
+    HBRUSH brBg, brBox, brBoxEdge;
 
+
+    // --- Vedvarende dobbeltbuffer ---
+    // Lever mellom bildene og bygges paa nytt bare naar storrelsen endres.
+    // Et nytt buffer per bilde kostet 3840x1600: 7,9 ms paa foerste skriving
+    // i den nye bitmapen og 1,7 ms paa frigjoeringen, av 13,2 ms totalt
+    // (maalt). bbValid: bufferet inneholder et fullt bilde i denne
+    // storrelsen, saa hurtigstien kan tegne knappene rett inn i det.
+    HBITMAP bbBmp;
+    HDC     bbDC;
+    HBITMAP bbOldBmp;
+    int     bbW, bbH;
+    BOOL    bbValid;
 
     // --- Vannmerke-cache ---
     // Bakgrunn + vannmerke bakt sammen i en bitmap. Denne ERSTATTER dagens
     // FillRect - den legger ikke til et steg. En DrawTextW med stor font
-    // koster 0,05-0,30 ms og hoerer ikke hjemme per bilde.
+    // koster 0,05-0,30 ms og hoerer ikke hjemme per bilde. Proevd paa nytt
+    // sammen med det vedvarende bufferet: tegnet per bilde kostet vannmerket
+    // 0,50-0,53 ms ved 1280x720, mot ~0,28 ms for bliten (maalt).
     HBITMAP wmBmp;
     HDC     wmDC;
     HBITMAP wmOldBmp;
@@ -1382,6 +1396,43 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     DeleteObject(brEdge);
 }
 
+// Sorger for at det vedvarende dobbeltbufferet finnes og har storrelsen W x H.
+// Bygges bare paa nytt naar storrelsen endres - ikke per bilde. Returnerer
+// FALSE hvis GDI ikke ga oss et buffer; da tegner PaintPopup ingenting i
+// dette bildet i stedet for aa tegne rett paa skjermen med flimmer.
+//
+// Riv ned det gamle FORST. Uten dette lekker en HBITMAP og en HDC per
+// resize, og GDI-tallet klatrer for hver gang brukeren drar i kanten.
+static void FreeBackBuffer(AppContext* ctx) {
+    if (ctx->bbDC) {
+        if (ctx->bbOldBmp) SelectObject(ctx->bbDC, ctx->bbOldBmp);
+        DeleteDC(ctx->bbDC);
+    }
+    if (ctx->bbBmp) DeleteObject(ctx->bbBmp);
+    ctx->bbDC = NULL;
+    ctx->bbBmp = NULL;
+    ctx->bbOldBmp = NULL;
+    ctx->bbW = ctx->bbH = 0;
+    ctx->bbValid = FALSE;
+}
+
+static BOOL EnsureBackBuffer(AppContext* ctx, HDC ref, int W, int H) {
+    if (ctx->bbDC && ctx->bbW == W && ctx->bbH == H) return TRUE;
+    FreeBackBuffer(ctx);
+    if (W <= 0 || H <= 0) return FALSE;
+
+    ctx->bbDC  = CreateCompatibleDC(ref);
+    ctx->bbBmp = CreateCompatibleBitmap(ref, W, H);
+    if (!ctx->bbDC || !ctx->bbBmp) {
+        FreeBackBuffer(ctx);
+        return FALSE;
+    }
+    ctx->bbOldBmp = (HBITMAP)SelectObject(ctx->bbDC, ctx->bbBmp);
+    ctx->bbW = W;
+    ctx->bbH = H;
+    return TRUE;
+}
+
 // Bygger bakgrunn + vannmerke naar (W, H, symIdx, ivIdx) endrer seg - ikke
 // per bilde. Samme disiplin som GDI-cachen fra fase 1.
 // Feiler noe her, settes wmValid = FALSE og DrawChart faller tilbake paa
@@ -1690,6 +1741,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     if (i0 < 0) i0 = 0;
     if (i1 > n) i1 = n;
 
+    // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
+    // stedet for fire egne penner og pensler. Det er fire GDI-objekter
+    // mindre; det vedvarende bufferet tar to, saa tallet i hvile gaar ned med
+    // to. Heltrukket 1 px i begge tilfeller, saa pikslene er de samme.
+    // Fargen settes bare naar den skifter.
+    SelectObject(hdc, GetStockObject(DC_PEN));
+    SelectObject(hdc, GetStockObject(DC_BRUSH));
+    int curUp = -1;
     for (int i = i0; i < i1; ++i) {
         Candle* c = &ctx->candles[i];
         int up = (c->close >= c->open);
@@ -1700,8 +1759,11 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         int yOpen  = top + (int)(((maxP - c->open)  / range) * ch);
         int yClose = top + (int)(((maxP - c->close) / range) * ch);
 
-        SelectObject(hdc, up ? ctx->penUp : ctx->penDown);
-        SelectObject(hdc, up ? ctx->brUp  : ctx->brDown);
+        if (up != curUp) {
+            SetDCPenColor(hdc,   up ? CLR_UP : CLR_DOWN);
+            SetDCBrushColor(hdc, up ? CLR_UP : CLR_DOWN);
+            curUp = up;
+        }
 
         // Veke
         MoveToEx(hdc, cx, yHigh, NULL);
@@ -1768,7 +1830,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             // Aksestempelet overskriver rutenettetiketten paa denne hoyden,
             // slik at det ikke staar to tall oppi hverandre.
             RECT rcPill = { right + 1, yLast - 8, W - 1, yLast + 8 };
-            FillRect(hdc, &rcPill, lastUp ? ctx->brUp : ctx->brDown);
+            SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
+            FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
             // "Presis verditekst": to desimaler der de faar plass, ellers
             // samme oppslosning som aksen. Bredden maales paa den ferdig
@@ -1957,55 +2020,41 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     GetClientRect(hwnd, &rc);
     int W = rc.right, H = rc.bottom;
 
+    // Dobbeltbuffer: tegn alt i minnet, blit en gang -> ingen flimmer. Det
+    // lever mellom bildene; se bbDC i AppContext for hvorfor.
+    if (!EnsureBackBuffer(ctx, hdcDst, W, H)) {
+        EndPaint(hwnd, &ps);
+        return;
+    }
+    HDC hdcMem = ctx->bbDC;
+
     // Hurtigsti: er ALT det skitne innenfor knapperaden, trenger vi verken
     // DrawChart eller DrawOverlay. En hover-endring invaliderer nettopp det
     // rektangelet; uten denne grenen ville den kostet en full opptegning, og
     // den inkrementelle invalideringen ville bare spart den siste blitten.
     //
-    // Overlayet er unntatt: det dimmer HELE klientflaten, headeren inkludert,
-    // saa en strimmel tegnet for seg ville faatt udimmede knapper. Og en
-    // samtidig InvalidateRect(NULL) fra animasjonsklokka unionerer med
-    // stripa, saa rcPaint blir hele flaten og vi faller ned i den trege
-    // stien av oss selv.
+    // Knappene tegnes rett inn i bufferet, som holder forrige fulle bilde.
+    // Mellomrommene i stripa er dermed noyaktig det den trege stien la der,
+    // og DrawButtons toemmer hver knappeflate selv. Tre vilkaar gjor det
+    // sant: bufferet har et fullt bilde i denne storrelsen (bbValid), og
+    // overlayet er verken aapent eller synlig under uttoning - det dimmer
+    // HELE klientflaten, headeren inkludert, saa bufferets strimmel ville
+    // vaert dimmet mens knappene ikke var det. En samtidig
+    // InvalidateRect(NULL) fra animasjonsklokka unionerer med stripa, saa
+    // rcPaint blir hele flaten og vi faller ned i den trege stien av oss selv.
     RECT strip;
     ButtonStrip(W, &strip);
-    if (!ctx->overlayOpen &&
+    if (ctx->bbValid && !ctx->overlayOpen && (int)(ctx->overlayF + 0.5) <= 0 &&
         ps.rcPaint.left   >= strip.left  && ps.rcPaint.top    >= strip.top &&
         ps.rcPaint.right  <= strip.right && ps.rcPaint.bottom <= strip.bottom) {
 
-        int sw = strip.right - strip.left, sh = strip.bottom - strip.top;
-        HDC     sDC  = CreateCompatibleDC(hdcDst);
-        HBITMAP sBmp = CreateCompatibleBitmap(hdcDst, sw, sh);
-        HBITMAP sOld = (HBITMAP)SelectObject(sDC, sBmp);
-
-        // Bakgrunnen hentes fra vannmerkebitmapen, ikke fra FillRect: da er
-        // den GARANTERT identisk med det den trege stien ville lagt der, uten
-        // at vi trenger aa vite at vannmerketeksten aldri naar opp i headeren.
-        SetViewportOrgEx(sDC, -strip.left, -strip.top, NULL);
-        if (ctx->wmValid) {
-            BitBlt(sDC, strip.left, strip.top, sw, sh,
-                   ctx->wmDC, strip.left, strip.top, SRCCOPY);
-        } else {
-            FillRect(sDC, &strip, ctx->brBg);
-        }
-        DrawButtons(ctx, sDC, W, IsZoomed(hwnd));
-        // Nullstilles for blitten: ellers ville kildepunktet (0,0) blitt
-        // tolket logisk og lest feil sted i bitmapen.
-        SetViewportOrgEx(sDC, 0, 0, NULL);
-
-        BitBlt(hdcDst, strip.left, strip.top, sw, sh, sDC, 0, 0, SRCCOPY);
-
-        SelectObject(sDC, sOld);
-        DeleteObject(sBmp);
-        DeleteDC(sDC);
+        DrawButtons(ctx, hdcMem, W, IsZoomed(hwnd));
+        BitBlt(hdcDst, strip.left, strip.top,
+               strip.right - strip.left, strip.bottom - strip.top,
+               hdcMem, strip.left, strip.top, SRCCOPY);
         EndPaint(hwnd, &ps);
         return;
     }
-
-    // Dobbeltbuffer: tegn alt i minnet, blit en gang -> ingen flimmer
-    HDC hdcMem = CreateCompatibleDC(hdcDst);
-    HBITMAP hbm = CreateCompatibleBitmap(hdcDst, W, H);
-    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbm);
 
     // Traden kan flette inn nye lys naar som helst; laasen holder
     // bufferet stabilt gjennom hele opptegningen (~1,8 ms).
@@ -2033,10 +2082,7 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     DrawOverlay(ctx, hdcMem, W, H);
 
     BitBlt(hdcDst, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
-
-    SelectObject(hdcMem, hbmOld);
-    DeleteObject(hbm);
-    DeleteDC(hdcMem);
+    ctx->bbValid = TRUE;
 
     EndPaint(hwnd, &ps);
 }
@@ -3249,8 +3295,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // Faste GDI-objekter: lages en gang, ikke 16 ganger per opptegning
     g_Ctx.penGrid   = CreatePen(PS_SOLID, 1, CLR_GRID);
-    g_Ctx.penUp     = CreatePen(PS_SOLID, 1, CLR_UP);
-    g_Ctx.penDown   = CreatePen(PS_SOLID, 1, CLR_DOWN);
     g_Ctx.penCross  = CreatePen(PS_DOT,   1, CLR_CROSS);
     g_Ctx.penBtn      = CreatePen(PS_SOLID, 1, CLR_DIM);
     g_Ctx.penBtnHot   = CreatePen(PS_SOLID, 1, CLR_TEXT);
@@ -3264,8 +3308,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
     g_Ctx.penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
     g_Ctx.brBg      = CreateSolidBrush(CLR_BG);
-    g_Ctx.brUp      = CreateSolidBrush(CLR_UP);
-    g_Ctx.brDown    = CreateSolidBrush(CLR_DOWN);
     g_Ctx.brBox     = CreateSolidBrush(CLR_BOX);
     g_Ctx.brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
 
@@ -3334,14 +3376,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (g_Ctx.hWakeEvent) CloseHandle(g_Ctx.hWakeEvent);
     DeleteCriticalSection(&g_Ctx.lock);
 
+    // Bufferet forst: fonter, penner og pensler fra siste bilde kan staa
+    // valgt inn i DC-en, og DeleteObject paa et valgt objekt feiler stille.
+    FreeBackBuffer(&g_Ctx);
+
     if (g_Ctx.nid.hIcon) DestroyIcon(g_Ctx.nid.hIcon);
     if (g_Ctx.hFontBig) DeleteObject(g_Ctx.hFontBig);
     if (g_Ctx.hFontSmall) DeleteObject(g_Ctx.hFontSmall);
 
-    DeleteObject(g_Ctx.penGrid);  DeleteObject(g_Ctx.penUp);
-    DeleteObject(g_Ctx.penDown);  DeleteObject(g_Ctx.penCross);
-    DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brUp);
-    DeleteObject(g_Ctx.brDown);   DeleteObject(g_Ctx.brBox);
+    DeleteObject(g_Ctx.penGrid);  DeleteObject(g_Ctx.penCross);
+    DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brBox);
     DeleteObject(g_Ctx.brBoxEdge);
     DeleteObject(g_Ctx.penLastUp);   DeleteObject(g_Ctx.penLastDown);
     DeleteObject(g_Ctx.penBtn);      DeleteObject(g_Ctx.penBtnHot);
