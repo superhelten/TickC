@@ -1329,12 +1329,16 @@ static BOOL HeaderFits(int rightBound, int leftBound) {
 }
 
 // Felles geometri for tegning og muse-treff.
+// Skrivebordsmodus (fase 14): marginene fantes bare for teksten - header,
+// prisaksens kolonne og tidsbaandet. Uten tekst er de tom flate, og kurven
+// tar hele skjermen. Alt annet folger herfra: vannmerkets sentrering,
+// rutenettet, lysene, klipperegionen og siste-pris-linja.
 static ChartRect ChartGeometry(int W, int H) {
     ChartRect g;
-    g.left   = PAD_L;
-    g.top    = HEADER_H;
-    g.right  = W - PAD_R;
-    g.bottom = H - PAD_B;
+    g.left   = g_desktopMode ? 0 : PAD_L;
+    g.top    = g_desktopMode ? 0 : HEADER_H;
+    g.right  = g_desktopMode ? W : W - PAD_R;
+    g.bottom = g_desktopMode ? H : H - PAD_B;
     g.cw     = g.right - g.left;
     g.ch     = g.bottom - g.top;
     return g;
@@ -1755,6 +1759,12 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     int n = ctx->candleCount;
     if (n <= 0) {
+        // Skrivebordsmodus: ingen status paa tapetet. Flaten staar med
+        // bakgrunn og vannmerke til det finnes lys aa tegne. Meldingen ville
+        // vaert den eneste teksten igjen, og den sier ingenting en bruker som
+        // ikke kan klikke paa flaten kan gjore noe med.
+        if (g_desktopMode) return;
+
         wchar_t msg[96];
         SelectObject(hdc, ctx->hFontSmall);
         SetTextColor(hdc, CLR_DIM);
@@ -1801,71 +1811,77 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // Rad 2 (y 28-42): symbollinja til venstre. Til hoyre ligger ikke
     // knappene (de slutter paa y = 24), men prisaksens overste etikett, som
     // staar paa y = top +- 8 fra x = right + AXIS_LBL_GAP.
-    RECT strip;
-    ButtonStrip(W, &strip);
-    int btnLeft = strip.left;          // X_left_bound for knapperaden
+    // Metadata-overlayet (fase 14). Pris, prosent og symbollinje er laget som
+    // leses fovealt: brukeren maa stoppe opp og dekode tall. Paa skrivebordet
+    // konkurrerer de med ikoner og mapper, og flaten skal leses perifert.
+    // Hele blokka staar derfor stille i skrivebordsmodus.
+    if (!g_desktopMode) {
+        RECT strip;
+        ButtonStrip(W, &strip);
+        int btnLeft = strip.left;          // X_left_bound for knapperaden
 
-    // Rad 1, venstre: prisen. Rektangelet slutter ved knapperaden, saa selv
-    // en pris som ikke faar plass aldri tegnes under knappene.
-    SelectObject(hdc, ctx->hFontBig);
-    SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
-    swprintf_s(buf, 64, L"$%.2f", last);
-    int lenPrice = (int)wcslen(buf);
-    SIZE szPrice = { 0, 0 };
-    GetTextExtentPoint32W(hdc, buf, lenPrice, &szPrice);
-    int priceRight = PAD_L + szPrice.cx;   // X_right_bound
-    RECT rcPrice = { PAD_L, 10, btnLeft - HDR_GAP, 30 };
-    DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        // Rad 1, venstre: prisen. Rektangelet slutter ved knapperaden, saa selv
+        // en pris som ikke faar plass aldri tegnes under knappene.
+        SelectObject(hdc, ctx->hFontBig);
+        SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
+        swprintf_s(buf, 64, L"$%.2f", last);
+        int lenPrice = (int)wcslen(buf);
+        SIZE szPrice = { 0, 0 };
+        GetTextExtentPoint32W(hdc, buf, lenPrice, &szPrice);
+        int priceRight = PAD_L + szPrice.cx;   // X_right_bound
+        RECT rcPrice = { PAD_L, 10, btnLeft - HDR_GAP, 30 };
+        DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    // Rad 1, hoyre: prosenten i tre trinn. Hel med spenn, saa uten spenn,
-    // saa skjult. Aldri klippet midt i et tall - "+0,5" der det staar
-    // "+0,50 %" er en feil verdi, ikke en kortere.
-    SelectObject(hdc, ctx->hFontSmall);
-    int pctRight = btnLeft - HDR_GAP;
-    wchar_t pctFull[48], pctShort[24];
-    swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
-    swprintf_s(pctShort, 24, L"%+.2f%%", chg);
-    int lenFull = (int)wcslen(pctFull), lenShort = (int)wcslen(pctShort);
-    SIZE szFull = { 0, 0 }, szShort = { 0, 0 };
-    GetTextExtentPoint32W(hdc, pctFull, lenFull, &szFull);
+        // Rad 1, hoyre: prosenten i tre trinn. Hel med spenn, saa uten spenn,
+        // saa skjult. Aldri klippet midt i et tall - "+0,5" der det staar
+        // "+0,50 %" er en feil verdi, ikke en kortere.
+        SelectObject(hdc, ctx->hFontSmall);
+        int pctRight = btnLeft - HDR_GAP;
+        wchar_t pctFull[48], pctShort[24];
+        swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
+        swprintf_s(pctShort, 24, L"%+.2f%%", chg);
+        int lenFull = (int)wcslen(pctFull), lenShort = (int)wcslen(pctShort);
+        SIZE szFull = { 0, 0 }, szShort = { 0, 0 };
+        GetTextExtentPoint32W(hdc, pctFull, lenFull, &szFull);
 
-    // Den korte formen maales bare naar den hele ikke fikk plass. Hver
-    // GetTextExtentPoint32W er ~20 us, og over minstebredden faar den hele
-    // plass med god margin - maalt ved 400 px: ~115 px luft til prisen.
-    const wchar_t* pct = NULL;
-    int lenPct = 0;
-    if (HeaderFits(priceRight, pctRight - szFull.cx)) {
-        pct = pctFull;  lenPct = lenFull;
-    } else {
-        GetTextExtentPoint32W(hdc, pctShort, lenShort, &szShort);
-        if (HeaderFits(priceRight, pctRight - szShort.cx)) {
-            pct = pctShort; lenPct = lenShort;
+        // Den korte formen maales bare naar den hele ikke fikk plass. Hver
+        // GetTextExtentPoint32W er ~20 us, og over minstebredden faar den hele
+        // plass med god margin - maalt ved 400 px: ~115 px luft til prisen.
+        const wchar_t* pct = NULL;
+        int lenPct = 0;
+        if (HeaderFits(priceRight, pctRight - szFull.cx)) {
+            pct = pctFull;  lenPct = lenFull;
+        } else {
+            GetTextExtentPoint32W(hdc, pctShort, lenShort, &szShort);
+            if (HeaderFits(priceRight, pctRight - szShort.cx)) {
+                pct = pctShort; lenPct = lenShort;
+            }
         }
-    }
-    if (pct) {
-        SetTextColor(hdc, chgClr);
-        RECT rcPct = { priceRight + HDR_GAP, 10, pctRight, 30 };
-        DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-    }
+        if (pct) {
+            SetTextColor(hdc, chgClr);
+            RECT rcPct = { priceRight + HDR_GAP, 10, pctRight, 30 };
+            DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+        }
 
-    // Rad 2: symbollinja. Den kortes med ellipse mot prisaksens etikett;
-    // her er det en merkelapp, ikke et tall, saa en ellipse loyer ikke.
-    SetTextColor(hdc, CLR_DIM);
-    if (stale) {
-        swprintf_s(buf, 64, L"%s  -  %s  -  frakoblet %ds",
-                   SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label, staleSecs);
-    } else {
-        swprintf_s(buf, 64, L"%s  -  %s",
-                   SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label);
+        // Rad 2: symbollinja. Den kortes med ellipse mot prisaksens etikett;
+        // her er det en merkelapp, ikke et tall, saa en ellipse loyer ikke.
+        SetTextColor(hdc, CLR_DIM);
+        if (stale) {
+            swprintf_s(buf, 64, L"%s  -  %s  -  frakoblet %ds",
+                       SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label, staleSecs);
+        } else {
+            swprintf_s(buf, 64, L"%s  -  %s",
+                       SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label);
+        }
+        int lenSub = (int)wcslen(buf);
+        SIZE szSub = { 0, 0 };
+        GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
+        int subLimit = (g.right + AXIS_LBL_GAP) - HDR_GAP;   // X_left_bound for aksetiketten
+        RECT rcSub = { PAD_L, 28, subLimit, 42 };
+        UINT subFlags = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
+        if (!HeaderFits(PAD_L + szSub.cx, subLimit + HDR_GAP)) subFlags |= DT_END_ELLIPSIS;
+        DrawTextW(hdc, buf, lenSub, &rcSub, subFlags);
     }
-    int lenSub = (int)wcslen(buf);
-    SIZE szSub = { 0, 0 };
-    GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
-    int subLimit = (g.right + AXIS_LBL_GAP) - HDR_GAP;   // X_left_bound for aksetiketten
-    RECT rcSub = { PAD_L, 28, subLimit, 42 };
-    UINT subFlags = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
-    if (!HeaderFits(PAD_L + szSub.cx, subLimit + HDR_GAP)) subFlags |= DT_END_ELLIPSIS;
-    DrawTextW(hdc, buf, lenSub, &rcSub, subFlags);
 
     // --- Chart-geometri ---
     int left = g.left, top = g.top, right = g.right, bottom = g.bottom;
@@ -1905,8 +1921,13 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     IntersectClipRect(hdc, rcChart.left, rcChart.top, rcChart.right, rcChart.bottom);
 
     // --- Rutenett ---
+    // Kant til kant legger linje i = 0 paa y = 0 og i = 4 paa y = H - 1. Det
+    // er en 1 px ramme rundt hele skjermen - selve interferensen
+    // skrivebordsmodus skal vaere fri for. De tre indre linjene baerer den
+    // romlige referanserammen alene.
     HPEN hOldPen = (HPEN)SelectObject(hdc, ctx->penGrid);
-    for (int i = 0; i <= 4; ++i) {
+    int gi0 = g_desktopMode ? 1 : 0, gi1 = g_desktopMode ? 3 : 4;
+    for (int i = gi0; i <= gi1; ++i) {
         int y = top + (ch * i) / 4;
         MoveToEx(hdc, left, y, NULL);
         LineTo(hdc, right, y);
@@ -1980,19 +2001,23 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // under 16 px unna halvt dekket, med et avkuttet tall synlig under. En
     // etikett som ville kollidert, tegnes derfor ikke. Samme regel og samme
     // yLast som stempelet.
+    // Fase 14: ingen maaleverdier paa skrivebordet. Kolonnen finnes ikke der
+    // heller - axL ligger utenfor flaten naar geometrien gaar kant til kant.
     int yPill = INT_MIN;
-    {
-        double lp = ctx->candles[n - 1].close;
-        int yl = top + (int)(((maxP - lp) / range) * ch);
-        if (yl >= top && yl <= bottom) yPill = yl;
-    }
-    for (int i = 0; i <= 4; ++i) {
-        int y = top + (ch * i) / 4;
-        if (yPill != INT_MIN && abs(y - yPill) < 16) continue;
-        double p = maxP - (range * i) / 4.0;
-        swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
-        RECT rcLbl = { axL, y - 8, axR, y + 8 };
-        DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    if (!g_desktopMode) {
+        {
+            double lp = ctx->candles[n - 1].close;
+            int yl = top + (int)(((maxP - lp) / range) * ch);
+            if (yl >= top && yl <= bottom) yPill = yl;
+        }
+        for (int i = 0; i <= 4; ++i) {
+            int y = top + (ch * i) / 4;
+            if (yPill != INT_MIN && abs(y - yPill) < 16) continue;
+            double p = maxP - (range * i) / 4.0;
+            swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
+            RECT rcLbl = { axL, y - 8, axR, y + 8 };
+            DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
     }
 
     // --- Tidsakse (Omega_x-axis) ---
@@ -2008,7 +2033,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     //
     // O(antall etiketter): ett modulo for aa finne foerste etikett, deretter
     // steg paa S rett i candles[]. Ingen allokering.
-    if (i0 < i1) {
+    if (i0 < i1 && !g_desktopMode) {
         wchar_t tl[24];
         FormatCandleTime(ctx->candles[i0].openTime,
                          ctx->intervalMs, tl, 24);
@@ -2085,28 +2110,32 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             // slik at det ikke staar to tall oppi hverandre.
             // Flaten faar 3 px luft paa hver side av teksten; teksten selv
             // holder seg innenfor axR.
-            RECT rcPill = { right + 1, yLast - 8, axR + 3, yLast + 8 };
-            SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
-            FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
+            // Linja over er geometri og blir staaende i skrivebordsmodus.
+            // Stempelet er en presis verdi og hoerer til metadata-laget.
+            if (!g_desktopMode) {
+                RECT rcPill = { right + 1, yLast - 8, axR + 3, yLast + 8 };
+                SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
+                FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
-            // "Presis verditekst": to desimaler der de faar plass, ellers
-            // samme oppslosning som aksen. Bredden maales paa den ferdig
-            // formaterte strengen - feil #5 igjen.
-            SelectObject(hdc, ctx->hFontAxis);
-            int pillDec = 2;
-            swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
-            SIZE psz = { 0, 0 };
-            int pillAvail = axR - axL;
-            if (GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &psz) &&
-                psz.cx > pillAvail) {
-                pillDec = PriceDecimals(range / 4.0);
+                // "Presis verditekst": to desimaler der de faar plass, ellers
+                // samme oppslosning som aksen. Bredden maales paa den ferdig
+                // formaterte strengen - feil #5 igjen.
+                SelectObject(hdc, ctx->hFontAxis);
+                int pillDec = 2;
                 swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
-            }
+                SIZE psz = { 0, 0 };
+                int pillAvail = axR - axL;
+                if (GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &psz) &&
+                    psz.cx > pillAvail) {
+                    pillDec = PriceDecimals(range / 4.0);
+                    swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
+                }
 
-            // Mork tekst paa den mettede flaten - CLR_TEXT ville druknet.
-            SetTextColor(hdc, CLR_BG);
-            RECT rcPillTxt = { axL, yLast - 8, axR, yLast + 8 };
-            DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                // Mork tekst paa den mettede flaten - CLR_TEXT ville druknet.
+                SetTextColor(hdc, CLR_BG);
+                RECT rcPillTxt = { axL, yLast - 8, axR, yLast + 8 };
+                DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            }
         }
     }
 
@@ -2302,7 +2331,9 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     // rcPaint blir hele flaten og vi faller ned i den trege stien av oss selv.
     RECT strip;
     ButtonStrip(W, &strip);
-    if (ctx->bbValid && !ctx->overlayOpen && (int)(ctx->overlayF + 0.5) <= 0 &&
+    // !g_desktopMode staar her eksplisitt: knapperaden tegnes ikke der, saa
+    // hurtigstien ville blitt en stripe uten knapper over grafen.
+    if (ctx->bbValid && !g_desktopMode && !ctx->overlayOpen && (int)(ctx->overlayF + 0.5) <= 0 &&
         ps.rcPaint.left   >= strip.left  && ps.rcPaint.top    >= strip.top &&
         ps.rcPaint.right  <= strip.right && ps.rcPaint.bottom <= strip.bottom) {
 
@@ -3427,6 +3458,10 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     ctx->trackingMouse = FALSE;
     ctx->panning       = FALSE;
     ctx->bbValid       = FALSE;
+    // Vannmerket er noklet paa (W, H, symIdx, ivIdx), ikke paa modus, og
+    // cachen ligger i ctx - den overlever at vinduet lages paa nytt. Etter
+    // fase 14 avhenger plasseringen av geometrien, som avhenger av modus.
+    ctx->wmValid       = FALSE;
 
     g_desktopMode = on;
     SaveDesktopMode(on);
