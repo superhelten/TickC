@@ -20,18 +20,24 @@ bak ikonene som barn av WorkerW.
 **Fase 11** deler flaten i graf, priskolonne og tidsbånd. Den legger til
 tidsakse, egen monospace-aksefont (11 px sifre) i #A0AAB8 og et vannmerke med
 alfa som følger vindusbredden.
+**Fokus-blink** fjerner den klassiske rammen som `DefWindowProc` tegnet oppå
+grafen ved hvert fokusbytte og tittelbytte. **Fase 12** bytter mellom panel og
+skrivebordsmodus fra tray-menyen mens prosessen kjører, og husker valget i
+registret.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
 `docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`,
 `docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`,
-`docs/superpowers/plans/2026-09-17-ticker-opptegning.md` og
-`docs/superpowers/plans/2026-09-17-ticker-akser.md`. Design:
+`docs/superpowers/plans/2026-09-17-ticker-opptegning.md`,
+`docs/superpowers/plans/2026-09-17-ticker-akser.md`,
+`docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md` og
+`docs/superpowers/plans/2026-09-17-ticker-modusveksling.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~3590 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~3720 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -274,8 +280,9 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | Handling | Oppførsel |
 |---|---|
 | «Avslutt Ticker» i tray-menyen | avslutter programmet |
+| «Skrivebordsmodus» i tray-menyen | bytter mellom panel og skrivebordsflate; haken viser gjeldende modus, valget lagres (fase 12) |
 | Tray-klikk | fremme og aktivt → skjul; ellers vis, gjenopprett og gi fokus |
-| `Ctrl` + `0` / «Standardvisning» | sentrer 1280×720 på skjermen vinduet står på |
+| `Ctrl` + `0` / «Standardvisning» | sentrer 1280×720 på skjermen vinduet står på (grå i skrivebordsmodus) |
 | Dobbeltklikk på grafen eller prisaksen | nullstiller zoom og panorering (eases) |
 | `R` | nullstiller zoom og panorering (ikke mens overlayet er åpent) |
 | `ESC` | lagvis: lukk overlayet → nullstill utsnittet → skjul til systemstatusfeltet (duplikat: avslutt) |
@@ -466,11 +473,17 @@ Bygges i `EnsureWatermark`, som per definisjon bare kjører når
 ### Registret
 
 `HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
-`PanelWidth`, `PanelHeight`. Leses i `WinMain` **før `CreateThread`**, slik at
+`PanelWidth`, `PanelHeight`, `PanelX`, `PanelY`, `PanelHasPos` og
+`DesktopMode` (fase 12). Leses i `WinMain` **før `CreateThread`**, slik at
 første henting går mot riktig par. Indeksene er bundet sjekket. Enhver feilsti
 lander på BTC/USDT 1m.
 
 Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11.
+
+`DesktopMode` skrives i det brukeren velger i tray-menyen, ikke i `WM_DESTROY`,
+som aldri kjører når prosessen drepes utenfra. Den leses bare når verken
+`--desktop-mode` eller `--dup` er gitt. Flagget vinner for den kjøringen, og
+et duplikat er alltid et panel og skriver aldri.
 
 ---
 
@@ -1640,6 +1653,97 @@ Runde 1 er oppvarming. Etter den er forskjellen innenfor støyen: ~12–25
 
 ---
 
+### Fokus-blink — klassisk NC-ramme ved aktivering
+
+Plan og avvik: `docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md`.
+Gren `fokus-blink`, flettet inn med `--no-ff` før fase 12.
+
+**Årsaken, målt.** En probe leste panelets kant fra den ferdig sammensatte
+skjermen (`BitBlt` fra skjerm-DC) hvert ~2. ms, mens fokus gikk til et
+hjelpevindu og tilbake. Det var **ikke** et blink på ett bilde:
+`DefWindowProc(WM_NCACTIVATE)` tegner den klassiske `WS_THICKFRAME`-rammen inn i
+vindus-DC-en. `WM_NCCALCSIZE` gjør klienten like stor som vinduet, så rammen
+havner *oppå* grafen, 3 px dyp: #E3E3E3 og #FFFFFF ytterst, deretter #B4B4B4
+(`COLOR_ACTIVEBORDER`) eller #F4F7FC (`COLOR_INACTIVEBORDER`). Den blir stående
+til neste fulle opptegning, altså til neste datahenting (målt 1,6 s uten støy,
+opptil 3 s). `WM_SETTEXT`, som kommer ved symbolbytte, tegner den også.
+
+**Endringen:** `WM_NCACTIVATE` → `DefWindowProcW(hwnd, msg, wParam, -1)`, og
+`WM_NCPAINT` → 0 som vern. `DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`
+fra mandatet er **ikke** brukt (fallgruve 52).
+
+| Variant, 3 fokussykluser | Rammefargede px | `WM_SETTEXT` |
+|---|---|---|
+| Uten rettelse | 7 181 184 | 230 100 |
+| `return TRUE` | 0 | 0 |
+| `DefWindowProc(…, -1)` | 0 | 0 |
+| `-1` + `WM_NCPAINT` | 0 | 0 |
+| `-1` + `WM_NCPAINT` + `DWMNCRP_DISABLED` | **1 296**, forgrunnsbytte feilet 2 av 3 | 0 |
+
+**Etter fletting med fase 12**, 5 fokussykluser × 1,5 s hver vei. Samples der et
+annet vindu var i forgrunnen, eller dekket ett av 8 kantpunkter, er forkastet
+(fallgruve 54):
+
+| Bygg | Gyldige samples | Rammefargede px | `WM_SETTEXT` / størrelsesendring |
+|---|---|---|---|
+| Kontroll, uten rettelse | 984 | 7 910 988 | 230 100 / 0 |
+| `ticker.exe` fra master | 955 | **0** | **0 / 0** |
+| Panel laget på nytt etter to modusbytter | 758 | **0** | **0 / 0** |
+
+GDI/USER i hvile: 30 / 14. `/W4` rent, x86.
+
+### Fase 12 — modusveksling fra tray-menyen
+
+Plan, målinger og avvik: `docs/superpowers/plans/2026-09-17-ticker-modusveksling.md`.
+Gren `modusveksling`, flettet inn med `--no-ff`.
+
+**Endringen:**
+- `ID_TRAY_DESKTOP` (1003) og `BuildTrayMenu()`. Menyen bygges ved hvert
+  høyreklikk: «Skrivebordsmodus» med hake, «Standardvisning» (grå i
+  skrivebordsmodus), skillelinje, «Avslutt Ticker». Et duplikat får ikke
+  modusvalget.
+- `SetDesktopMode()` **river ned og lager vinduet på nytt** gjennom
+  `TogglePopup`, i stedet for å flytte det med `SetParent` (fallgruve 53).
+  Rekkefølgen er `KillTimer(TIMER_EMBED_ID)`, så `SaveWindowPlacement` mens
+  flagget fortsatt sier panel, så `hPopup = NULL` under lås før
+  `DestroyWindow` (da starter `WM_NCDESTROY` ingen timer). Deretter nullstilles
+  `animRunning`, `trackingMouse`, `panning` og `bbValid`, flagget settes og
+  lagres, og `TogglePopup` kalles.
+- `SaveGeometry` oppdaterer også `g_savedPanelX/Y/W/H`. `PlacePopupInitially`
+  leser dem, og panelet lages nå på nytt etter hver tur innom skrivebordet.
+- `DesktopMode` i registret, se *Registret*.
+
+**Verifisert** i testbygg med `REG_PATH` = `Software\TickerTest`, drevet med
+`PostMessage(WM_COMMAND, 1003)`:
+
+| Modus | Forelder | `WS_CHILD` | `WS_THICKFRAME` | Lagdelt / gjennomsiktig | TOPMOST | DPI |
+|---|---|---|---|---|---|---|
+| Skrivebord | WorkerW | 1 | 0 | 1 / 1 | 0 | per-monitor |
+| Panel | ingen | 0 | 1 | 0 / 0 | 0 | uvitende |
+
+- **Registret** følger byttene, og en ny prosess uten argumenter starter rett i
+  skrivebordsmodus, også etter at forrige prosess ble drept i den modusen.
+- **Geometri:** 300,200 900×500 inn, samme ut etter rundtur, også i registret.
+- **Data:** `candleCount` 300 før og i første bilde etter hvert bytte.
+- **Postet «Standardvisning» i skrivebordsmodus** endrer ikke flaten.
+- **GDI/USER i hvile:** 30 / 14–15 etter 20, 40, 60 og 100 rundturer. Det er
+  platå, ikke lekkasje.
+- **Menyen** (`BuildTrayMenu` trukket ut med `awk`): 15/15.
+
+**Byttetid**, fra `WM_COMMAND` til første fulle bilde er blittet:
+
+| Retning | Median | Spenn | Største ledd |
+|---|---|---|---|
+| Til skrivebord 3840×1600 | **28 ms** | 26–43 ms | 16 ms: første skriving i ny vannmerke-cache og nytt buffer (fallgruve 48) |
+| Til panel 1280×720 | **18 ms** | 16–37 ms | 6 ms: plassering, visning og forgrunn i `TogglePopup` |
+
+> **Mandatets < 16 ms er ikke nådd, og det er et bevisst valg.** Det kan bare
+> nås ved å beholde bitmapene for begge størrelser, rundt 48 MB mer mens
+> panelet er i bruk. Brukeren valgte gjenoppbygging ved bytte: byttet er
+> sjeldent og manuelt, og 28 ms er under to bilder ved 60 Hz.
+
+---
+
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
@@ -1699,7 +1803,13 @@ Runde 1 er oppvarming. Etter den er forskjellen innenfor støyen: ~12–25
   `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
   Nettverket går på egen tråd, så UI-tråden gjør bare opptegning.
 - **Skrivebordsmodus kan ikke bytte symbol eller intervall.** Overlayet nås
-  ikke. Det som står i registret fra vanlig modus, brukes.
+  ikke. Det som står i registret fra vanlig modus, brukes. Bytt til panel fra
+  tray-menyen, velg, og bytt tilbake (fase 12).
+- **Modusbytte tar 18–28 ms (median)**, ikke < 16 ms. Se fase 12.
+- **Et maksimert panel kommer tilbake gjenopprettet** etter en tur innom
+  skrivebordsmodus. Geometrien som lagres, er den gjenopprettede.
+- **Fokus-blink-rettelsen er ikke kjørt med maksimering, minimering eller Aero
+  Snap.**
 - **Over $999 999** klippes ikonteksten (4 sifre får ikke plass på 16 px).
   Trygt — opptegningen er bundet sjekket.
 - **Tidsetiketter popper inn og ut i kantene under panorering** (fase 11).
@@ -1948,6 +2058,26 @@ Runde 1 er oppvarming. Etter den er forskjellen innenfor støyen: ~12–25
     bilder på rad er like, og bekreft tilstanden mot hvile før du tror på et
     avvik. Testvinduet tar forgrunnen, så et tastetrykk fra brukeren (ESC)
     kan lukke et duplikat midt i en kjøring.
+51. **Et rammeløst `WS_THICKFRAME`-vindu får den klassiske rammen tegnet oppå
+    klientflaten.** Når `WM_NCCALCSIZE` returnerer 0, er vindus-DC og klient
+    samme flate, og `DefWindowProc` for `WM_NCACTIVATE` og `WM_SETTEXT` tegner
+    rammen rett inn i grafen. Den blir stående til neste `WM_PAINT`. Svar
+    `WM_NCACTIVATE` med `DefWindowProc(…, -1)`. Den er målt fra skjermen;
+    om `PrintWindow` ser den, er ikke prøvd.
+52. **`DWMNCRP_DISABLED` fjerner ikke NC-tegning — den slår av DWM-rammen og
+    slipper den klassiske til.** Målt: rammepiksler tilbake, og
+    `SetForegroundWindow` feilet i to av tre sykluser.
+53. **DPI-konteksten til et vindu settes idet det lages.** Et vindu som skal
+    bytte mellom DPI-uvitende panel og per-monitor-bevisst skrivebordsflate,
+    må lages på nytt. `SetParent` og stilendringer flytter det, men konteksten
+    følger ikke med.
+54. **En skjermprobe må forkaste samples der andre vinduer er med.** Brukeren
+    kan ha Chrome eller andre vinduer i bruk mens proben går. Den første
+    kjøringen etter fletting viste 4 121 «rammepiksler», som var Chrome over
+    panelets høyre kant, og `SetForegroundWindow` feilet i 3 av 5 sykluser.
+    Sjekk per sample at forgrunnen er ditt eget vindu og at `WindowFromPoint`
+    i kantpunktene treffer panelet. Kjør en kontroll uten rettelsen i samme
+    kjøring, så du vet at proben ser det den skal.
 
 ---
 
