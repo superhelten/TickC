@@ -98,6 +98,14 @@
 #define AXIS_Y_W         (AXIS_LBL_GAP + AXIS_Y_CHARS * AXIS_CHAR_W)
 #define AXIS_PAD_R       8
 #define PAD_R            (AXIS_Y_W + AXIS_PAD_R)
+// Luft mellom siste lys og aksekanten (fase 15). Lysene slutter paa
+// rcChart.right; rutenettet, den stiplede siste-pris-linja og traadkorset
+// gaar helt inn til rcChart.edge, der stempelet og etikettene begynner. Uten
+// dette kunne kroppen eller veken til siste lys staa klint mot stempelflaten.
+#define PLOT_PAD_R       10
+#if PLOT_PAD_R < 8 || PLOT_PAD_R > 12
+#error PLOT_PAD_R skal ligge i [8, 12] px
+#endif
 #if AXIS_PAD_R < 6 || AXIS_PAD_R > 10
 #error AXIS_PAD_R skal ligge i [6, 10] px
 #endif
@@ -222,7 +230,10 @@ typedef struct {
 
 // Chart-flaten regnes ut to steder (tegning og muse-treff) - de MA
 // vaere enige, ellers peker crosshairet pa feil lys.
-typedef struct { int left, top, right, bottom, cw, ch; } ChartRect;
+// right/cw er LYSENES flate. edge er aksekanten: stempelet begynner paa
+// edge + 1 og etikettene paa edge + AXIS_LBL_GAP. I skrivebordsmodus er de
+// like - der finnes ingen akse aa holde avstand til.
+typedef struct { int left, top, right, bottom, cw, ch, edge; } ChartRect;
 
 typedef struct {
     HWND hWnd;
@@ -1337,7 +1348,8 @@ static ChartRect ChartGeometry(int W, int H) {
     ChartRect g;
     g.left   = g_desktopMode ? 0 : PAD_L;
     g.top    = g_desktopMode ? 0 : HEADER_H;
-    g.right  = g_desktopMode ? W : W - PAD_R;
+    g.edge   = g_desktopMode ? W : W - PAD_R;
+    g.right  = g_desktopMode ? g.edge : g.edge - PLOT_PAD_R;
     g.bottom = g_desktopMode ? H : H - PAD_B;
     g.cw     = g.right - g.left;
     g.ch     = g.bottom - g.top;
@@ -1876,7 +1888,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         int lenSub = (int)wcslen(buf);
         SIZE szSub = { 0, 0 };
         GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
-        int subLimit = (g.right + AXIS_LBL_GAP) - HDR_GAP;   // X_left_bound for aksetiketten
+        int subLimit = (g.edge + AXIS_LBL_GAP) - HDR_GAP;   // X_left_bound for aksetiketten
         RECT rcSub = { PAD_L, 28, subLimit, 42 };
         UINT subFlags = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
         if (!HeaderFits(PAD_L + szSub.cx, subLimit + HDR_GAP)) subFlags |= DT_END_ELLIPSIS;
@@ -1886,6 +1898,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // --- Chart-geometri ---
     int left = g.left, top = g.top, right = g.right, bottom = g.bottom;
     int cw = g.cw, ch = g.ch;
+    int edge = g.edge;   // aksekanten; right er der lysene slutter
     if (cw <= 0 || ch <= 0) return;
 
     // Kalles under laas, saa evictedTotal kan leses direkte.
@@ -1910,14 +1923,18 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // annet: aksetekstene, stempelet og headeren ligger utenfor flaten og
     // tegnes etter SelectClipRgn(NULL).
     //
-    // Hoyre kant er EKSKLUSIV: kolonnen x = right hoerer til aksemargen, og
-    // rutenettet slutter paa right - 1. Med right + 1 her maalte vi lyspiksler
-    // i den kolonnen i 21 av 240 bilder under panorering, maksimert.
+    // Hoyre kant er EKSKLUSIV: kolonnen x = edge hoerer til aksemargen, og
+    // rutenettet slutter paa edge - 1. Med edge + 1 her maalte vi lyspiksler
+    // i den kolonnen i 21 av 240 bilder under panorering, maksimert (fase 6).
+    //
+    // Klippet gaar til edge, ikke til right: lysene holder seg innenfor right
+    // av seg selv (slot regnes av cw), mens rutenettet og siste-pris-linja
+    // skal krysse luftrommet og naa helt fram til aksen (fase 15).
     //
     // Bunnen er INKLUSIV (bottom + 1): rutenettlinje i = 4 ligger paa
     // y = bottom, og det samme gjor veken til lyset med laveste pris. Et
     // [top, bottom)-klipp ville visket ut den nederste linja.
-    RECT rcChart = { left, top, right, bottom + 1 };
+    RECT rcChart = { left, top, edge, bottom + 1 };
     IntersectClipRect(hdc, rcChart.left, rcChart.top, rcChart.right, rcChart.bottom);
 
     // --- Rutenett ---
@@ -1930,7 +1947,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     for (int i = gi0; i <= gi1; ++i) {
         int y = top + (ch * i) / 4;
         MoveToEx(hdc, left, y, NULL);
-        LineTo(hdc, right, y);
+        LineTo(hdc, edge, y);
     }
     SelectObject(hdc, hOldPen);
 
@@ -1992,8 +2009,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // --- Prisetiketter ---
     // Egen lokke etter klippingen, ikke i rutenettlokka: der ville de blitt
     // klippet bort sammen med alt annet utenfor rcChart.
-    // Omega_y-axis: x i [right + AXIS_LBL_GAP, W - AXIS_PAD_R).
-    int axL = right + AXIS_LBL_GAP, axR = W - AXIS_PAD_R;
+    // Omega_y-axis: x i [edge + AXIS_LBL_GAP, W - AXIS_PAD_R).
+    int axL = edge + AXIS_LBL_GAP, axR = W - AXIS_PAD_R;
     SelectObject(hdc, ctx->hFontAxis);
     SetTextColor(hdc, CLR_AXIS);
     // Stempelet for siste pris ligger oppaa etiketten paa samme hoyde (se
@@ -2100,10 +2117,16 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             if (xLast < left)  xLast = left;
             if (xLast > right) xLast = right;
 
+            // Linja gaar fra siste lys helt inn til stempelet, tvers over
+            // luftrommet PLOT_PAD_R lager (fase 15). Den er broen mellom
+            // datapunktet og aksen - uten den ville de to staatt fra hverandre.
             HPEN penLast = lastUp ? ctx->penLastUp : ctx->penLastDown;
             HPEN hOld2 = (HPEN)SelectObject(hdc, penLast);
             MoveToEx(hdc, xLast, yLast, NULL);
-            LineTo(hdc, right, yLast);
+            // edge + 1: LineTo tegner ikke sluttpunktet, saa med edge ville
+            // kolonnen x = edge staatt tom - ett svart hull mellom linja og
+            // stempelet, som begynner paa edge + 1.
+            LineTo(hdc, edge + 1, yLast);
             SelectObject(hdc, hOld2);
 
             // Aksestempelet overskriver rutenettetiketten paa denne hoyden,
@@ -2113,7 +2136,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             // Linja over er geometri og blir staaende i skrivebordsmodus.
             // Stempelet er en presis verdi og hoerer til metadata-laget.
             if (!g_desktopMode) {
-                RECT rcPill = { right + 1, yLast - 8, axR + 3, yLast + 8 };
+                RECT rcPill = { edge + 1, yLast - 8, axR + 3, yLast + 8 };
                 SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
                 FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
@@ -2154,13 +2177,15 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     HPEN hPrev = (HPEN)SelectObject(hdc, ctx->penCross);
     MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, bottom);
-    MoveToEx(hdc, left, hy, NULL);     LineTo(hdc, right, hy);
+    // Samme bro som siste-pris-linja: den vannrette naar aksen, ellers ville
+    // det staatt et hull mellom krysset og etiketten dets.
+    MoveToEx(hdc, left, hy, NULL);     LineTo(hdc, edge, hy);
     SelectObject(hdc, hPrev);
 
     // Prisetikett pa hoyreaksen der pekeren star
     double hp = maxP - ((double)(hy - top) / (double)ch) * range;
     swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
-    RECT rcTag = { right + 1, hy - 8, axR + 3, hy + 8 };
+    RECT rcTag = { edge + 1, hy - 8, axR + 3, hy + 8 };
     FillRect(hdc, &rcTag, ctx->brBoxEdge);
     SelectObject(hdc, ctx->hFontAxis);
     SetTextColor(hdc, CLR_TEXT);
