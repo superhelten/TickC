@@ -25,6 +25,7 @@
 #define ID_TRAY_EXIT     1001
 #define ID_TRAY_RESET    1002
 #define ID_TRAY_DESKTOP  1003   // skrivebordsmodus av/paa (fase 12)
+#define IDM_TOGGLE_AUTOSTART 1004   // start ved paalogging av/paa (fase 13)
 #define TIMER_INTERVAL   3000 // 3 sekunder
 
 // --- Popup / graf ---
@@ -561,6 +562,61 @@ static void SaveDesktopMode(BOOL on) {
     }
     DWORD v = on ? 1 : 0;
     RegSetValueExW(k, L"DesktopMode", 0, REG_DWORD, (const BYTE*)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
+// Start ved paalogging (fase 13). Bor i Run-nokkelen, ikke under REG_PATH:
+// det er Explorer som leser den ved paalogging. Innholdet er stien til exe-en
+// i anforselstegn, saa en sti med mellomrom ikke deles opp til et program og
+// argumenter.
+#define AUTOSTART_KEY   L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+#define AUTOSTART_VALUE L"Ticker"
+
+// Stien i anforselstegn, "C:\Mappe med mellomrom\ticker.exe". FALSE naar
+// stien ikke passer i MAX_PATH - en avkuttet sti skal aldri havne i registret.
+static BOOL AutostartCommand(wchar_t* out, size_t cch) {
+    wchar_t exe[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return FALSE;
+    return swprintf_s(out, cch, L"\"%s\"", exe) > 0;
+}
+
+// Haken i tray-menyen: finnes verdien, uansett type og innhold? Den kan peke
+// et annet sted enn exe-en som kjorer; det avgjor ToggleAutostart.
+static BOOL AutostartPresent(void) {
+    return RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
+                        RRF_RT_ANY, NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+// Klikk paa "Start ved paalogging":
+//   verdi == gjeldende sti -> slett
+//   ingen verdi            -> skriv gjeldende sti
+//   noe annet              -> skriv gjeldende sti (exe-en er flyttet)
+// Siste gren er grunnen til at haken betyr "verdien finnes", ikke "verdien
+// stemmer": et klikk paa en avkrysset, men foreldet, oppforing skal rette
+// stien, ikke skru av autostart.
+static void ToggleAutostart(void) {
+    if (g_isDuplicate) return;
+    wchar_t want[MAX_PATH + 2], have[MAX_PATH + 2];
+    if (!AutostartCommand(want, MAX_PATH + 2)) return;
+    // Feil type, eller for lang til bufferet (ERROR_MORE_DATA), kan umulig
+    // vaere vaar sti og havner i "noe annet".
+    DWORD cb = sizeof(have);
+    BOOL same = RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
+                             RRF_RT_REG_SZ, NULL, have, &cb) == ERROR_SUCCESS &&
+                _wcsicmp(have, want) == 0;
+
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, AUTOSTART_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return;
+    }
+    if (same) {
+        RegDeleteValueW(k, AUTOSTART_VALUE);
+    } else {
+        RegSetValueExW(k, AUTOSTART_VALUE, 0, REG_SZ, (const BYTE*)want,
+                       (DWORD)((wcslen(want) + 1) * sizeof(wchar_t)));
+    }
     RegCloseKey(k);
 }
 
@@ -3384,11 +3440,14 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
 //   [x] Skrivebordsmodus
 //       Standardvisning   Ctrl+0     (graa i skrivebordsmodus)
 //   ---------------------------
+//   [x] Start ved paalogging
+//   ---------------------------
 //       Avslutt Ticker
 //
 // "Standardvisning" er graa, ikke borte, i skrivebordsmodus: den ville gjort
-// flaten om til et 1280x720-vindu inne i WorkerW. Et duplikat faar ikke
-// modusvalget - det eier ikke registret og avsluttes naar panelet lukkes.
+// flaten om til et 1280x720-vindu inne i WorkerW. Et duplikat faar hverken
+// modusvalget eller autostart - det eier ikke registret og avsluttes naar
+// panelet lukkes. Haken for autostart leses fra Run-nokkelen hver gang.
 static HMENU BuildTrayMenu(void) {
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return NULL;
@@ -3399,6 +3458,12 @@ static HMENU BuildTrayMenu(void) {
     AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_GRAYED : MF_ENABLED),
                 ID_TRAY_RESET, L"Standardvisning	Ctrl+0");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    if (!g_isDuplicate) {
+        // \x00e5 er aa: fila er ren ASCII, og cl leser den som CP1252.
+        AppendMenuW(hMenu, MF_STRING | (AutostartPresent() ? MF_CHECKED : MF_UNCHECKED),
+                    IDM_TOGGLE_AUTOSTART, L"Start ved p\x00e5" L"logging");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    }
     AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt Ticker");
     return hMenu;
 }
@@ -3429,6 +3494,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (LOWORD(wParam) == ID_TRAY_DESKTOP) {
                 SetDesktopMode(&g_Ctx, hwnd, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE),
                                !g_desktopMode);
+                return 0;
+            }
+            if (LOWORD(wParam) == IDM_TOGGLE_AUTOSTART) {
+                ToggleAutostart();
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_RESET) {
