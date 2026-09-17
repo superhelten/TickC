@@ -1297,8 +1297,9 @@ tastaturet går til skrivebordet. Samme `BTCPopupClass`, `PopupProc` og
 - `SaveGeometry` skriver ingenting. Tray: venstreklikk gjør ingenting, og
   menyen har bare «Avslutt Ticker».
 - `WM_NCDESTROY` i `PopupProc` nuller `hPopup` og `animRunning` hvis flaten
-  forsvinner uten at vi ba om det, og starter `TIMER_EMBED_ID` (1 s).
-  `TaskbarCreated` legger ikonet inn igjen (i begge modi) og bygger flaten på nytt.
+  forsvinner uten at vi ba om det, og starter `TIMER_EMBED_ID` (250 ms).
+  `TaskbarCreated` legger ikonet inn igjen (i begge modi) og bygger flaten på
+  nytt, men bare hvis den ikke allerede sitter i dagens WorkerW.
 
 **Manifestet er det som gjør flaten synlig.** Forundersøkelsen står i
 planen. Kort fortalt: på 26100 blir et vanlig GDI-barn av WorkerW (eller
@@ -1327,20 +1328,41 @@ ikke et valg mellom to måter å slippe musa gjennom. Uten den vises ingenting.
 | Knapperaden | én farge, ingen glyfer |
 | Skjermbilde | lysene synlige mellom og bak ikonene, pris øverst til venstre |
 | Avslutt via tray-stien | prosessen borte, tapetet tilbake, ingen rester |
-| Ekte omstart av Explorer (etter `2e43190`) | ny flate i ny WorkerW etter **1,1 s**, stående, 14/14 grønne, tray-ikonet tilbake |
+| Ekte omstart av Explorer (etter `1dbc75f`) | ny flate i ny WorkerW etter **566 ms**, stående, 14/14 grønne, tray-ikonet tilbake (`Shell_NotifyIconGetRect` = `S_OK`) |
 
 **Omstart av Explorer**, kjørt med brukerens klarsignal: `Stop-Process -Force`
 på explorer.exe mens `--desktop-mode` kjørte, og `AutoRestartShell = 1` startet
 den igjen. En probe fulgte vindustreet hvert 100. ms:
 
-| Tid | Første kjøring (`56b67b1`) | Andre kjøring (`2e43190`) |
-|---|---|---|
-| 20 ms | gammel flate **borte** (`IsWindow` usann), prosessen lever | samme |
-| ~165 ms | ny explorer.exe | samme |
-| 290–480 ms | ny Progman | samme |
-| ~1,1 s | ny flate i ny WorkerW (timeren) | ny flate i ny WorkerW |
-| ~1,66 s | flaten **revet ned igjen** | — (står) |
-| ~2,68 s | ny flate igjen | — |
+| Tid | 1. kjøring (`56b67b1`, retry 1 s) | 2. kjøring (`2e43190`, retry 1 s) | 3. kjøring (`1dbc75f`, retry 250 ms) |
+|---|---|---|---|
+| ~20 ms | gammel flate **borte** (`IsWindow` usann), prosessen lever | samme | samme |
+| ~160 ms | ny explorer.exe | samme | samme |
+| 285–480 ms | ny Progman | samme | samme |
+| 285 ms | — | — | ny flate laget, venter på `0x052C` |
+| 566 ms | — | — | **flaten i ny WorkerW, står** |
+| ~1,1 s | ny flate i ny WorkerW (timeren) | ny flate i ny WorkerW, står | — |
+| ~1,66 s | flaten **revet ned igjen** | — | — |
+| ~2,68 s | ny flate igjen | — | — |
+
+> 3. kjøring: `SendMessageTimeoutW` til en helt ny Progman brukte ~280 ms før
+> WorkerW fantes. UI-tråden står så lenge, innenfor taket på 1 s. Vinduet er
+> ikke synlig før det sitter i WorkerW.
+
+**Vanlig modus ved omstart av Explorer** (hovedinstans med åpent panel,
+`Shell_NotifyIconGetRect` for ikonet):
+
+| Bygg | Prosess | Panel | Tray-ikon før → etter |
+|---|---|---|---|
+| master `084f724` | lever | lever | `S_OK` → **`E_FAIL`, for godt** |
+| master `bc9e409` | lever | lever | `S_OK` → `S_OK` |
+
+> Et bygg fra før fase 9 **dør ikke** når Explorer startes på nytt, men det
+> mister tray-ikonet, og dermed «Avslutt Ticker». Brukerens instans (pid 30852)
+> var borte etter første omstart, og hendelsesloggen viser ingen krasj. Siden
+> gammelt bygg overlevde omstarten i testen, ble den trolig avsluttet på annen
+> måte, men det er ikke bevist. UI Automation fant ikke ikonet til en ny
+> hovedinstans selv *før* omstart. Bruk `Shell_NotifyIconGetRect`.
 
 > **Windows river ned et barn fra en annen prosess når forelderen dør.**
 > `WM_NCDESTROY` er altså stien som faktisk brukes, og timeren bygget flaten på
@@ -1457,9 +1479,9 @@ start, deretter fem avlesninger med 2 s mellomrom, to runder.
   datahenting klokka på nytt, fordi det levende lyset kan flytte Y-målet:
   målt **23 tikk på 30 sekunder**, mot 1800 om den hadde gått kontinuerlig.
   Den dør altså mellom hentingene — dette er ikke en lekkasje.
-- **Skrivebordsmodus står uten graf i ~1,1 s når Explorer startes på nytt.**
-  Timeren prøver hvert sekund. Tray-ikonet i *vanlig* modus legges også inn
-  igjen nå (`TaskbarCreated`), men det er bare målt i skrivebordsmodus.
+- **Skrivebordsmodus står uten graf i ~0,6 s når Explorer startes på nytt**
+  (målt 566 ms). Det meste er Explorer selv: ny Progman kommer etter ~0,3 s, og
+  WorkerW etter ~0,3 s til.
 - **Skrivebordsmodus: den klassiske WorkerW-grenen er ikke kjørt.** Maskinen
   har 24H2-treet, der WorkerW er barn av Progman.
 - **Skrivebordsmodus dekker bare primærskjermen**, og bare riktig ved 100 %.
