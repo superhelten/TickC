@@ -1432,6 +1432,32 @@ start, deretter fem avlesninger med 2 s mellomrom, to runder.
 > 14: flaten får ingen musemeldinger, og det finnes verken peker- eller
 > hover-tilstand å holde på.
 
+**Skalering over 100 %** (`e070e34`, egen gren `desktop-mode-dpi`), kjørt med
+brukerens klarsignal. Skaleringen på primærskjermen ble endret med
+`DisplayConfigSetDeviceInfo` (type −4, anbefalt 100 %) og satt tilbake til
+100 % i en `finally`. Proben er per-monitor-bevisst og teller fysiske piksler.
+Den tar punkter hvert 37. px der skrivebordet er øverst, og teller hvor mange
+som har flatens bakgrunn `#0D1117`. Nede til høyre ligger lengst fra origo:
+
+| Bygg | Tilfelle | Flatens rekt (fysisk) | Nede til høyre |
+|---|---|---|---|
+| før | 100 % | 3840×1600 | 784 / 791 |
+| før | 100 % → 150 % mens den kjører | 3840×1600 | 204 / 220 |
+| før | **startet ved 150 %** | **2560×1067** | **16 / 220** |
+| etter | 100 % | 3840×1600 | 784 / 791 |
+| etter | 100 % → 150 % mens den kjører | 3840×1600 | 205 / 220 |
+| etter | startet ved 150 % | **3840×1600** | **203 / 220** |
+
+> **Årsak:** en DPI-uvitende prosess får virtualiserte `SM_CXSCREEN`/
+> `SM_CYSCREEN` (2560×1067 ved 150 %), og det var den størrelsen
+> `AttachToDesktop` ga flaten. WorkerW er 3840×1600 fysisk. **Rettelse:**
+> `TogglePopup` setter tråden til `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`
+> rundt `CreateWindowExW` og `AttachToDesktop`, og setter den tilbake
+> umiddelbart. Vinduet beholder konteksten, og `WM_PAINT` kjøres i den, så
+> `GetClientRect` gir fysiske piksler. Resten av prosessen, også vanlig modus,
+> er DPI-uvitende som før. Vindustre-proben ved 100 % etter rettelsen: 14/14.
+> Etter testen: `anbefalt=100% naa=100% systemdpi=96`.
+
 `/W4` rent, x86, 177 KB exe.
 
 ---
@@ -1484,9 +1510,12 @@ start, deretter fem avlesninger med 2 s mellomrom, to runder.
   WorkerW etter ~0,3 s til.
 - **Skrivebordsmodus: den klassiske WorkerW-grenen er ikke kjørt.** Maskinen
   har 24H2-treet, der WorkerW er barn av Progman.
-- **Skrivebordsmodus dekker bare primærskjermen**, og bare riktig ved 100 %.
-  Prosessen er DPI-uvitende, mens Explorer ikke er det. Ved høyere skalering
-  er både størrelse og skarphet utestet.
+- **Skrivebordsmodus dekker bare primærskjermen** (mandatet). Flere skjermer
+  er ikke testet, fordi maskinen har én.
+- **Skrivebordsmodus tegner i fysiske piksler ved skalering over 100 %.**
+  Flaten dekker hele skjermen, men tekst og marger får samme pikselstørrelse
+  som ved 100 %, altså mindre på skjermen. Det følger av at hele layouten er
+  i rå piksler (se *Avviste forslag*, DPI-manifest).
 - **Skrivebordsmodus kobler input-køene sammen.** Et barn av et vindu i en
   annen prosess får Windows til å koble trådenes input (implisitt
   `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
