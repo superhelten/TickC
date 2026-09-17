@@ -102,10 +102,19 @@
 // rcChart.right; rutenettet, den stiplede siste-pris-linja og traadkorset
 // gaar helt inn til rcChart.edge, der stempelet og etikettene begynner. Uten
 // dette kunne kroppen eller veken til siste lys staa klint mot stempelflaten.
+// Gjelder begge modi fra fase 16, da skrivebordet ogsaa fikk stempel.
 #define PLOT_PAD_R       10
 #if PLOT_PAD_R < 8 || PLOT_PAD_R > 12
 #error PLOT_PAD_R skal ligge i [8, 12] px
 #endif
+// Stempelet paa skrivebordet (fase 16). Hoyden folger flatens hoyde, som
+// vannmerket: en 16 px pille er uleselig paa 1600 px, og en fast stor pille
+// ville sprengt en liten flate. Gulv og tak er i enhetspiksler - flaten er
+// per-monitor-bevisst, saa H er allerede fysiske piksler, og den
+// proporsjonale delen skalerer seg selv.
+#define DESK_PILL_DIV    40
+#define DESK_PILL_MIN    16
+#define DESK_PILL_MAX    48
 #if AXIS_PAD_R < 6 || AXIS_PAD_R > 10
 #error AXIS_PAD_R skal ligge i [6, 10] px
 #endif
@@ -231,8 +240,9 @@ typedef struct {
 // Chart-flaten regnes ut to steder (tegning og muse-treff) - de MA
 // vaere enige, ellers peker crosshairet pa feil lys.
 // right/cw er LYSENES flate. edge er aksekanten: stempelet begynner paa
-// edge + 1 og etikettene paa edge + AXIS_LBL_GAP. I skrivebordsmodus er de
-// like - der finnes ingen akse aa holde avstand til.
+// edge + 1 og etikettene paa edge + AXIS_LBL_GAP. Begge modi har luft mellom
+// dem (PLOT_PAD_R); i skrivebordsmodus er margen utenfor edge smalere, fordi
+// den bare rommer stempelet og ingen akseetiketter.
 typedef struct { int left, top, right, bottom, cw, ch, edge; } ChartRect;
 
 typedef struct {
@@ -355,6 +365,8 @@ typedef struct {
     HDC     wmDC;
     HBITMAP wmOldBmp;
     HFONT   hFontWm;
+    HFONT   hFontPill;      // stempelfont i skrivebordsmodus (fase 16)
+    int     pillFontH;      // hoyden hFontPill er bygget for
     int     wmFontH;       // fonthoyden cachen ble bygget for
     int     wmW, wmH;      // storrelsen bitmapen ble bygget for
     int     wmSym, wmIv;   // konfigen den ble bygget for
@@ -1340,16 +1352,41 @@ static BOOL HeaderFits(int rightBound, int leftBound) {
 }
 
 // Felles geometri for tegning og muse-treff.
-// Skrivebordsmodus (fase 14): marginene fantes bare for teksten - header,
-// prisaksens kolonne og tidsbaandet. Uten tekst er de tom flate, og kurven
-// tar hele skjermen. Alt annet folger herfra: vannmerkets sentrering,
-// rutenettet, lysene, klipperegionen og siste-pris-linja.
+// Skrivebordsmodus: header og tidsbaand fantes bare for tekst som ikke lenger
+// tegnes (fase 14), saa topp, bunn og venstre gaar kant til kant. Hoyre side
+// har derimot faatt tilbake en marg (fase 16) - ikke til akseetiketter, men
+// til det ene stempelet med siste pris. Margen er smalere enn panelets fordi
+// den bare skal romme stempelet.
+//
+// Alt annet folger herfra: vannmerkets sentrering, rutenettet, lysene,
+// klipperegionen og siste-pris-linja.
+// Stempelets hoyde, fonthoyde og margbredde i skrivebordsmodus. Rene
+// funksjoner av flatens hoyde: ChartGeometry kalles ogsaa fra treffdeteksjon
+// og panorering, der det ikke finnes noen DC aa maale i.
+static int DeskPillH(int H) {
+    int h = H / DESK_PILL_DIV;
+    if (h < DESK_PILL_MIN) h = DESK_PILL_MIN;
+    if (h > DESK_PILL_MAX) h = DESK_PILL_MAX;
+    return h;
+}
+
+// Samme forhold som i panelet: 16 px stempel rundt en 15 px font.
+static int DeskPillFontH(int H) { return MulDiv(DeskPillH(H), 15, 16); }
+
+// AXIS_CHAR_W er maalt paa em 15. Bredden rundes OPP: en tegnbredde som
+// egentlig er 22,2 px ville gitt aatte tegn 1,6 px for lite, og prisen hadde
+// falt stille tilbake til aksens oppslosning i stedet for to desimaler.
+static int DeskAxisW(int H) {
+    int cw = (DeskPillFontH(H) * AXIS_CHAR_W + 14) / 15;
+    return AXIS_LBL_GAP + AXIS_Y_CHARS * cw + AXIS_PAD_R;
+}
+
 static ChartRect ChartGeometry(int W, int H) {
     ChartRect g;
     g.left   = g_desktopMode ? 0 : PAD_L;
     g.top    = g_desktopMode ? 0 : HEADER_H;
-    g.edge   = g_desktopMode ? W : W - PAD_R;
-    g.right  = g_desktopMode ? g.edge : g.edge - PLOT_PAD_R;
+    g.edge   = g_desktopMode ? W - DeskAxisW(H) : W - PAD_R;
+    g.right  = g.edge - PLOT_PAD_R;
     g.bottom = g_desktopMode ? H : H - PAD_B;
     g.cw     = g.right - g.left;
     g.ch     = g.bottom - g.top;
@@ -1749,6 +1786,20 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     ctx->wmValid = TRUE;
 }
 
+// Stempelfonten for skrivebordsmodus. Bygges bare naar hoyden endrer seg -
+// samme moenster som hFontWm. Et modusbytte beholder H for flaten, saa dette
+// er ikke en per-bilde-kostnad.
+static void EnsurePillFont(AppContext* ctx, int H) {
+    int fh = DeskPillFontH(H);
+    if (ctx->hFontPill && ctx->pillFontH == fh) return;
+    if (ctx->hFontPill) DeleteObject(ctx->hFontPill);
+    ctx->hFontPill = CreateFontW(-fh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                                 L"Lucida Console");
+    ctx->pillFontH = ctx->hFontPill ? fh : 0;
+}
+
 static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     RECT rcAll = { 0, 0, W, H };
     // Vannmerket ligger I bakgrunnen, for rutenett, lys og akser - grafen
@@ -2142,17 +2193,25 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             // slik at det ikke staar to tall oppi hverandre.
             // Flaten faar 3 px luft paa hver side av teksten; teksten selv
             // holder seg innenfor axR.
-            // Linja over er geometri og blir staaende i skrivebordsmodus.
-            // Stempelet er en presis verdi og hoerer til metadata-laget.
-            if (!g_desktopMode) {
-                RECT rcPill = { edge + 1, yLast - 8, axR + 3, yLast + 8 };
+            //
+            // Fase 16: stempelet tegnes i BEGGE modi. Paa skrivebordet er det
+            // den eneste teksten som staar igjen - akseetiketter, tidsakse og
+            // header er fortsatt borte - og hoyden folger flaten i stedet for
+            // panelets faste 16 px.
+            {
+                int half = g_desktopMode ? DeskPillH(H) / 2 : 8;
+                if (g_desktopMode) EnsurePillFont(ctx, H);
+
+                RECT rcPill = { edge + 1, yLast - half, axR + 3, yLast + half };
                 SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
                 FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
                 // "Presis verditekst": to desimaler der de faar plass, ellers
                 // samme oppslosning som aksen. Bredden maales paa den ferdig
                 // formaterte strengen - feil #5 igjen.
-                SelectObject(hdc, ctx->hFontAxis);
+                HFONT fPill = (g_desktopMode && ctx->hFontPill) ? ctx->hFontPill
+                                                                : ctx->hFontAxis;
+                SelectObject(hdc, fPill);
                 int pillDec = 2;
                 swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
                 SIZE psz = { 0, 0 };
@@ -2164,8 +2223,10 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                 }
 
                 // Mork tekst paa den mettede flaten - CLR_TEXT ville druknet.
+                // Flaten er lagdelt med LWA_ALPHA 255, ikke fargenokkel, saa
+                // CLR_BG er en farge her og ikke et hull ut til tapetet.
                 SetTextColor(hdc, CLR_BG);
-                RECT rcPillTxt = { axL, yLast - 8, axR, yLast + 8 };
+                RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
                 DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             }
         }
@@ -3835,6 +3896,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     FreeBackBuffer(&g_Ctx);
 
     if (g_Ctx.nid.hIcon) DestroyIcon(g_Ctx.nid.hIcon);
+    if (g_Ctx.hFontPill) DeleteObject(g_Ctx.hFontPill);
     if (g_Ctx.hFontBig) DeleteObject(g_Ctx.hFontBig);
     if (g_Ctx.hFontSmall) DeleteObject(g_Ctx.hFontSmall);
     if (g_Ctx.hFontAxis) DeleteObject(g_Ctx.hFontAxis);
