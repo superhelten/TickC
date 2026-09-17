@@ -17,17 +17,21 @@ panorering til dobbeltklikk, `R` og `ESC`, og fjerner single-instance-mutexen.
 bak ikonene som barn av WorkerW.
 **Fase 10** lar dobbeltbufferet leve mellom bildene: 5,1 ms mot 11,7 ms ved
 3840×1600, og 1,33 ms mot 1,59 ms ved 1280×720, med samme piksler.
+**Fase 11** deler flaten i graf, priskolonne og tidsbånd. Den legger til
+tidsakse, egen monospace-aksefont (11 px sifre) i #A0AAB8 og et vannmerke med
+alfa som følger vindusbredden.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
 `docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`,
-`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md` og
-`docs/superpowers/plans/2026-09-17-ticker-opptegning.md`. Design:
+`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`,
+`docs/superpowers/plans/2026-09-17-ticker-opptegning.md` og
+`docs/superpowers/plans/2026-09-17-ticker-akser.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~3350 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~3590 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -385,6 +389,10 @@ Bakgrunn og vannmerke bakes sammen i én cachet `HBITMAP` som **erstatter**
 det gamle før den bygger nytt. Feiler bitmapen, faller `DrawChart` tilbake på
 `FillRect` — vannmerket er pynt og skal aldri hindre opptegning.
 
+Fargen er hvit blandet inn med `WatermarkAlpha(W)` =
+`clamp(0,08 · √(W/1920), 0,04, 0,10)` (fase 11). Siden `W` alt er en del av
+cache-nøkkelen, koster alfaen ingenting per bilde.
+
 ### Mål vs. visning — det bærende grepet i del C
 
 `viewStart`/`viewCount` (int, låsebeskyttet) er **målet** og eies som før av
@@ -487,7 +495,11 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
 | `STALE_AFTER` | 9000 | 3 × `TIMER_INTERVAL` = to tapte sykluser |
 | `SYMBOL_COUNT` | 4 | BTC, ETH, SOL, BNB |
 | `INTERVAL_COUNT` | 6 | 1m, 5m, 15m, 1t, 4t, 1d |
-| `CLR_WATERMARK` | `#15191F` | `CLR_BG` + 8 nivåer = ~3,1 % |
+| `CLR_WM_INK` / `WM_ALPHA_*` | hvit / 0,08 · 0,04 · 0,10 | vannmerke, `WatermarkAlpha(W)`, nominelt ved 1920 px (fase 11; erstatter `CLR_WATERMARK` `#15191F`) |
+| `CLR_AXIS` | `#A0AAB8` | pris- og tidsetiketter, 8,05:1 mot `CLR_BG` |
+| `AXIS_Y_W` / `AXIS_PAD_R` / `PAD_R` | 76 / 8 / 84 | priskolonne (4 + 8 tegn × 9 px) / kantsikring / sum |
+| `PAD_B` | 18 | tidsaksens bånd |
+| `TIME_DX_MIN` / `TIME_LBL_GAP` | 80 / 12 | minste etikettavstand = max(80, bredde + 12) |
 | `OVL_ROW_H` / `OVL_COL_W` | 22 / 104 | overlay-rad og kolonnebredde |
 | `ANIM_TAU_VIEW` | 70,0 | tidskonstant view-easing (ms) |
 | `SNAP_PX` | 0,25 | snapp når det gjenstår under en kvart piksel |
@@ -1559,6 +1571,75 @@ avlesninger per runde, to runder:
 
 ---
 
+### Fase 11 — akser, kontrast og tidsakse
+
+Plan og avvik: `docs/superpowers/plans/2026-09-17-ticker-akser.md`. Gren `akser`.
+
+**Endringen:**
+- **Geometri:** `PAD_R` 54 → 84 (priskolonne 76 + kantsikring 8) og `PAD_B`
+  10 → 18 (tidsbånd). All aksetekst leser `axL`/`axR`; de magiske
+  `right + 4`, `W − 4`, `W − 2` og `W − 1` er borte.
+- **Aksefont:** `hFontAxis` = Lucida Console em 15, `ANTIALIASED_QUALITY`.
+  Målt: 11 px sifferhøyde, 9 px tegnbredde, tmHeight 15. Tabellen over andre
+  fonter står i planen. `hFontSmall` er uendret for header, overlay og
+  hover-boks, der `LINE_H = 13` er målt på den.
+- **Aksefarge:** `CLR_AXIS` #A0AAB8, **8,05:1** (spesifikasjonen sa 4,85:1). De
+  gamle aksene i `CLR_DIM` lå på 4,12:1, under AA.
+- **Vannmerke:** `WatermarkAlpha(W)`, se *Vannmerket*.
+- **Tidsakse:** bare tekst, `TimeTickStep` (med tak, ikke gulv — gulv
+  kolliderer, se planens avvik 3), rundet opp med `NiceTimeStep` og forankret i
+  lokal tid via `openTime`. Ingen allokering; O(N_x) per bilde.
+- **Prisetikett under stempelet** tegnes ikke når de ville overlappet (< 16 px).
+
+**Enhetstester** mot funksjonene trukket ut av `ticker.c` med `awk`:
+**572 940 / 572 940**. `WatermarkAlpha` er testet på gulv, nominell bredde, tak,
+W ≤ 0, og monotoni og grenser for alle W fra 1 til 8000. `TimeTickStep` er testet
+på motbeviset mot gulv (M = 9, W = 320 → S = 3), degenererte tilfeller og
+kollisjonsfrihet uttømmende over W_chart 160–4000, Δx 80–118 og dCount 1–1440.
+`NiceTimeStep` avrunder aldri nedover for noe intervall, og treffer forventet
+steg for 1m, 5m, 1t, 4t og 1d.
+
+**Piksler**, `PrintWindow` av `--dup`-instanser (skriver ikke til registret),
+live data:
+
+| Størrelse, par/intervall | α (t) | Vannmerkepiksel funnet | Ikke-BG i `x ≥ W − 5` | Tidsbånd utenfor `[left, right]` | Rad `y = bottom` / `bottom + 1` | Tekstrader i båndet |
+|---|---|---|---|---|---|---|
+| 400×250 BTC 1m | 0,040 (10) | `#161A20` ✓ | 0 | 0 | 306 / 0 | 235–245 (11 px) |
+| 1280×720 BTC 1m | 0,065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
+| 1280×720 BTC 1t | 0,065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
+| 1280×720 BNB 4t | 0,065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
+| 1920×900 ETH 1d | 0,080 (20) | `#1F2329` ✓ | 0 | 0 | 1826 / 0 | 885–895 |
+| 3000×900 SOL 5m | 0,100 (26) | `#25292E` ✓ | 0 | 0 | 2906 / 0 | 885–895 |
+
+Ingen piksler til høyre for `W − 5`. Mellom `W − 8` og `W − 5` ligger bare
+stempelets flate, som får 3 px luft rundt teksten, og aldri tekst. Raden
+`y = bottom` er hel (rutenettet), og `bottom + 1` er tom. Alle
+tekstpiksler i båndet har nøyaktig `#A0AAB8`: Lucida Console i 15 px
+kantutjevnes ikke, heller ikke med `ANTIALIASED_QUALITY`. Avstanden mellom
+etikettene, målt i bildene: 118 px (1m, 1280), 189 px (1t, 2 døgn), 166 px
+(4t, 7 døgn), 170 px (1d, 1920) og 183 px (400×250). Minste luft mellom to
+etiketter er 67 px (4t). Mellomrommet *inne i* `DD.MM HH:MM` er 12 px, og det
+må ikke forveksles med luften mellom to etiketter.
+
+**Opptegning**, QPC rundt `DrawChart`, 400 bilder per kjøring,
+`InvalidateRect` hvert 16. ms, vinduet nesten helt utenfor skjermen, live data,
+master og nytt vekselvis:
+
+| Konfig | Runde 1 master / nytt | Runde 2 | Runde 3 |
+|---|---|---|---|
+| 1280×720 | 1,613 / 1,990 ms | 1,323 / 1,242 ms | 1,325 / 1,289 ms |
+| 3000×1200 | 2,306 / 2,769 ms | 2,663 / 2,611 ms | 2,508 / 2,525 ms |
+
+Runde 1 er oppvarming. Etter den er forskjellen innenfor støyen: ~12–25
+`ExtTextOutW` per bilde er ikke målbare mot resten.
+
+**GDI i hvile** (1280×720, 5 og 8 s etter start): master 29 / 29, nytt
+**30 / 30**. Den ene er `hFontAxis`.
+
+`/W4` rent, x86.
+
+---
+
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
@@ -1621,6 +1702,13 @@ avlesninger per runde, to runder:
   ikke. Det som står i registret fra vanlig modus, brukes.
 - **Over $999 999** klippes ikonteksten (4 sifre får ikke plass på 16 px).
   Trygt — opptegningen er bundet sjekket.
+- **Tidsetiketter popper inn og ut i kantene under panorering** (fase 11).
+  En etikett som ikke får plass innenfor `[left, right]`, tegnes ikke i det hele
+  tatt, i stedet for å klippes midt i et tall.
+- **Fase 11 er ikke pikselverifisert i skrivebordsmodus eller med trådkors.**
+  Begge går gjennom samme `DrawChart`, og pristaggen bruker de samme `axL`/`axR`
+  som stempelet. Men ingen av dem er fanget, fordi det ville flyttet den ekte
+  pekeren eller lagt en flate på skrivebordet.
 - **Historikken er «hva panelet har sett».** Nyåpnet: 5 timer. Åpent en
   arbeidsdag: opp mot 24.
 
