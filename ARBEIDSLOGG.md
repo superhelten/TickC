@@ -27,6 +27,8 @@ registret. **Fase 13** legger «Start ved pålogging» i tray-menyen, med
 `Ticker` i `HKCU\…\Run`. **Fase 14** gjør skrivebordsflaten tekstfri og kant
 til kant: bare kurve, rutenett og vannmerke. **Fase 15** gir lysene 10 px luft
 mot prisaksen og lar den stiplede siste-pris-linja bygge bro over den.
+**Fase 16** setter ett skalert pris-stempel på skrivebordets høyre kant —
+flatens eneste tekst.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -38,7 +40,8 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-modusveksling.md` og
 `docs/superpowers/plans/2026-09-17-ticker-autostart.md` og
 `docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md` og
-`docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md`. Design:
+`docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md` og
+`docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
@@ -1874,6 +1877,45 @@ samme farge). Etter rettelsen: kontakt i 20 av 20 bredder og i 12 av 12 rundt
 **I produksjonsbygget**, lest med `PrintWindow`: **5/5** ved 1280×720. Én rad
 med lysfarge i luftrommet, siste lyspiksel x = 1184 mot kanten 1186, og
 `x = edge` og `edge + 1` begge `0x00FF66`.
+
+---
+
+### Fase 16 — pris-stempel i skrivebordsmodus
+
+Plan og målinger: `docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md`.
+Gren `skrivebordsstempel`.
+
+**Endringen:** skrivebordsflaten har fått tilbake en høyre marg — ikke til
+akseetiketter, men til det ene stempelet med siste pris. `ChartGeometry` setter
+`edge = W - DeskAxisW(H)` i skrivebordsmodus, og `right = edge - PLOT_PAD_R` i
+begge modi. Venstre, topp og bunn er fortsatt kant til kant.
+
+- `DeskPillH(H)` = `H / 40`, klemt til [16, 48]. `DeskPillFontH` er
+  `MulDiv(pillH, 15, 16)` — samme forhold som panelets 16 px stempel rundt en
+  15 px font. `DeskAxisW` runder tegnbredden **opp**; med nedrunding ville åtte
+  tegn fått 6 px for lite, og prisen ville falt stille tilbake til aksens
+  oppløsning.
+- Alle tre er rene funksjoner av `H`, fordi `ChartGeometry` også kalles fra
+  treffdeteksjon og panorering, der det ikke finnes noen DC å måle i.
+- `hFontPill` bufres etter høyde, som `hFontWm`, og frigis med de andre fontene.
+- Stempelet tegnes nå i begge modi. Akseetiketter, tidsakse og header er
+  fortsatt borte fra skrivebordet.
+
+**Fase 14s invariant er endret:** «null alfanumeriske piksler på skrivebordet»
+er nå «nøyaktig ett tekstelement». `CLR_AXIS`, `CLR_TEXT` og `CLR_DIM` er
+fortsatt null — stempelteksten er `CLR_BG` på mettet flate — men rutenettradene
+spenner til `edge`, ikke til `W - 1`.
+
+**Verifisert** med dump av bakbufferet, **15/15**, og panelproben fra fase 15
+fortsatt **11/11**. Ved 3840×1600: stempel 40 px, font 38 px, marg 196 px, så
+`edge` = 3644. Rutenettradene ligger på 400/800/1200 med utstrekning x 0 … 3643.
+Én rad med lysfarge i luftrommet, siste lyspiksel på x = 3618, stempelhøyden
+målt til 40 px i kolonnen `edge + 1`, og teksten innenfor `[3648, 3832)`.
+**GDI/USER 31/14**, uendret gjennom 50 modusbytter.
+
+**Teksten er trygt mørk:** flaten er lagdelt med `LWA_ALPHA 255`, ikke
+fargenøkkel. Med `LWA_COLORKEY` på `CLR_BG` ville sifrene blitt hull ut til
+tapetet.
 
 ---
 
