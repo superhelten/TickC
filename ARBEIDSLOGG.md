@@ -1862,8 +1862,18 @@ nøyaktig **én** rad med lysfarge i luftrommet — den stiplede linja.
 brudd. **GDI/USER 30/14**, uendret gjennom 40 resizer og 40 tittelbytter.
 Skrivebordsmodus uendret, høyeste lyspiksel x = 3839 av 3839.
 
-`PS_DASH` kan i prinsippet ende i et «av»-intervall rett før aksen. Målt over
-**20 panelbredder (640 … 1229 px): kontakt i 20 av 20.**
+**Stiplingen brøt likevel, og ble rettet.** Første versjon tegnet hele linja
+med `PS_DASH` inn til `edge + 1`, og 20 av 20 målte bredder fikk kontakt.
+Målingen var ikke representativ: i produksjonsbygget, ved 1004 px, sto
+`x = edge` på bakgrunnsfargen — mønsteret endte i et «av»-intervall. `PS_DASH`
+gir ingen kontroll over fasen ved linjeslutt. Linja er nå **stiplet over
+dataflaten og heltrukket over luftrommet** (`right → edge + 1`, `DC_PEN` i
+samme farge). Etter rettelsen: kontakt i 20 av 20 bredder og i 12 av 12 rundt
+998 … 1009 px, altså også bredden som brøt. Det er konstruksjon, ikke flaks.
+
+**I produksjonsbygget**, lest med `PrintWindow`: **5/5** ved 1280×720. Én rad
+med lysfarge i luftrommet, siste lyspiksel x = 1184 mot kanten 1186, og
+`x = edge` og `edge + 1` begge `0x00FF66`.
 
 ---
 
@@ -2213,11 +2223,6 @@ Skrivebordsmodus uendret, høyeste lyspiksel x = 3839 av 3839.
     kjøring med 80 menyer fikk ett autostart-klikk for mye, og det lot seg ikke
     gjenskape. Logg tilstanden etter hver blokk, og kjør proben flere ganger
     før du tror på et avvik.
-59. **Siste-pris-stempelet har samme farge som lysene.** Det er fylt med
-    `CLR_UP`/`CLR_DOWN` og dekker `yLast ± 8`. En probe som leter etter
-    «ytterste lyspiksel» måler derfor stempelet, ikke lysene, og fase 15 ga
-    falskt rødt til hele båndet ble utelatt. Prisen inni stempelet er tegnet i
-    `CLR_BG`, så raden er heller ikke heldekket.
 57. **`EnumWindows` finner ikke skrivebordsflaten.** Den er et barn av WorkerW,
     ikke et toppnivåvindu, så en probe som bare enumererer toppnivå ser
     «ingen flate» i skrivebordsmodus — og `GetParent(NULL)` gir 0, som ser ut
@@ -2226,6 +2231,24 @@ Skrivebordsmodus uendret, høyeste lyspiksel x = 3839 av 3839.
 58. **En probe må lese modus fra registret, ikke anta panel.** Appen starter i
     den modusen `DesktopMode` sier. Testen antok panel, mens appen startet i
     skrivebordsmodus, og alle modus-assertene ble speilvendt.
+59. **Siste-pris-stempelet har samme farge som lysene.** Det er fylt med
+    `CLR_UP`/`CLR_DOWN` og dekker `yLast ± 8`. En probe som leter etter
+    «ytterste lyspiksel» måler derfor stempelet, ikke lysene, og fase 15 ga
+    falskt rødt til hele båndet ble utelatt. Prisen inni stempelet er tegnet i
+    `CLR_BG`, så raden er heller ikke heldekket.
+60. **En probe mot panelet må bruke `PrintWindow`, ikke skjermdump.** Et vindu
+    som ligger oppå panelet måles ellers i stedet for panelet, og fase 15 fikk
+    null lyspiksler i luftrommet av den grunn. `PrintWindow(hwnd, dc, 2)` ber
+    vinduet tegne seg selv. Samme lærdom som fallgruve 54, nå på et panel i
+    stedet for skjermbildet.
+61. **Seks sekunder er ikke nok til at lysene er på plass.** En dump tatt for
+    tidlig har bakgrunn, vannmerke og ingen lys, og alle pikselsjekker blir
+    røde uten at noe er galt. Fase 15 traff dette én gang; med 14 sekunder var
+    de samme sjekkene grønne. Vent på data, ikke på klokka.
+62. **PowerShell `[int]` runder, den gulver ikke.** BMP-radlengden
+    `[int]((800 * 3 + 3) / 4) * 4` ga 2404 i stedet for 2400, og bildet ble
+    skjevt og fargeforvridd. Bruk `[Math]::Floor` der C ville brukt
+    heltallsdivisjon.
 
 ---
 

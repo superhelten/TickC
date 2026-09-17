@@ -2117,15 +2117,24 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             if (xLast < left)  xLast = left;
             if (xLast > right) xLast = right;
 
-            // Linja gaar fra siste lys helt inn til stempelet, tvers over
-            // luftrommet PLOT_PAD_R lager (fase 15). Den er broen mellom
-            // datapunktet og aksen - uten den ville de to staatt fra hverandre.
+            // Linja gaar fra siste lys helt inn til stempelet (fase 15).
+            // Stiplet over dataflaten, HELTRUKKET over luftrommet: PS_DASH
+            // ender der monsteret tilfeldigvis staar, og ved 1004 px bredde
+            // landet slutten i et "av"-intervall - maalt som svart hull mot
+            // stempelet. Broen over luftrommet er den ene delen som MAA
+            // treffe, saa den tegnes uten monster.
+            //
+            // edge + 1 fordi LineTo ikke tegner sluttpunktet: uten den ene
+            // pikselen staar kolonnen x = edge tom, og stempelet begynner
+            // foerst paa edge + 1.
             HPEN penLast = lastUp ? ctx->penLastUp : ctx->penLastDown;
             HPEN hOld2 = (HPEN)SelectObject(hdc, penLast);
             MoveToEx(hdc, xLast, yLast, NULL);
-            // edge + 1: LineTo tegner ikke sluttpunktet, saa med edge ville
-            // kolonnen x = edge staatt tom - ett svart hull mellom linja og
-            // stempelet, som begynner paa edge + 1.
+            LineTo(hdc, right, yLast);
+
+            SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
+            MoveToEx(hdc, right, yLast, NULL);
             LineTo(hdc, edge + 1, yLast);
             SelectObject(hdc, hOld2);
 
