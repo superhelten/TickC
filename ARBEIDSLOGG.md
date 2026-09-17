@@ -1777,6 +1777,13 @@ flyttet exe (verdien oppdateres, ikke slettes), casing, usitert sti,
 `CreateProcess`-tolkning og starter riktig exe. **GDI/USER 28/13**, uendret
 gjennom 800 klikk og 80 menyer. En ekte pålogging er ikke testet.
 
+**Etter fletting**, i bygget som ligger i rotmappa og mot den ekte
+Run-nøkkelen: **14/14**. Menyen har riktig rekkefølge og tekst; autostart
+skriver `"C:\Users\sysadmin\Desktop\Ticker\ticker.exe"` og sletter igjen;
+skrivebordsmodus av og på i samme kjøring gir flate i WorkerW → toppnivåpanel →
+flate i WorkerW, med `DesktopMode` 1 → 0 → 1 og «Standardvisning» grå bare i
+skrivebordsmodus. Run-nøkkelen sto uten `Ticker`-verdi før og etter.
+
 ---
 
 ## Kjente begrensninger
@@ -2125,6 +2132,14 @@ gjennom 800 klikk og 80 menyer. En ekte pålogging er ikke testet.
     kjøring med 80 menyer fikk ett autostart-klikk for mye, og det lot seg ikke
     gjenskape. Logg tilstanden etter hver blokk, og kjør proben flere ganger
     før du tror på et avvik.
+57. **`EnumWindows` finner ikke skrivebordsflaten.** Den er et barn av WorkerW,
+    ikke et toppnivåvindu, så en probe som bare enumererer toppnivå ser
+    «ingen flate» i skrivebordsmodus — og `GetParent(NULL)` gir 0, som ser ut
+    som «panel uten forelder». Fire falske feil og én falsk grønn kom av dette.
+    Søk også i barna av `Progman` og `WorkerW` med `EnumChildWindows`.
+58. **En probe må lese modus fra registret, ikke anta panel.** Appen starter i
+    den modusen `DesktopMode` sier. Testen antok panel, mens appen startet i
+    skrivebordsmodus, og alle modus-assertene ble speilvendt.
 
 ---
 
