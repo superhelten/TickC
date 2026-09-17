@@ -1327,12 +1327,31 @@ ikke et valg mellom to måter å slippe musa gjennom. Uten den vises ingenting.
 | Knapperaden | én farge, ingen glyfer |
 | Skjermbilde | lysene synlige mellom og bak ikonene, pris øverst til venstre |
 | Avslutt via tray-stien | prosessen borte, tapetet tilbake, ingen rester |
-| `TaskbarCreated` postet | flaten revet ned (0 etter 300 ms), ny flate i WorkerW etter ~1 s, 13/14 over grønne |
+| Ekte omstart av Explorer (etter `2e43190`) | ny flate i ny WorkerW etter **1,1 s**, stående, 14/14 grønne, tray-ikonet tilbake |
 
-> Den fjortende etter `TaskbarCreated` var `WindowFromPoint`, med **0**
-> synlige skrivebordspunkter: et Chrome-vindu dekket da hele den delen av
-> skjermen hvor skrivebordet ellers var synlig. `WM_NCHITTEST` (−1 overalt) er
-> uavhengig av det. Explorer er **ikke** startet på nytt for alvor.
+**Omstart av Explorer**, kjørt med brukerens klarsignal: `Stop-Process -Force`
+på explorer.exe mens `--desktop-mode` kjørte, og `AutoRestartShell = 1` startet
+den igjen. En probe fulgte vindustreet hvert 100. ms:
+
+| Tid | Første kjøring (`56b67b1`) | Andre kjøring (`2e43190`) |
+|---|---|---|
+| 20 ms | gammel flate **borte** (`IsWindow` usann), prosessen lever | samme |
+| ~165 ms | ny explorer.exe | samme |
+| 290–480 ms | ny Progman | samme |
+| ~1,1 s | ny flate i ny WorkerW (timeren) | ny flate i ny WorkerW |
+| ~1,66 s | flaten **revet ned igjen** | — (står) |
+| ~2,68 s | ny flate igjen | — |
+
+> **Windows river ned et barn fra en annen prosess når forelderen dør.**
+> `WM_NCDESTROY` er altså stien som faktisk brukes, og timeren bygget flaten på
+> nytt før `TaskbarCreated` kom. I første kjøring rev `TaskbarCreated` ned den
+> ferske flaten, og skrivebordet sto uten graf i ett sekund til. Rettet i
+> `2e43190` (egen gren, `desktop-mode-explorer-restart`): flaten rives nå bare
+> ned hvis forelderen ikke er dagens WorkerW. Etter omstarten fant
+> UI Automation `BTC/USDT: $76274.09` i `Shell_TrayWnd`, der ingen annen
+> `ticker.exe` kjørte. Etter rettelsen ville et postet `TaskbarCreated` ikke
+> lenger rive ned noe, så den tidligere testen med postet melding er ikke
+> kjørt på nytt.
 
 **Vanlig modus med manifestet**, nytt bygg mot master, samme `--dup`-geometri:
 stil `0x94070000` og exstil `0x00000100` i begge. Toppnivå, samme rekt, samme
@@ -1438,11 +1457,9 @@ start, deretter fem avlesninger med 2 s mellomrom, to runder.
   datahenting klokka på nytt, fordi det levende lyset kan flytte Y-målet:
   målt **23 tikk på 30 sekunder**, mot 1800 om den hadde gått kontinuerlig.
   Den dør altså mellom hentingene — dette er ikke en lekkasje.
-- **Skrivebordsmodus: ekte omstart av Explorer er ikke testet.** Stien
-  (`WM_NCDESTROY` → timer, `TaskbarCreated` → ny flate) er kjørt med postet
-  `TaskbarCreated`, ikke med en WorkerW som faktisk forsvant. Om Windows
-  river ned et barn fra en annen prosess når forelderen dør, er ikke målt.
-  Begge tilfellene er håndtert.
+- **Skrivebordsmodus står uten graf i ~1,1 s når Explorer startes på nytt.**
+  Timeren prøver hvert sekund. Tray-ikonet i *vanlig* modus legges også inn
+  igjen nå (`TaskbarCreated`), men det er bare målt i skrivebordsmodus.
 - **Skrivebordsmodus: den klassiske WorkerW-grenen er ikke kjørt.** Maskinen
   har 24H2-treet, der WorkerW er barn av Progman.
 - **Skrivebordsmodus dekker bare primærskjermen**, og bare riktig ved 100 %.
@@ -1670,6 +1687,11 @@ start, deretter fem avlesninger med 2 s mellomrom, to runder.
     blir liggende etter at prosessen er avsluttet. Det er ufarlig, og tapetet
     ser likt ut, men treet er ikke det samme som før første kjøring. En probe
     som ser «før»-tilstanden, må kjøre før noe har sendt meldingen.
+47. **En postet `TaskbarCreated` er ikke en omstart av Explorer.** Den postede
+    meldingen kommer med WorkerW intakt. Ved en ekte omstart er flaten allerede
+    borte og gjenoppbygget før meldingen kommer. Testen med postet melding var
+    grønn og skjulte en dobbel gjenoppbygging som bare den ekte omstarten
+    avslørte (fase 9).
 
 ---
 
