@@ -2972,16 +2972,30 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         DWORD style = g_desktopMode
             ? WS_POPUP
             : (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+
+        // Skrivebordsflaten lages per-monitor-bevisst, resten av prosessen er
+        // fortsatt DPI-uvitende. Maalt ved 150 %: uten dette ga
+        // SM_CXSCREEN/SM_CYSCREEN virtualiserte 2560x1067, og flaten dekket
+        // bare det oevre venstre hjoernet av en WorkerW paa 3840x1600 fysiske
+        // piksler. Et vindu laget i denne konteksten beholder den, og
+        // WM_PAINT kjoeres i vinduets kontekst - GetClientRect gir da fysiske
+        // piksler, og layouten tegnes 1:1 i raa piksler som ved 100 %.
+        // Konteksten settes tilbake straks flaten er plassert.
+        DPI_AWARENESS_CONTEXT prevDpi = g_desktopMode
+            ? SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+            : NULL;
         HWND hp = CreateWindowExW(
             0,
             L"BTCPopupClass", L"BTC Chart",
             style,
             0, 0, POPUP_W, POPUP_H,
             NULL, NULL, hInst, NULL);
+        BOOL attached = hp && g_desktopMode && AttachToDesktop(hp);
+        if (prevDpi) SetThreadDpiAwarenessContext(prevDpi);
         if (!hp) return;
 
         if (g_desktopMode) {
-            if (!AttachToDesktop(hp)) {
+            if (!attached) {
                 // Ingen WorkerW (Explorer starter, eller kjorer ikke). hPopup
                 // er ikke satt, saa WM_NCDESTROY lar timeren vaere - den
                 // settes her.
