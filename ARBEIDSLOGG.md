@@ -1827,6 +1827,13 @@ beviset på full flate — mot 44, 208, 373, 537, 702 og x 10 … 1195 i panelet
 Tom buffer gir 0 `CLR_DIM`-piksler på skrivebordet og 134 i panelet.
 **GDI/USER 30/14**, uendret gjennom 50 modusbytter.
 
+**Etter fletting**, med produksjonsbygget i drift på ekte skjerm: flaten ligger
+i WorkerW, 3840×1600, og et utsnitt på 2400×1000 av skrivebordet har 0
+`CLR_AXIS`- og 0 `CLR_DIM`-piksler, med 25 210 piksler rutenett og lys. Ett
+`CLR_TEXT`-treff dukket opp i én av tre kjøringer; `WindowFromPoint` viste at
+det tilhørte et `XamlWindow`, ikke tickerflaten (fallgruve 54 igjen, nå på en
+enkelt piksel). Tray-menyen har fortsatt alle seks punktene.
+
 ---
 
 ## Kjente begrensninger
