@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -79,7 +80,25 @@
 
 // Layout innenfor popup-vinduet
 #define PAD_L            10
-#define PAD_R            54
+// Hoyre marg = prisaksens kolonne (AXIS_Y_W) + kantsikring (AXIS_PAD_R).
+// Aksetekst begynner paa rcChart.right + AXIS_LBL_GAP og slutter senest paa
+// W - AXIS_PAD_R. Kolonnen har plass til AXIS_Y_CHARS tegn i aksefonten, som
+// er monospace: 8 x 9 px = 72, akkurat "75812.34" (maalt, Lucida Console
+// em 15). Bredden er FAST, ikke maalt paa etikettene: PriceDecimals kan skifte
+// midt i Y-easingen, og en marg som fulgte teksten ville latt hele grafen
+// rykke sideveis mens prisaksen glir.
+//
+// AXIS_PAD_R holder seg ogsaa over RESIZE_BORDER, saa ingen siffer staar i
+// sonen der pekeren blir en storrelsespil.
+#define AXIS_Y_CHARS     8
+#define AXIS_CHAR_W      9
+#define AXIS_LBL_GAP     4
+#define AXIS_Y_W         (AXIS_LBL_GAP + AXIS_Y_CHARS * AXIS_CHAR_W)
+#define AXIS_PAD_R       8
+#define PAD_R            (AXIS_Y_W + AXIS_PAD_R)
+#if AXIS_PAD_R < 6 || AXIS_PAD_R > 10
+#error AXIS_PAD_R skal ligge i [6, 10] px
+#endif
 #define HEADER_H         44
 // rcChart.top = HEADER_H. Grafen skal aldri kunne krype opp i headerteksten
 // eller kontrollknappene (de slutter paa BTN_TOP + BTN_H = 24), saa et gulv
@@ -103,7 +122,16 @@
 // Minste luft mellom to headertekster paa samme rad, og mellom tekst og
 // knapperaden.
 #define HDR_GAP          8
-#define PAD_B            10
+// Bunnmargen er tidsaksens baand, ikke luft. Aksefonten er 15 px hoy
+// (tmHeight), saa 18 px gir tekst fra bottom + 2 til bottom + 17 = H - 1 uten
+// aa beroere raden y = bottom, der den laveste veken og nederste
+// rutenettlinje staar (klippet er inklusivt der, se DrawChart).
+#define PAD_B            18
+// Minste avstand mellom to tidsetiketter. Brukes som
+// max(TIME_DX_MIN, etikettbredde + TIME_LBL_GAP): "DD.MM HH:MM" er 99 px i
+// aksefonten, bredere enn 80, og ville ellers kollidert paa 1t og 4t.
+#define TIME_DX_MIN      80
+#define TIME_LBL_GAP     12
 
 // Palett (matcher tray-ikonet)
 #define CLR_BG           RGB(0x0D, 0x11, 0x17)
@@ -117,7 +145,18 @@
 #define CLR_BOXEDGE      RGB(0x33, 0x3D, 0x4B)
 #define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)   // rod bakgrunn paa krysset
 #define CLR_BTNHOT       RGB(0xFF, 0xFF, 0xFF)   // glyf paa rod bakgrunn
-#define CLR_WATERMARK    RGB(0x15, 0x19, 0x1F)   // CLR_BG + ~3 %
+// Aksetekst: 8,05:1 mot CLR_BG (WCAG AA krever 4,5:1 for liten tekst).
+// CLR_DIM, som aksene brukte foer, gir 4,12:1. Bare aksene - CLR_DIM styrer
+// ogsaa knapper, header og overlay, og de er ikke en del av denne endringen.
+#define CLR_AXIS         RGB(0xA0, 0xAA, 0xB8)
+// Vannmerket blandes mot hvitt med alfa fra WatermarkAlpha(W). Hvitt fordi
+// den gamle faste fargen #15191F var noytral: CLR_BG + 8 i alle kanaler,
+// altsaa ~3,3 % mot hvitt.
+#define CLR_WM_INK       RGB(0xFF, 0xFF, 0xFF)
+#define WM_ALPHA_BASE    0.08
+#define WM_ALPHA_MIN     0.04
+#define WM_ALPHA_MAX     0.10
+#define WM_W_NOMINAL     1920.0
 // Vannmerkets fonthoyde = klemt(chart-hoyde / 5, 32, 120), grensene i
 // logiske piksler.
 #define WM_FONT_DIV      5
@@ -214,6 +253,10 @@ typedef struct {
 
     HFONT hFontBig;
     HFONT hFontSmall;
+    // Pris- og tidsaksen. Monospace, saa etikettene staar stille naar
+    // sifrene skifter, og AXIS_Y_W kan regnes i tegn. Graaskala-kantutjevning
+    // (ANTIALIASED_QUALITY), ikke ClearType: ingen fargefransing paa tall.
+    HFONT hFontAxis;
 
     int hoverIdx;        // indeks til lyset under pekeren, -1 = ingen
     int hoverY;          // muse-Y i klientkoordinater
@@ -361,6 +404,56 @@ static double AnimStep(double cur, double target, double dt, double tau, double 
     cur += (target - cur) * (1.0 - exp(-dt / tau));
     if (fabs(target - cur) < snap) cur = target;
     return cur;
+}
+
+// Vannmerkets alfa som funksjon av vindusbredden:
+//   clamp(WM_ALPHA_BASE * sqrt(W / WM_W_NOMINAL), WM_ALPHA_MIN, WM_ALPHA_MAX)
+// W er klientbredden i enhetspiksler. Med 400 px (minstebredden) gir formelen
+// 0,037 og gulvet tar over; ved 1280 er den 0,065; over 3000 px tar taket.
+static double WatermarkAlpha(int W) {
+    if (W <= 0) return WM_ALPHA_MIN;
+    double a = WM_ALPHA_BASE * sqrt((double)W / WM_W_NOMINAL);
+    if (a < WM_ALPHA_MIN) a = WM_ALPHA_MIN;
+    if (a > WM_ALPHA_MAX) a = WM_ALPHA_MAX;
+    return a;
+}
+
+// Steglengde S (i lys) mellom tidsetikettene.
+//   N = floor(chartW / minDx),  M = ceil(dispCount),
+//   S = max(1, ceil((M - 1) / (N - 1)))
+// CEIL, ikke floor: med floor gir M = 9, chartW = 320, minDx = 80 S = 2 og
+// 71 px mellom etikettene - kollisjon. Med ceil er avstanden S * chartW /
+// dispCount >= minDx for alle M og N >= 2 (M >= N: (M-1)N >= (N-1)M; M < N:
+// S = 1 og ett lys er alt bredere enn minDx). N < 2 gir en etikett.
+static int TimeTickStep(double dispCount, int chartW, int minDx) {
+    if (dispCount < 1.0) dispCount = 1.0;
+    if (chartW <= 0 || minDx <= 0) return 1;
+    int m = (int)ceil(dispCount);
+    int nx = chartW / minDx;
+    if (nx < 2) return (m > 1) ? m : 1;
+    int s = (m - 1 + (nx - 1) - 1) / (nx - 1);
+    return (s < 1) ? 1 : s;
+}
+
+// Runder S opp til et steg som er et helt antall lys OG et rundt tidsrom
+// (5 min, 15 min, 1 t, 6 t, 1 d ...). TimeTickStep alene gir S = 23 paa 300
+// 1m-lys ved 1280 px, altsaa etiketter paa 02:48, 03:11, 03:34 (sett i
+// PrintWindow). Oppover-avrunding kan bare gjore avstanden STORRE, saa
+// kollisjonsgarantien i TimeTickStep holder. Er S storre enn tabellen,
+// brukes S som den er.
+static int NiceTimeStep(int step, long long intervalMs) {
+    static const long long NICE_MIN[] = {
+        1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
+        1440, 2 * 1440, 3 * 1440, 7 * 1440, 14 * 1440, 28 * 1440,
+    };
+    if (step < 1) step = 1;
+    if (intervalMs <= 0) return step;
+    for (int i = 0; i < (int)(sizeof(NICE_MIN) / sizeof(NICE_MIN[0])); ++i) {
+        long long ms = NICE_MIN[i] * 60000LL;
+        if (ms % intervalMs != 0) continue;
+        if (ms / intervalMs >= step) return (int)(ms / intervalMs);
+    }
+    return step;
 }
 
 // Eksponentiell backoff med jitter. 3s, 6s, 12s, 24s, 48s, deretter tak paa
@@ -1468,7 +1561,11 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     FillRect(ctx->wmDC, &rc, ctx->brBg);
 
     SetBkMode(ctx->wmDC, TRANSPARENT);
-    SetTextColor(ctx->wmDC, CLR_WATERMARK);
+    // Alfa folger W, og W er alt en del av cache-noekkelen over - fargen
+    // regnes derfor bare ut naar bitmapen bygges. Alt under er ugjennomsiktig
+    // CLR_BG, saa Blend mot bakgrunnen ER alfablending.
+    SetTextColor(ctx->wmDC, Blend(CLR_BG, CLR_WM_INK,
+                                  (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
 
     ChartRect g = ChartGeometry(W, H);
 
@@ -1614,7 +1711,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // Rad 1 (y 10-30): pris til venstre, prosent og knapperad til hoyre.
     // Rad 2 (y 28-42): symbollinja til venstre. Til hoyre ligger ikke
     // knappene (de slutter paa y = 24), men prisaksens overste etikett, som
-    // staar paa y = top +- 8 fra x = right + 4.
+    // staar paa y = top +- 8 fra x = right + AXIS_LBL_GAP.
     RECT strip;
     ButtonStrip(W, &strip);
     int btnLeft = strip.left;          // X_left_bound for knapperaden
@@ -1675,7 +1772,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     int lenSub = (int)wcslen(buf);
     SIZE szSub = { 0, 0 };
     GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
-    int subLimit = (g.right + 4) - HDR_GAP;   // X_left_bound for aksetiketten
+    int subLimit = (g.right + AXIS_LBL_GAP) - HDR_GAP;   // X_left_bound for aksetiketten
     RECT rcSub = { PAD_L, 28, subLimit, 42 };
     UINT subFlags = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
     if (!HeaderFits(PAD_L + szSub.cx, subLimit + HDR_GAP)) subFlags |= DT_END_ELLIPSIS;
@@ -1785,14 +1882,82 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // --- Prisetiketter ---
     // Egen lokke etter klippingen, ikke i rutenettlokka: der ville de blitt
     // klippet bort sammen med alt annet utenfor rcChart.
-    SelectObject(hdc, ctx->hFontSmall);
-    SetTextColor(hdc, CLR_DIM);
+    // Omega_y-axis: x i [right + AXIS_LBL_GAP, W - AXIS_PAD_R).
+    int axL = right + AXIS_LBL_GAP, axR = W - AXIS_PAD_R;
+    SelectObject(hdc, ctx->hFontAxis);
+    SetTextColor(hdc, CLR_AXIS);
+    // Stempelet for siste pris ligger oppaa etiketten paa samme hoyde (se
+    // under). Begge er 16 px hoye, og med 11 px sifre ble en etikett som laa
+    // under 16 px unna halvt dekket, med et avkuttet tall synlig under. En
+    // etikett som ville kollidert, tegnes derfor ikke. Samme regel og samme
+    // yLast som stempelet.
+    int yPill = INT_MIN;
+    {
+        double lp = ctx->candles[n - 1].close;
+        int yl = top + (int)(((maxP - lp) / range) * ch);
+        if (yl >= top && yl <= bottom) yPill = yl;
+    }
     for (int i = 0; i <= 4; ++i) {
         int y = top + (ch * i) / 4;
+        if (yPill != INT_MIN && abs(y - yPill) < 16) continue;
         double p = maxP - (range * i) / 4.0;
         swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
-        RECT rcLbl = { right + 4, y - 8, W - 4, y + 8 };
+        RECT rcLbl = { axL, y - 8, axR, y + 8 };
         DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
+
+    // --- Tidsakse (Omega_x-axis) ---
+    // Bare tekst, ingen akselinje. Etikettene staar under lysets midtpunkt i
+    // baandet [bottom + 2, H - 1], og aldri utenfor [left, right]: under
+    // hoyre kolonne ligger prisaksens nederste etikett og stempelet.
+    //
+    // Hvilke lys som faar etikett, forankres i TIDEN, ikke i indeksen i0.
+    // Relativt til i0 ville etikettene hoppe til nye lys i hvert bilde av en
+    // panorering; relativt til absolutt indeks ville de hoppe ett lys hver
+    // gang et lys kastes ut i front naar bufferet er fullt. openTime /
+    // intervalMs er stabil gjennom begge.
+    //
+    // O(antall etiketter): ett modulo for aa finne foerste etikett, deretter
+    // steg paa S rett i candles[]. Ingen allokering.
+    if (i0 < i1) {
+        wchar_t tl[24];
+        FormatCandleTime(ctx->candles[i0].openTime,
+                         ctx->intervalMs, tl, 24);
+        int tlLen = (int)wcslen(tl);
+        SIZE tsz = { 0, 0 };
+        GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // aksefonten er valgt
+        int minDx = tsz.cx + TIME_LBL_GAP;
+        if (minDx < TIME_DX_MIN) minDx = TIME_DX_MIN;
+        long long iv = (ctx->intervalMs > 0) ? ctx->intervalMs : 60000LL;
+        int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
+
+        // Forankret i LOKAL tid, saa 6 t-steg lander paa 00, 06, 12 og 18
+        // her og ikke paa 02, 08 ... (UTC + 2 om sommeren). Forskyvningen
+        // leses paa i0; et sommertidsskifte midt i utsnittet flytter bare
+        // etikettene en time.
+        long long t0 = ctx->candles[i0].openTime, tzMs = 0;
+        {
+            ULONGLONG ft = (ULONGLONG)(t0 / 1000) * 10000000ULL + 116444736000000000ULL;
+            FILETIME fu, fl;
+            fu.dwLowDateTime  = (DWORD)(ft & 0xFFFFFFFFULL);
+            fu.dwHighDateTime = (DWORD)(ft >> 32);
+            if (FileTimeToLocalFileTime(&fu, &fl)) {
+                ULONGLONG lt = ((ULONGLONG)fl.dwHighDateTime << 32) | fl.dwLowDateTime;
+                tzMs = ((long long)lt - (long long)ft) / 10000LL;
+            }
+        }
+        long long slotNo = (t0 + tzMs) / iv;
+        int rem = (int)(slotNo % step);
+        int k = i0 + ((rem == 0) ? 0 : (step - rem));
+
+        UINT oldAlign = SetTextAlign(hdc, TA_CENTER | TA_TOP);
+        for (; k < i1; k += step) {
+            int x = left + (int)(((double)k - dStart + 0.5) * slot);
+            if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
+            FormatCandleTime(ctx->candles[k].openTime, ctx->intervalMs, tl, 24);
+            ExtTextOutW(hdc, x, bottom + 2, 0, NULL, tl, (int)wcslen(tl), NULL);
+        }
+        SetTextAlign(hdc, oldAlign);
     }
 
     // --- Siste pris: stiplet linje + aksestempel ---
@@ -1829,18 +1994,20 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
             // Aksestempelet overskriver rutenettetiketten paa denne hoyden,
             // slik at det ikke staar to tall oppi hverandre.
-            RECT rcPill = { right + 1, yLast - 8, W - 1, yLast + 8 };
+            // Flaten faar 3 px luft paa hver side av teksten; teksten selv
+            // holder seg innenfor axR.
+            RECT rcPill = { right + 1, yLast - 8, axR + 3, yLast + 8 };
             SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
             FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
             // "Presis verditekst": to desimaler der de faar plass, ellers
             // samme oppslosning som aksen. Bredden maales paa den ferdig
             // formaterte strengen - feil #5 igjen.
-            SelectObject(hdc, ctx->hFontSmall);
+            SelectObject(hdc, ctx->hFontAxis);
             int pillDec = 2;
             swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
             SIZE psz = { 0, 0 };
-            int pillAvail = (W - 1) - (right + 4) - 2;
+            int pillAvail = axR - axL;
             if (GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &psz) &&
                 psz.cx > pillAvail) {
                 pillDec = PriceDecimals(range / 4.0);
@@ -1849,7 +2016,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
             // Mork tekst paa den mettede flaten - CLR_TEXT ville druknet.
             SetTextColor(hdc, CLR_BG);
-            RECT rcPillTxt = { right + 4, yLast - 8, W - 2, yLast + 8 };
+            RECT rcPillTxt = { axL, yLast - 8, axR, yLast + 8 };
             DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
     }
@@ -1875,14 +2042,16 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // Prisetikett pa hoyreaksen der pekeren star
     double hp = maxP - ((double)(hy - top) / (double)ch) * range;
     swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
-    RECT rcTag = { right + 1, hy - 8, W - 1, hy + 8 };
+    RECT rcTag = { right + 1, hy - 8, axR + 3, hy + 8 };
     FillRect(hdc, &rcTag, ctx->brBoxEdge);
-    SelectObject(hdc, ctx->hFontSmall);
+    SelectObject(hdc, ctx->hFontAxis);
     SetTextColor(hdc, CLR_TEXT);
-    RECT rcTagTxt = { right + 4, hy - 8, W - 2, hy + 8 };
+    RECT rcTagTxt = { axL, hy - 8, axR, hy + 8 };
     DrawTextW(hdc, buf, -1, &rcTagTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    // Hover-boks med tid + OHLC
+    // Hover-boks med tid + OHLC. Tilbake til den vanlige lille fonten:
+    // LINE_H = 13 er maalt paa den, og aksefonten er 15 px hoy.
+    SelectObject(hdc, ctx->hFontSmall);
     wchar_t tbuf[24];
     FormatCandleTime(hc->openTime, ctx->intervalMs, tbuf, 24);
 
@@ -3260,6 +3429,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    // Maalt med GetGlyphOutlineW(GGO_METRICS) paa '0': Lucida Console em 15
+    // gir 11 px sifferhoyde, 9 px tegnbredde og tmHeight 15. Consolas hopper
+    // fra 10 til 12 px (em 16 -> 17), Cascadia Mono em 16 gir 11 px men
+    // tmHeight 21, som ikke faar plass i tidsaksens 18 px.
+    g_Ctx.hFontAxis = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                                  L"Lucida Console");
     // hFontWm lages ikke her: hoyden avhenger av panelstorrelsen, saa den
     // bygges i EnsureWatermark og bare naar hoyden endrer seg.
 
@@ -3383,6 +3560,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (g_Ctx.nid.hIcon) DestroyIcon(g_Ctx.nid.hIcon);
     if (g_Ctx.hFontBig) DeleteObject(g_Ctx.hFontBig);
     if (g_Ctx.hFontSmall) DeleteObject(g_Ctx.hFontSmall);
+    if (g_Ctx.hFontAxis) DeleteObject(g_Ctx.hFontAxis);
 
     DeleteObject(g_Ctx.penGrid);  DeleteObject(g_Ctx.penCross);
     DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brBox);
