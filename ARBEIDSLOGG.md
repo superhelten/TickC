@@ -25,7 +25,8 @@ grafen ved hvert fokusbytte og tittelbytte. **Fase 12** bytter mellom panel og
 skrivebordsmodus fra tray-menyen mens prosessen kjører, og husker valget i
 registret. **Fase 13** legger «Start ved pålogging» i tray-menyen, med
 `Ticker` i `HKCU\…\Run`. **Fase 14** gjør skrivebordsflaten tekstfri og kant
-til kant: bare kurve, rutenett og vannmerke.
+til kant: bare kurve, rutenett og vannmerke. **Fase 15** gir lysene 10 px luft
+mot prisaksen og lar den stiplede siste-pris-linja bygge bro over den.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -36,7 +37,8 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md`,
 `docs/superpowers/plans/2026-09-17-ticker-modusveksling.md` og
 `docs/superpowers/plans/2026-09-17-ticker-autostart.md` og
-`docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md`. Design:
+`docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md` og
+`docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
@@ -1836,6 +1838,35 @@ enkelt piksel). Tray-menyen har fortsatt alle seks punktene.
 
 ---
 
+### Fase 15 — luft mot aksen og prislinja som bro
+
+Plan og målinger: `docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md`.
+Gren `prislinje-offset`.
+
+**Endringen:** `ChartRect` skiller nå mellom `right`/`cw` (lysenes flate) og
+`edge` (aksekanten, der stempelet og etikettene begynner). `PLOT_PAD_R` = 10 px
+er luftrommet mellom dem, med `#error`-vakt på [8, 12]. Rutenettet,
+klipperegionen, den stiplede siste-pris-linja og trådkorsets vannrette linje går
+til `edge`; lysene stopper på `right`, fordi `slot` regnes av `cw`. Alt som
+mapper x ↔ lysindeks leser `cw` og følger med uten egne endringer. I
+skrivebordsmodus er `right == edge`: der finnes ingen akse.
+
+**Linja tegnes til `edge + 1`.** `LineTo` tegner ikke sluttpunktet, så med
+`edge` sto kolonnen `x = edge` tom — ett svart hull mellom linja og stempelet.
+Pikselmålingen fanget det; øyet gjorde det ikke.
+
+**Verifisert** med dump av bakbufferet, **11/11** ved 1280×720: `right` = 1186,
+`edge` = 1196, siste lyspiksel utenom stempelbåndet på **x = 1184**, og
+nøyaktig **én** rad med lysfarge i luftrommet — den stiplede linja.
+`x = edge` og `x = edge + 1` er begge `0x00FF66`: linja møter stempelet uten
+brudd. **GDI/USER 30/14**, uendret gjennom 40 resizer og 40 tittelbytter.
+Skrivebordsmodus uendret, høyeste lyspiksel x = 3839 av 3839.
+
+`PS_DASH` kan i prinsippet ende i et «av»-intervall rett før aksen. Målt over
+**20 panelbredder (640 … 1229 px): kontakt i 20 av 20.**
+
+---
+
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
@@ -2182,6 +2213,11 @@ enkelt piksel). Tray-menyen har fortsatt alle seks punktene.
     kjøring med 80 menyer fikk ett autostart-klikk for mye, og det lot seg ikke
     gjenskape. Logg tilstanden etter hver blokk, og kjør proben flere ganger
     før du tror på et avvik.
+59. **Siste-pris-stempelet har samme farge som lysene.** Det er fylt med
+    `CLR_UP`/`CLR_DOWN` og dekker `yLast ± 8`. En probe som leter etter
+    «ytterste lyspiksel» måler derfor stempelet, ikke lysene, og fase 15 ga
+    falskt rødt til hele båndet ble utelatt. Prisen inni stempelet er tegnet i
+    `CLR_BG`, så raden er heller ikke heldekket.
 57. **`EnumWindows` finner ikke skrivebordsflaten.** Den er et barn av WorkerW,
     ikke et toppnivåvindu, så en probe som bare enumererer toppnivå ser
     «ingen flate» i skrivebordsmodus — og `GetParent(NULL)` gir 0, som ser ut
