@@ -292,9 +292,9 @@ typedef struct {
     // --- Vannmerke-cache ---
     // Bakgrunn + vannmerke bakt sammen i en bitmap. Denne ERSTATTER dagens
     // FillRect - den legger ikke til et steg. En DrawTextW med stor font
-    // koster 0,05-0,30 ms og hoerer ikke hjemme per bilde. Maalt med
-    // vedvarende buffer: tegnet per bilde kostet vannmerket 0,50-0,53 ms ved
-    // 1280x720, mot 0,24-0,27 ms for bliten.
+    // koster 0,05-0,30 ms og hoerer ikke hjemme per bilde. Proevd paa nytt
+    // sammen med det vedvarende bufferet: tegnet per bilde kostet vannmerket
+    // 0,50-0,53 ms ved 1280x720, mot ~0,28 ms for bliten (maalt).
     HBITMAP wmBmp;
     HDC     wmDC;
     HBITMAP wmOldBmp;
@@ -1742,9 +1742,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     if (i1 > n) i1 = n;
 
     // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
-    // stedet for fire egne penner og pensler. Det er to GDI-haandtak mindre i
-    // hvile, og de gir plass til det vedvarende bufferet uten at tallet
-    // stiger. Heltrukket 1 px i begge tilfeller, saa pikslene er de samme.
+    // stedet for fire egne penner og pensler. Det er fire GDI-objekter
+    // mindre; det vedvarende bufferet tar to, saa tallet i hvile gaar ned med
+    // to. Heltrukket 1 px i begge tilfeller, saa pikslene er de samme.
     // Fargen settes bare naar den skifter.
     SelectObject(hdc, GetStockObject(DC_PEN));
     SelectObject(hdc, GetStockObject(DC_BRUSH));
@@ -2427,7 +2427,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
 
         case WM_SIZE:
-            g_Ctx.wmValid = FALSE;   // fonten er bygget for forrige storrelse
+            g_Ctx.wmValid = FALSE;   // bitmapen er bygget for forrige storrelse
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
 
