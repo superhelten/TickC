@@ -261,7 +261,7 @@ typedef struct {
     // --- Bufrede GDI-objekter ---
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
     // per opptegning.
-    HPEN   penGrid, penUp, penDown, penCross;
+    HPEN   penGrid, penCross;
     HPEN   penBtn, penBtnHot, penBtnWhite;
     // Standardpekere. LoadCursorW returnerer et DELT handtak for disse - de
     // telles ikke som vaare, og skal ikke gjennom DestroyCursor. Bufres
@@ -274,7 +274,7 @@ typedef struct {
     // fade-niva - knappene har ingen fade, de skifter farge momentant.
     int    btnHot;
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
-    HBRUSH brBg, brUp, brDown, brBox, brBoxEdge;
+    HBRUSH brBg, brBox, brBoxEdge;
 
 
     // --- Vedvarende dobbeltbuffer ---
@@ -289,13 +289,18 @@ typedef struct {
     int     bbW, bbH;
     BOOL    bbValid;
 
-    // --- Vannmerke ---
-    // Fonten og hoyden caches. Teksten tegnes rett inn i bufferet hvert
-    // bilde: den tidligere bitmap-cachen tok to GDI-haandtak, og dem har
-    // bufferet overtatt, slik at tallet i hvile staar paa 31.
+    // --- Vannmerke-cache ---
+    // Bakgrunn + vannmerke bakt sammen i en bitmap. Denne ERSTATTER dagens
+    // FillRect - den legger ikke til et steg. En DrawTextW med stor font
+    // koster 0,05-0,30 ms og hoerer ikke hjemme per bilde. Maalt med
+    // vedvarende buffer: tegnet per bilde kostet vannmerket 0,50-0,53 ms ved
+    // 1280x720, mot 0,24-0,27 ms for bliten.
+    HBITMAP wmBmp;
+    HDC     wmDC;
+    HBITMAP wmOldBmp;
     HFONT   hFontWm;
-    int     wmFontH;       // fonthoyden fonten ble bygget for
-    int     wmW, wmH;      // storrelsen den ble bygget for
+    int     wmFontH;       // fonthoyden cachen ble bygget for
+    int     wmW, wmH;      // storrelsen bitmapen ble bygget for
     int     wmSym, wmIv;   // konfigen den ble bygget for
     BOOL    wmValid;
 } AppContext;
@@ -1428,14 +1433,42 @@ static BOOL EnsureBackBuffer(AppContext* ctx, HDC ref, int W, int H) {
     return TRUE;
 }
 
-// Bygger vannmerkefonten naar (W, H, symIdx, ivIdx) endrer seg - ikke per
-// bilde. Maalingen av teksten trenger en DC med fonten valgt; bufferets DC
-// brukes, og fonten velges ut igjen for vi returnerer.
-static void EnsureWatermarkFont(AppContext* ctx, HDC hdc, int W, int H) {
+// Bygger bakgrunn + vannmerke naar (W, H, symIdx, ivIdx) endrer seg - ikke
+// per bilde. Samme disiplin som GDI-cachen fra fase 1.
+// Feiler noe her, settes wmValid = FALSE og DrawChart faller tilbake paa
+// FillRect. Vannmerket er pynt; det skal aldri hindre opptegning.
+static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     if (ctx->wmValid && ctx->wmW == W && ctx->wmH == H &&
         ctx->wmSym == ctx->symIdx && ctx->wmIv == ctx->ivIdx) {
         return;
     }
+    if (W <= 0 || H <= 0) { ctx->wmValid = FALSE; return; }
+
+    // Riv ned det gamle FORST. Uten dette lekker en HBITMAP og en HDC per
+    // resize, og GDI-tallet klatrer for hver gang brukeren drar i kanten.
+    if (ctx->wmDC) {
+        if (ctx->wmOldBmp) SelectObject(ctx->wmDC, ctx->wmOldBmp);
+        DeleteDC(ctx->wmDC);
+        ctx->wmDC = NULL;
+        ctx->wmOldBmp = NULL;
+    }
+    if (ctx->wmBmp) { DeleteObject(ctx->wmBmp); ctx->wmBmp = NULL; }
+
+    ctx->wmDC  = CreateCompatibleDC(ref);
+    ctx->wmBmp = CreateCompatibleBitmap(ref, W, H);
+    if (!ctx->wmDC || !ctx->wmBmp) {
+        if (ctx->wmDC)  { DeleteDC(ctx->wmDC);      ctx->wmDC  = NULL; }
+        if (ctx->wmBmp) { DeleteObject(ctx->wmBmp); ctx->wmBmp = NULL; }
+        ctx->wmValid = FALSE;
+        return;
+    }
+    ctx->wmOldBmp = (HBITMAP)SelectObject(ctx->wmDC, ctx->wmBmp);
+
+    RECT rc = { 0, 0, W, H };
+    FillRect(ctx->wmDC, &rc, ctx->brBg);
+
+    SetBkMode(ctx->wmDC, TRANSPARENT);
+    SetTextColor(ctx->wmDC, CLR_WATERMARK);
 
     ChartRect g = ChartGeometry(W, H);
 
@@ -1450,7 +1483,7 @@ static void EnsureWatermarkFont(AppContext* ctx, HDC hdc, int W, int H) {
     // paa 200 %. Ganger vi H/5 med DPI ogsaa, teller vi skaleringen to
     // ganger. Prosessen er DPI-uvitende i dag, saa GetDeviceCaps gir 96 og
     // MulDiv er en identitet - dette blir levende i det et manifest legges til.
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
+    int dpi = GetDeviceCaps(ref, LOGPIXELSY);
     if (dpi <= 0) dpi = 96;
     int fMin = MulDiv(WM_FONT_MIN, dpi, 96);
     int fMax = MulDiv(WM_FONT_MAX, dpi, 96);
@@ -1458,6 +1491,9 @@ static void EnsureWatermarkFont(AppContext* ctx, HDC hdc, int W, int H) {
     if (fh < fMin) fh = fMin;
     if (fh > fMax) fh = fMax;
 
+    // Bygges her, ikke per bilde: EnsureWatermark kjorer bare naar
+    // (W, H, symIdx, ivIdx) faktisk endrer seg, og alle fire paavirker
+    // hoyden eller bredden teksten trenger.
     const wchar_t* wmText = SYMBOLS[ctx->symIdx].api;
     int wmLen = (int)wcslen(wmText);
 
@@ -1472,67 +1508,56 @@ static void EnsureWatermarkFont(AppContext* ctx, HDC hdc, int W, int H) {
     // Maalt, ikke antatt - samme disiplin som feil #5. Bredden maales paa
     // den faktiske strengen i den faktiske fonten, og hoyden skaleres ned
     // i samme forhold hvis den ikke faar plass.
-    HFONT prev = (HFONT)SelectObject(hdc, ctx->hFontWm);
+    HFONT prevFit = (HFONT)SelectObject(ctx->wmDC, ctx->hFontWm);
     SIZE sz = { 0, 0 };
     int availW = g.cw - 8;
-    if (GetTextExtentPoint32W(hdc, wmText, wmLen, &sz) &&
+    if (GetTextExtentPoint32W(ctx->wmDC, wmText, wmLen, &sz) &&
         sz.cx > availW && sz.cx > 0 && availW > 0) {
         int fitted = MulDiv(fh, availW, sz.cx);
         if (fitted < 8) fitted = 8;
         if (fitted < fh) {
-            SelectObject(hdc, prev);
+            SelectObject(ctx->wmDC, prevFit);
             DeleteObject(ctx->hFontWm);
             ctx->hFontWm = CreateFontW(-fitted, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
                                        L"Segoe UI");
             fh = fitted;
-            SelectObject(hdc, ctx->hFontWm);
+            prevFit = (HFONT)SelectObject(ctx->wmDC, ctx->hFontWm);
         }
     }
-    SelectObject(hdc, prev);
     ctx->wmFontH = fh;
+
+    HFONT prev = prevFit;
+    RECT rcSym = { g.left, g.top, g.right, g.bottom };
+    DrawTextW(ctx->wmDC, SYMBOLS[ctx->symIdx].api, -1, &rcSym,
+              DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    // Intervallet under hovedlinja, i den vanlige lille fonten.
+    SelectObject(ctx->wmDC, ctx->hFontSmall);
+    // Avstanden ned til intervallet folger fonthoyden, ellers ville teksten
+    // ligge oppi hovedlinja paa store paneler.
+    RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + 4, g.right, g.bottom };
+    DrawTextW(ctx->wmDC, INTERVALS[ctx->ivIdx].label, -1, &rcIv,
+              DT_CENTER | DT_SINGLELINE | DT_TOP);
+    SelectObject(ctx->wmDC, prev);
 
     ctx->wmW = W; ctx->wmH = H;
     ctx->wmSym = ctx->symIdx; ctx->wmIv = ctx->ivIdx;
     ctx->wmValid = TRUE;
 }
 
-// Bakgrunn + vannmerke, forste lag i hvert bilde. Samme tegneoperasjoner som
-// den tidligere bitmap-cachen gjorde en gang, i samme rekkefolge, saa
-// pikslene er de samme.
-static void DrawWatermark(AppContext* ctx, HDC hdc, int W, int H) {
-    RECT rc = { 0, 0, W, H };
-    FillRect(hdc, &rc, ctx->brBg);
-
-    EnsureWatermarkFont(ctx, hdc, W, H);
-    if (!ctx->hFontWm) return;   // vannmerket er pynt
-
-    ChartRect g = ChartGeometry(W, H);
-    int fh = ctx->wmFontH;
-
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, CLR_WATERMARK);
-    HFONT prev = (HFONT)SelectObject(hdc, ctx->hFontWm);
-    RECT rcSym = { g.left, g.top, g.right, g.bottom };
-    DrawTextW(hdc, SYMBOLS[ctx->symIdx].api, -1, &rcSym,
-              DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-
-    // Intervallet under hovedlinja, i den vanlige lille fonten.
-    SelectObject(hdc, ctx->hFontSmall);
-    // Avstanden ned til intervallet folger fonthoyden, ellers ville teksten
-    // ligge oppi hovedlinja paa store paneler.
-    RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + 4, g.right, g.bottom };
-    DrawTextW(hdc, INTERVALS[ctx->ivIdx].label, -1, &rcIv,
-              DT_CENTER | DT_SINGLELINE | DT_TOP);
-    SelectObject(hdc, prev);
-}
-
 static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     RECT rcAll = { 0, 0, W, H };
     // Vannmerket ligger I bakgrunnen, for rutenett, lys og akser - grafen
-    // flyter rent over teksten.
-    DrawWatermark(ctx, hdc, W, H);
+    // flyter rent over teksten. BitBlt ERSTATTER FillRect, den kommer ikke
+    // i tillegg.
+    EnsureWatermark(ctx, hdc, W, H);
+    if (ctx->wmValid) {
+        BitBlt(hdc, 0, 0, W, H, ctx->wmDC, 0, 0, SRCCOPY);
+    } else {
+        FillRect(hdc, &rcAll, ctx->brBg);   // fallback, vannmerket er pynt
+    }
 
     SetBkMode(hdc, TRANSPARENT);
 
@@ -1716,9 +1741,13 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     if (i0 < 0) i0 = 0;
     if (i1 > n) i1 = n;
 
-    // Penn og pensel byttes bare naar fargen skifter. To SelectObject per lys
-    // var en fast kostnad ogsaa i lange rekker med samme farge; pikslene er
-    // de samme, det er bare valget som hoppes over.
+    // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
+    // stedet for fire egne penner og pensler. Det er to GDI-haandtak mindre i
+    // hvile, og de gir plass til det vedvarende bufferet uten at tallet
+    // stiger. Heltrukket 1 px i begge tilfeller, saa pikslene er de samme.
+    // Fargen settes bare naar den skifter.
+    SelectObject(hdc, GetStockObject(DC_PEN));
+    SelectObject(hdc, GetStockObject(DC_BRUSH));
     int curUp = -1;
     for (int i = i0; i < i1; ++i) {
         Candle* c = &ctx->candles[i];
@@ -1731,8 +1760,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         int yClose = top + (int)(((maxP - c->close) / range) * ch);
 
         if (up != curUp) {
-            SelectObject(hdc, up ? ctx->penUp : ctx->penDown);
-            SelectObject(hdc, up ? ctx->brUp  : ctx->brDown);
+            SetDCPenColor(hdc,   up ? CLR_UP : CLR_DOWN);
+            SetDCBrushColor(hdc, up ? CLR_UP : CLR_DOWN);
             curUp = up;
         }
 
@@ -1801,7 +1830,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             // Aksestempelet overskriver rutenettetiketten paa denne hoyden,
             // slik at det ikke staar to tall oppi hverandre.
             RECT rcPill = { right + 1, yLast - 8, W - 1, yLast + 8 };
-            FillRect(hdc, &rcPill, lastUp ? ctx->brUp : ctx->brDown);
+            SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
+            FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
             // "Presis verditekst": to desimaler der de faar plass, ellers
             // samme oppslosning som aksen. Bredden maales paa den ferdig
@@ -3265,8 +3295,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // Faste GDI-objekter: lages en gang, ikke 16 ganger per opptegning
     g_Ctx.penGrid   = CreatePen(PS_SOLID, 1, CLR_GRID);
-    g_Ctx.penUp     = CreatePen(PS_SOLID, 1, CLR_UP);
-    g_Ctx.penDown   = CreatePen(PS_SOLID, 1, CLR_DOWN);
     g_Ctx.penCross  = CreatePen(PS_DOT,   1, CLR_CROSS);
     g_Ctx.penBtn      = CreatePen(PS_SOLID, 1, CLR_DIM);
     g_Ctx.penBtnHot   = CreatePen(PS_SOLID, 1, CLR_TEXT);
@@ -3280,8 +3308,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
     g_Ctx.penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
     g_Ctx.brBg      = CreateSolidBrush(CLR_BG);
-    g_Ctx.brUp      = CreateSolidBrush(CLR_UP);
-    g_Ctx.brDown    = CreateSolidBrush(CLR_DOWN);
     g_Ctx.brBox     = CreateSolidBrush(CLR_BOX);
     g_Ctx.brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
 
@@ -3358,15 +3384,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (g_Ctx.hFontBig) DeleteObject(g_Ctx.hFontBig);
     if (g_Ctx.hFontSmall) DeleteObject(g_Ctx.hFontSmall);
 
-    DeleteObject(g_Ctx.penGrid);  DeleteObject(g_Ctx.penUp);
-    DeleteObject(g_Ctx.penDown);  DeleteObject(g_Ctx.penCross);
-    DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brUp);
-    DeleteObject(g_Ctx.brDown);   DeleteObject(g_Ctx.brBox);
+    DeleteObject(g_Ctx.penGrid);  DeleteObject(g_Ctx.penCross);
+    DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brBox);
     DeleteObject(g_Ctx.brBoxEdge);
     DeleteObject(g_Ctx.penLastUp);   DeleteObject(g_Ctx.penLastDown);
     DeleteObject(g_Ctx.penBtn);      DeleteObject(g_Ctx.penBtnHot);
     DeleteObject(g_Ctx.penBtnWhite); DeleteObject(g_Ctx.brClose);
 
+    // Vannmerke-cachen. Rekkefolgen er viktig: bitmapen maa velges ut av
+    // DC-en for begge slettes.
+    if (g_Ctx.wmDC) {
+        if (g_Ctx.wmOldBmp) SelectObject(g_Ctx.wmDC, g_Ctx.wmOldBmp);
+        DeleteDC(g_Ctx.wmDC);
+    }
+    if (g_Ctx.wmBmp)   DeleteObject(g_Ctx.wmBmp);
     if (g_Ctx.hFontWm) DeleteObject(g_Ctx.hFontWm);
 
     if (g_Ctx.hConnect) WinHttpCloseHandle(g_Ctx.hConnect);
