@@ -1541,6 +1541,20 @@ avlesninger per runde, to runder:
 > master. Fase 9 målte 30, før DPI-rettelsen, og det er ikke undersøkt hva som
 > utgjør forskjellen.
 
+**Etter rådgiverens gjennomgang**, to ting som ellers bare var påstått:
+
+| Test | Resultat |
+|---|---|
+| Ekte omstart av Explorer med nytt bygg: bufferet brukt av en *ny* flate | ny flate i WorkerW etter **594 ms**, vindustre 14/14, og **90–98 %** av synlige skrivebordspunkter i alle fire kvadranter har grafens bakgrunnsfarge (DPI-bevisst probe) |
+| 30 størrelsesendringer i vanlig modus | GDI/USER **29/14 før og 29/14 etter** |
+| Hover postet rett etter størrelsesendring (1280×720, 900×500, 1500×800) | hurtigstien identisk med full opptegning i alle tre (`bbValid` stenger hurtigstien til bufferet har riktig størrelse) |
+
+> **DC-tilstanden lever nå mellom bildene.** Penner, pensler, fonter,
+> tekstfarge og bakgrunnsmodus som siste bilde valgte, står fortsatt valgt i
+> `bbDC` når neste bilde begynner. Pikseltesten fant ingen følger av det i de
+> 15 tilstandene. Ny tegnekode må likevel selv velge alt den bruker, og kan
+> ikke regne med en fersk DC.
+
 `/W4` rent, x86.
 
 ---
@@ -1731,7 +1745,9 @@ avlesninger per runde, to runder:
 27. **Håndtakstellingen må leses i hvile.** Under pågående opptegning står
     GDI på 34 og USER på 15 — dobbeltbufferet og vannmerket i flukt — mot
     31/14 når alt har satt seg. Måler du midt i en stresstest, ser du en
-    lekkasje som ikke finnes.
+    lekkasje som ikke finnes. **Fra fase 10 er hviletallet 29/14** i vanlig
+    modus og 26/6 i skrivebordsmodus. Dobbeltbufferet lever nå mellom bildene,
+    og fire penner og pensler er erstattet av `DC_PEN`/`DC_BRUSH`.
 
 28. **`WM_SETCURSOR` må returnere `TRUE` for å holde pekeren, og `break` for
     alt annet.** Returnerer du `0` i default-grenen, mister kantsonene sine
