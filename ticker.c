@@ -24,6 +24,7 @@
 #define WM_APP_DATA      (WM_APP + 1)   // arbeidertraden har nye data
 #define ID_TRAY_EXIT     1001
 #define ID_TRAY_RESET    1002
+#define ID_TRAY_DESKTOP  1003   // skrivebordsmodus av/paa (fase 12)
 #define TIMER_INTERVAL   3000 // 3 sekunder
 
 // --- Popup / graf ---
@@ -538,6 +539,31 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     if (hasPos) { *outX = (int)(LONG)px; *outY = (int)(LONG)py; }
 }
 
+// Sist valgte modus fra tray-menyen. Egen verdi og egne funksjoner, ikke en
+// del av SaveConfig: den skrives i det brukeren velger, ikke i WM_DESTROY,
+// som aldri kjoerer naar prosessen drepes utenfra.
+static BOOL LoadDesktopMode(void) {
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return FALSE;
+    }
+    DWORD v = RegReadDword(k, L"DesktopMode", 0);
+    RegCloseKey(k);
+    return v == 1;
+}
+
+static void SaveDesktopMode(BOOL on) {
+    if (g_isDuplicate) return;
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return;
+    }
+    DWORD v = on ? 1 : 0;
+    RegSetValueExW(k, L"DesktopMode", 0, REG_DWORD, (const BYTE*)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
 static void SaveConfig(const AppContext* ctx) {
     if (g_isDuplicate) return;
     HKEY k;
@@ -553,8 +579,15 @@ static void SaveConfig(const AppContext* ctx) {
 
 // Skrivebordsmodus lagrer ikke: flaten er hele skjermen i WorkerW-koordinater,
 // og den ville blitt vanlig modus' "lagrede storrelse" ved neste oppstart.
+//
+// Globalene oppdateres ogsaa (fase 12): PlacePopupInitially leser dem, og
+// panelet lages paa nytt hver gang modus byttes. Uten dette ville en tur
+// innom skrivebordsmodus lagt panelet der det sto ved oppstart.
 static void SaveGeometry(int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0 || g_isDuplicate || g_desktopMode) return;
+    if (w <= 0 || h <= 0 || g_desktopMode) return;
+    g_savedPanelX = x; g_savedPanelY = y;
+    g_savedPanelW = w; g_savedPanelH = h;
+    if (g_isDuplicate) return;
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
                         KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
@@ -3272,23 +3305,93 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
+// Bytter mellom panel og skrivebordsflate mens prosessen kjoerer (fase 12).
+//
+// Vinduet LAGES PAA NYTT, det flyttes ikke med SetParent. DPI-konteksten
+// settes idet et vindu lages og kan ikke endres: skrivebordsflaten maa lages
+// per-monitor-bevisst (ellers dekker den en firedel av skjermen ved 150 %,
+// se TogglePopup), og panelet DPI-uvitende. Et flyttet vindu ville haatt feil
+// kontekst i den ene modusen. TogglePopup lager allerede begge riktig, og
+// alle g_desktopMode-grenene gjelder et nytt vindu uten mer arbeid.
+//
+// Det som overlever: candles[], utsnittet, nettverkstraaden, GDI-objektene,
+// dobbeltbufferet og vannmerke-cachen. De to siste bygges paa nytt av seg
+// selv hvis storrelsen er en annen, og det er den nesten alltid.
+static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on) {
+    if (g_isDuplicate || on == g_desktopMode) return;
+
+    // Timeren prover aa bygge en skrivebordsflate som mangler. Den skal ikke
+    // fyre etter at vi har gaatt tilbake til panelet.
+    KillTimer(hWnd, TIMER_EMBED_ID);
+
+    if (ctx->hPopup) {
+        HWND hp = ctx->hPopup;
+        // Lagres FOER flagget endres: SaveGeometry gjoer ingenting i
+        // skrivebordsmodus.
+        if (!g_desktopMode) SaveWindowPlacement(hp);
+        if (GetCapture() == hp) ReleaseCapture();
+
+        // Samme rekkefolge som WM_DESTROY i WndProc: hPopup nulles under
+        // laas FOER vinduet rives. Da er WM_NCDESTROY en no-op og starter
+        // ikke gjenoppbyggingstimeren.
+        EnterCriticalSection(&ctx->lock);
+        ctx->hPopup = NULL;
+        LeaveCriticalSection(&ctx->lock);
+        DestroyWindow(hp);
+    }
+
+    // Tilstand som hang paa det gamle vinduet. Timeren doede med det;
+    // TrackMouseEvent er bestilt for et vindu som ikke finnes, og uten
+    // nullstillingen ville det nye panelet aldri bestilt WM_MOUSELEAVE.
+    ctx->animRunning   = FALSE;
+    ctx->trackingMouse = FALSE;
+    ctx->panning       = FALSE;
+    ctx->bbValid       = FALSE;
+
+    g_desktopMode = on;
+    SaveDesktopMode(on);
+
+    TogglePopup(ctx, hInst);
+}
+
+// Tray-menyen. Egen funksjon saa hake og innhold kan testes uten et
+// tray-ikon.
+//
+//   [x] Skrivebordsmodus
+//       Standardvisning   Ctrl+0     (graa i skrivebordsmodus)
+//   ---------------------------
+//       Avslutt Ticker
+//
+// "Standardvisning" er graa, ikke borte, i skrivebordsmodus: den ville gjort
+// flaten om til et 1280x720-vindu inne i WorkerW. Et duplikat faar ikke
+// modusvalget - det eier ikke registret og avsluttes naar panelet lukkes.
+static HMENU BuildTrayMenu(void) {
+    HMENU hMenu = CreatePopupMenu();
+    if (!hMenu) return NULL;
+    if (!g_isDuplicate) {
+        AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_CHECKED : MF_UNCHECKED),
+                    ID_TRAY_DESKTOP, L"Skrivebordsmodus");
+    }
+    AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_GRAYED : MF_ENABLED),
+                ID_TRAY_RESET, L"Standardvisning	Ctrl+0");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt Ticker");
+    return hMenu;
+}
+
 // ---------------------------------------------------------------------------
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_TRAYICON:
-            // Skrivebordsmodus: flaten skal ikke skjules eller faa fokus, og
-            // "Standardvisning" ville gjort den om til et 1280x720-vindu inne
-            // i WorkerW. Ikonet er eneste vei ut, saa menyen har bare det.
+            // Skrivebordsmodus: flaten skal ikke skjules eller faa fokus, saa
+            // venstreklikk gjoer ingenting der. Menyen bygges paa nytt ved
+            // hvert hoyreklikk, saa haken alltid viser gjeldende modus.
             if (lParam == WM_LBUTTONUP && !g_desktopMode) {
                 TogglePopup(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
             } else if (lParam == WM_RBUTTONUP) {
-                HMENU hMenu = CreatePopupMenu();
-                if (!g_desktopMode) {
-                    AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESET, L"Standardvisning	Ctrl+0");
-                    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-                }
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt Ticker");
+                HMENU hMenu = BuildTrayMenu();
+                if (!hMenu) break;
 
                 POINT pt;
                 GetCursorPos(&pt);
@@ -3299,7 +3402,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             break;
 
         case WM_COMMAND:
+            if (LOWORD(wParam) == ID_TRAY_DESKTOP) {
+                SetDesktopMode(&g_Ctx, hwnd, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE),
+                               !g_desktopMode);
+                return 0;
+            }
             if (LOWORD(wParam) == ID_TRAY_RESET) {
+                // Graa i menyen i skrivebordsmodus; sperres her ogsaa, for en
+                // postet melding bryr seg ikke om menyen.
+                if (g_desktopMode) return 0;
                 // Finnes ikke vinduet enda, lag det forst - ellers ville
                 // menypunktet vaert en stille no-op.
                 if (!g_Ctx.hPopup || !IsWindowVisible(g_Ctx.hPopup)) {
@@ -3525,6 +3636,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
         if (argv) LocalFree(argv);
     }
+    // Uten --desktop-mode avgjoer registret: tray-menyen husker sist valgte
+    // modus (fase 12). Flagget vinner for denne kjoeringen, og et duplikat
+    // er alltid et panel.
+    if (!g_desktopMode && !g_isDuplicate) g_desktopMode = LoadDesktopMode();
 
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manuell reset
