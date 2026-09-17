@@ -3141,14 +3141,23 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         default:
             // Explorer er startet paa nytt. Ikonet er borte fra
-            // systemstatusfeltet, og i skrivebordsmodus er WorkerW-en flaten
-            // satt i, en annen enn den som finnes naa. Flaten rives ned og
-            // bygges paa nytt - WM_NCDESTROY i PopupProc starter timeren.
+            // systemstatusfeltet. I skrivebordsmodus har Windows allerede revet
+            // ned flaten sammen med den gamle WorkerW-en (maalt: borte innen
+            // 20 ms), og WM_NCDESTROY har startet timeren.
+            //
+            // Timeren kan dermed ha rukket aa bygge en ny flate foer denne
+            // meldingen kommer: ny flate etter 1,1 s, TaskbarCreated etter
+            // ~1,6 s. Da ble den ferske flaten revet ned og bygget paa nytt,
+            // og skrivebordet sto uten graf i et sekund. Rives derfor bare
+            // ned hvis den IKKE sitter i dagens WorkerW.
             if (msg == g_msgTaskbarCreated && g_msgTaskbarCreated != 0) {
                 Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
                 if (g_desktopMode) {
-                    if (g_Ctx.hPopup) DestroyWindow(g_Ctx.hPopup);
-                    else SetTimer(hwnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
+                    if (!g_Ctx.hPopup) {
+                        SetTimer(hwnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
+                    } else if (GetParent(g_Ctx.hPopup) != FindDesktopWorkerW()) {
+                        DestroyWindow(g_Ctx.hPopup);
+                    }
                 }
                 return 0;
             }
