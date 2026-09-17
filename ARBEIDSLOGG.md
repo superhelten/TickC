@@ -2296,5 +2296,12 @@ tapetet.
 
 ## Sikkerhetskopier
 
-`ticker.c.bak` … `ticker.c.bak7` ligger i mappa, ett per større endring.
-De eldste kan trygt slettes.
+**Bare `ticker.c.bak11` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 16, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak10` er slettet: de dekket fase 1 til 15, og den
+historikken ligger i git.
+
+Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
+(fase 14), `.bak10` (fase 15) og `.bak11` (fase 16). Filene er ignorert av git;
+mønsteret er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de
+tosifrede gjennom.

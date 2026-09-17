@@ -4,6 +4,7 @@
 *.pdb
 *.ilk
 
-# Historiske sikkerhetskopier - erstattet av git, beholdt paa disk
+# Historiske sikkerhetskopier - erstattet av git, beholdt paa disk.
+# Tosifret mønster òg: `*.bak[0-9]` alene slapp `.bak10` og `.bak11` gjennom.
 *.bak
-*.bak[0-9]
+*.bak[0-9]*
