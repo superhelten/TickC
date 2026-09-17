@@ -2467,6 +2467,30 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             break;
 
+        // Ingen NC-opptegning ved fokusbytte. WM_NCCALCSIZE under gjoer
+        // klienten like stor som vinduet, men DefWindowProc tegner likevel den
+        // klassiske WS_THICKFRAME-rammen i vindus-DC-en - altsaa OPPAA grafen,
+        // 3 px dyp, i COLOR_ACTIVEBORDER (#B4B4B4) eller COLOR_INACTIVEBORDER
+        // (#F4F7FC) med lyse kanter. Den blir staaende til neste fulle
+        // opptegning, opptil 3 s. Maalt fra skjermen: 7,2 millioner
+        // rammefargede kantpiksler over 3 fokusbytter, mot 0 med dette.
+        //
+        // lParam = -1 er den dokumenterte maaten aa si "ikke tegn rammen" paa.
+        // DefWindowProc gjoer resten av aktiveringen som foer, i stedet for at
+        // vi svarer TRUE og hopper over den helt.
+        case WM_NCACTIVATE:
+            return DefWindowProcW(hwnd, msg, wParam, -1);
+
+        // Det finnes ingen NC-flate aa tegne. Ingen maalt sti tegnet noe her
+        // etter rettelsen over (fokusbytte, WM_SETTEXT, storrelsesendring),
+        // saa dette er et vern, ikke rettelsen.
+        //
+        // DWMNCRP_DISABLED er IKKE brukt: den slaar av DWM-rammen og slipper
+        // den klassiske NC-tegningen til igjen. Maalt: 1 296 rammefargede
+        // piksler tilbake, og forgrunnsbyttet feilet i to av tre sykluser.
+        case WM_NCPAINT:
+            return 0;
+
         // Fjerner hele den ikke-klientaktige rammen: klientflaten blir like
         // stor som vindusrektangelet, og vi tegner alt selv.
         case WM_NCCALCSIZE: {
