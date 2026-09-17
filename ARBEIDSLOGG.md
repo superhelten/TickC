@@ -15,11 +15,14 @@ måler headerteksten og hever minstestørrelsen til 400×250. **Fase 8** bytter
 panorering til dobbeltklikk, `R` og `ESC`, og fjerner single-instance-mutexen.
 **Fase 9** legger til `--desktop-mode`, der grafflaten ligger i skrivebordet
 bak ikonene som barn av WorkerW.
+**Fase 10** lar dobbeltbufferet leve mellom bildene: 5,1 ms mot 11,7 ms ved
+3840×1600, og 1,33 ms mot 1,59 ms ved 1280×720, med samme piksler.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
-`docs/superpowers/plans/2026-09-16-ticker-ny-instans.md` og
-`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`. Design:
+`docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`,
+`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md` og
+`docs/superpowers/plans/2026-09-17-ticker-opptegning.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
@@ -1460,6 +1463,86 @@ som har flatens bakgrunn `#0D1117`. Nede til høyre ligger lengst fra origo:
 
 `/W4` rent, x86, 177 KB exe.
 
+### Fase 10 — vedvarende dobbeltbuffer
+
+Plan og avvik: `docs/superpowers/plans/2026-09-17-ticker-opptegning.md`.
+Gren `opptegning`, flettet inn med `--no-ff`.
+
+**Hvor tiden gikk.** QPC-markører rundt hvert ledd i `PaintPopup` og
+`DrawChart`, satt inn med skript i både master og nytt bygg. Ved 3840×1600 gikk
+**55–60 % til å blitte vannmerket inn i et helt nytt dobbeltbuffer**
+(6,5–7,9 ms), og ytterligere 1,7 ms til å frigjøre det. `CreateCompatibleBitmap`
+tok bare 0,07 ms. Den er lat, og kostnaden på 24 MB kommer ved første skriving
+og ved frigjøring, i hvert bilde (fallgruve 48).
+
+**Endringen:**
+- **Vedvarende buffer:** `bbDC`/`bbBmp` lever mellom bildene og bygges på nytt
+  bare når størrelsen endres (`EnsureBackBuffer`/`FreeBackBuffer`).
+- **Hurtigstien:** knappene tegnes rett inn i bufferet, og stripa blittes
+  derfra. Mellomrommene er forrige fulle bilde. Nytt vilkår: `bbValid`, og
+  overlayet må verken være åpent eller synlig under uttoning.
+- **Lysene:** tegnes med `DC_PEN`/`DC_BRUSH` og `SetDCPenColor`/
+  `SetDCBrushColor`, satt bare ved fargeskifte, i stedet for `penUp`,
+  `penDown`, `brUp` og `brDown`. Det er fire GDI-objekter mindre, og bufferet
+  tar to av dem.
+- **Vannmerke-cachen er beholdt.** Første versjon fjernet den og tegnet teksten
+  per bilde. Det kostet 0,50–0,53 ms ved 1280×720 og spiste hele gevinsten i
+  vanlig modus. Se planens avvik.
+
+**Piksler.** Målebygg av master og nytt bygg med *samme* endringer: Binance-svaret
+lest fra fil (faste data), `TrackMouseEvent` som no-op, og vinduet på x = −1270,
+så den ekte pekeren ikke når det. All tilstand ble styrt med postede
+meldinger, og hvert bilde ble fanget med `PrintWindow` først når to bilder på
+rad var likt (fallgruve 50). 15 tilstander: hvile; hover på hver av fire knapper,
+både hurtigsti og full opptegning; forlatt; trådkors; overlay; overlay med musa
+over en knapp; overlay lukket; skrivebordsmodus 3840×1600. Hver tilstand er
+bekreftet mot hvile: knapp 468 px, trådkors 9 417 px, overlay 40 460 px.
+
+| Gjennomløp | Master mot nytt | Hurtigsti mot full (nytt / master) |
+|---|---|---|
+| 1 | **0 avvik**, 15/15 | 0 / 0, alle fire knapper |
+| 2 | **0 avvik**, 15/15 | 0 / 0, alle fire knapper |
+
+**Opptegning.** Tre runder, master og nytt vekselvis, 5 s `InvalidateRect`
+hvert 16. ms. Vanlig modus på x = −1270, fordi en første kjøring på skjermen
+ble forurenset av hover (0,2 ms trådkors og opptil 941 bilder per runde):
+
+| Konfig | Master, median | **Nytt, median** | Rundemedianer master → nytt |
+|---|---|---|---|
+| vanlig 1280×720 | 1,585 ms | **1,330 ms (−16 %)** | 2,26 / 1,48 / 1,53 → 1,23 / 1,36 / 1,33 |
+| skrivebord 3840×1600 | 11,696 ms | **5,128 ms (−56 %)** | 11,75 / 11,75 / 11,66 → 4,99 / 5,08 / 5,32 |
+
+| Ledd (median) | Vanlig master → nytt | Skrivebord master → nytt |
+|---|---|---|
+| Buffer lages | 0,236 → 0,000 ms | 0,069 → 0,000 ms |
+| Vannmerke-blit | 0,239 → 0,276 ms | **6,500 → 1,817 ms** |
+| Header-tekst | 0,206 → 0,235 ms | 0,283 → 0,285 ms |
+| Lys | 0,600 → 0,536 ms | 1,461 → 1,340 ms |
+| Blit til vindu | 0,098 → 0,098 ms | 1,389 → 1,393 ms |
+| Buffer slettes | 0,011 → 0,000 ms | **1,739 → 0,000 ms** |
+
+> **Mandatets 0,85 ms nås fortsatt ikke.** Det som gjenstår ved 1280×720, er
+> lysene (0,54), vannmerke-bliten (0,28) og headerteksten (0,24). Ved
+> 3840×1600 er det to fullskjerms-blitter på 1,4–1,8 ms hver og lysene
+> (1,34). Å bytte penn bare ved fargeskifte ga ingen målbar gevinst alene.
+
+**Håndtak og minne i hvile.** Ikke-instrumenterte bygg, 15 s etter start, fem
+avlesninger per runde, to runder:
+
+| Konfig | Private bytes | GDI | USER |
+|---|---|---|---|
+| master, vanlig 1280×720 | 3,69–3,92 MB | 31 | 14 |
+| **nytt, vanlig 1280×720** | 3,59–3,77 MB | **29** | 14 |
+| master, skrivebord 3840×1600 | 3,37–3,48 MB | 28 | 6 |
+| **nytt, skrivebord 3840×1600** | 3,37–3,41 MB | **26** | 6 |
+
+> Bufferet på 24 MB vises ikke i private bytes, på samme måte som
+> vannmerke-cachen ikke gjorde det. Skrivebordsmodus står nå på 28 GDI i
+> master. Fase 9 målte 30, før DPI-rettelsen, og det er ikke undersøkt hva som
+> utgjør forskjellen.
+
+`/W4` rent, x86.
+
 ---
 
 ## Kjente begrensninger
@@ -1469,11 +1552,11 @@ som har flatens bakgrunn `#0D1117`. Nede til høyre ligger lengst fra origo:
 - **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0` og
   tray-menyens «Standardvisning» setter tilbake til **1280×720** sentrert,
   klemt til arbeidsområdet om skjermen er mindre.
-- **Opptegningen holder ikke 0,46 ms, og har ikke gjort det siden panelet
-  ble 1280×720.** Median for hele bildet er ~0,85 ms ved 1280×720 og
-  **~9,5 ms maksimert** (3840×1552), målt likt før og etter fase 7. Tallet
-  0,462 ms fra del C ble målt på ~380×300, før `9785c3f`. Header-blokka er ~0,2 ms
-  av det; resten er ikke undersøkt. Se Fase 7.
+- **Opptegningen holder ikke 0,85 ms.** Etter fase 10 er medianen 1,33 ms
+  ved 1280×720 og 5,13 ms ved 3840×1600, målt 17.09.2026. Fordelingen per
+  ledd står i fase 10. Eldre tall (0,462 ms på ~380×300 i del C, ~0,85 ms ved
+  1280×720 i fase 7) er målt under andre forhold og lot seg ikke gjenskape med
+  uendret kode i fase 9.
 - **Symbollinjas ellipse er ikke sett i drift.** Selv den lengste formen,
   med «frakoblet Ns», får plass ved 400 px. Grenen er der for DPI-skalering
   og framtidige lengre etiketter.
@@ -1743,6 +1826,24 @@ som har flatens bakgrunn `#0D1117`. Nede til høyre ligger lengst fra origo:
     borte og gjenoppbygget før meldingen kommer. Testen med postet melding var
     grønn og skjulte en dobbel gjenoppbygging som bare den ekte omstarten
     avslørte (fase 9).
+48. **`CreateCompatibleBitmap` er lat.** Kallet tok 0,07 ms for 3840×1600,
+    mens første `BitBlt` inn i bitmapen tok 6,5–7,9 ms og `DeleteObject`
+    1,7 ms. En QPC-markør rundt kallet alene ser en billig allokering. Mål
+    første skriving og frigjøringen også.
+49. **PowerShell-funksjoner kan kollidere med innebygde alias.** En
+    hjelpefunksjon kalt `Move` ble aldri kalt: `Move` er et alias for
+    `Move-Item`, og aliaset vinner. Det kom bare feilmeldinger, og proben
+    fortsatte uten hover. Gi probefunksjoner navn som ikke finnes fra før
+    (`PostMove`).
+50. **Pikselsammenlikning mellom to bygg krever at data og input står stille.**
+    Levende priser endrer bildet, og en ekte peker konkurrerer med
+    `TrackMouseEvent` (fallgruve 35). Hvilken av dem som vinner, varierer fra
+    kjøring til kjøring, og master avvek fra seg selv. Det som virket: lik
+    patch i begge bygg, med `HttpGet` som leser en fil og `TrackMouseEvent`
+    som no-op, og vinduet nesten helt utenfor skjermen. Fang først når to
+    bilder på rad er like, og bekreft tilstanden mot hvile før du tror på et
+    avvik. Testvinduet tar forgrunnen, så et tastetrykk fra brukeren (ESC)
+    kan lukke et duplikat midt i en kjøring.
 
 ---
 
