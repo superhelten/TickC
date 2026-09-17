@@ -24,7 +24,8 @@ alfa som følger vindusbredden.
 grafen ved hvert fokusbytte og tittelbytte. **Fase 12** bytter mellom panel og
 skrivebordsmodus fra tray-menyen mens prosessen kjører, og husker valget i
 registret. **Fase 13** legger «Start ved pålogging» i tray-menyen, med
-`Ticker` i `HKCU\…\Run`.
+`Ticker` i `HKCU\…\Run`. **Fase 14** gjør skrivebordsflaten tekstfri og kant
+til kant: bare kurve, rutenett og vannmerke.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -34,7 +35,8 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-akser.md`,
 `docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md`,
 `docs/superpowers/plans/2026-09-17-ticker-modusveksling.md` og
-`docs/superpowers/plans/2026-09-17-ticker-autostart.md`. Design:
+`docs/superpowers/plans/2026-09-17-ticker-autostart.md` og
+`docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
@@ -1783,6 +1785,47 @@ skriver `"C:\Users\sysadmin\Desktop\Ticker\ticker.exe"` og sletter igjen;
 skrivebordsmodus av og på i samme kjøring gir flate i WorkerW → toppnivåpanel →
 flate i WorkerW, med `DesktopMode` 1 → 0 → 1 og «Standardvisning» grå bare i
 skrivebordsmodus. Run-nøkkelen sto uten `Ticker`-verdi før og etter.
+
+---
+
+### Fase 14 — tekstfri flate på skrivebordet
+
+Plan og målinger: `docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md`.
+Gren `omgivelsesmodus`.
+
+**Premisset:** et panel leses fovealt — brukeren stopper opp og dekoder tall.
+En flate i skrivebordet leses perifert, og da er alfanumeriske stempler
+interferens mot ikoner og mapper. Opptegningen deles derfor i to lag:
+infrastruktur (kurve, rutenett, akselogikk) som består, og metadata (pris,
+prosent, undertittel, akseetiketter, siste-pris-stempel) som deaktiveres når
+vinduet er en bakgrunnsstruktur.
+
+**Endringen:**
+- `ChartGeometry()` gir hele flaten i skrivebordsmodus: `0, 0, W, H`. Ett sted,
+  og vannmerkets sentrering, rutenettet, lysene, klipperegionen og
+  siste-pris-linja følger etter.
+- `DrawChart()`: header-blokka, prisaksens etiketter, hele tidsakse-blokka og
+  siste-pris-**stempelet** er gated på `!g_desktopMode`. Den stiplede
+  siste-pris-linja blir stående — den er geometri, ikke et tall. Vannmerket
+  består som identitetsmarkør.
+- Tom buffer i skrivebordsmodus returnerer uten melding. Flaten står med
+  bakgrunn og vannmerke.
+- Rutenettet tegner bare linje 1–3 der. Kant til kant ville lagt linje 0 og 4
+  på `y = 0` og `y = H - 1`, altså en 1 px ramme rundt hele skjermen.
+- `SetDesktopMode()` nullstiller `wmValid`: vannmerke-cachen ligger i `ctx`,
+  overlever at vinduet lages på nytt, og er nøklet på `(W, H, symIdx, ivIdx)` —
+  ikke på modus, som nå avgjør geometrien.
+- Hurtigstien for knapperaden i `WM_PAINT` krever nå `!g_desktopMode`
+  eksplisitt.
+
+**Verifisert** med dump av bakbufferet fra testbygget (`WM_APP+7`), ikke
+skjermdump: flaten er lagdelt og ligger bak ikonene. **22/22 i to kjøringer.**
+Null piksler av `CLR_AXIS`, `CLR_TEXT` og `CLR_DIM` på skrivebordet, mot
+1 514 / 230 / 105 i panelkontrollen i samme kjøring. Rutenettradene ligger på
+nøyaktig 400, 800 og 1200 av 1600 med utstrekning x 0 … 3839 — det direkte
+beviset på full flate — mot 44, 208, 373, 537, 702 og x 10 … 1195 i panelet.
+Tom buffer gir 0 `CLR_DIM`-piksler på skrivebordet og 134 i panelet.
+**GDI/USER 30/14**, uendret gjennom 50 modusbytter.
 
 ---
 
