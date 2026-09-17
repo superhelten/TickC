@@ -23,7 +23,8 @@ alfa som følger vindusbredden.
 **Fokus-blink** fjerner den klassiske rammen som `DefWindowProc` tegnet oppå
 grafen ved hvert fokusbytte og tittelbytte. **Fase 12** bytter mellom panel og
 skrivebordsmodus fra tray-menyen mens prosessen kjører, og husker valget i
-registret.
+registret. **Fase 13** legger «Start ved pålogging» i tray-menyen, med
+`Ticker` i `HKCU\…\Run`.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -31,13 +32,14 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`,
 `docs/superpowers/plans/2026-09-17-ticker-opptegning.md`,
 `docs/superpowers/plans/2026-09-17-ticker-akser.md`,
-`docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md` og
-`docs/superpowers/plans/2026-09-17-ticker-modusveksling.md`. Design:
+`docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md`,
+`docs/superpowers/plans/2026-09-17-ticker-modusveksling.md` og
+`docs/superpowers/plans/2026-09-17-ticker-autostart.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~3720 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~3790 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -484,6 +486,12 @@ Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11
 som aldri kjører når prosessen drepes utenfra. Den leses bare når verken
 `--desktop-mode` eller `--dup` er gitt. Flagget vinner for den kjøringen, og
 et duplikat er alltid et panel og skriver aldri.
+
+**Autostart (fase 13) ligger utenfor `Software\Ticker`:**
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, verdien `Ticker`,
+`REG_SZ`, stien til exe-en i anførselstegn. Den leses hver gang tray-menyen
+åpnes og skrives bare ved klikk. Appen leser den aldri ved oppstart. Nøkkelen
+er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
 
 ---
 
@@ -1742,6 +1750,33 @@ Gren `modusveksling`, flettet inn med `--no-ff`.
 > panelet er i bruk. Brukeren valgte gjenoppbygging ved bytte: byttet er
 > sjeldent og manuelt, og 28 ms er under to bilder ved 60 Hz.
 
+### Fase 13 — start ved pålogging fra tray-menyen
+
+Plan, målinger og avvik: `docs/superpowers/plans/2026-09-17-ticker-autostart.md`.
+Gren `autostart`.
+
+**Endringen:**
+- `IDM_TOGGLE_AUTOSTART` (1004). «Start ved pålogging» med hake står rett over
+  «Avslutt Ticker», med skillelinje på begge sider. Haken leses fra registret
+  hver gang menyen bygges. Et duplikat får ikke valget.
+- `AutostartPresent()` gir haken: verdien finnes, uansett type og innhold.
+- `ToggleAutostart()`: er verdien lik gjeldende sitert sti (`_wcsicmp`), slettes
+  den. Ellers skrives gjeldende sti, også når verdien peker på en flyttet exe,
+  er usitert, har feil type eller er for lang. Et avkrysset valg med foreldet
+  sti rettes derfor ved klikk i stedet for å slås av.
+- `AutostartCommand()` bruker samme `MAX_PATH`-vakt som `SpawnInstance`. En
+  avkuttet sti skrives aldri.
+- Mandatet nevner `WM_CONTEXTMENU`, men tray-ikonet leverer `WM_RBUTTONUP`
+  gjennom `WM_TRAYICON`. Punktet ligger derfor i `BuildTrayMenu()`.
+
+**Verifisert** i testbygg med `AUTOSTART_KEY` = `Software\TickerTestRun`, fra
+to mapper med mellomrom i navnet, **27/27 i tre kjøringer**. Testene dekker
+menyrekkefølge og tekst, hake før og etter klikk, sitert `REG_SZ`, sletting,
+flyttet exe (verdien oppdateres, ikke slettes), casing, usitert sti,
+`REG_DWORD`, for lang verdi og duplikat. Kommandolinja er kjørt med
+`CreateProcess`-tolkning og starter riktig exe. **GDI/USER 28/13**, uendret
+gjennom 800 klikk og 80 menyer. En ekte pålogging er ikke testet.
+
 ---
 
 ## Kjente begrensninger
@@ -2078,6 +2113,18 @@ Gren `modusveksling`, flettet inn med `--no-ff`.
     Sjekk per sample at forgrunnen er ditt eget vindu og at `WindowFromPoint`
     i kantpunktene treffer panelet. Kjør en kontroll uten rettelsen i samme
     kjøring, så du vet at proben ser det den skal.
+55. **Ikke skriv C-escapes gjennom en bash-heredoc.** På veien gjennom
+    Bash-verktøyet og heredocen ble `\\x00e5` til `\x00e5` før Python så
+    strengen, og Python skrev en ekte
+    NUL-byte inn i `ticker.c`. Bygget var rent på `/W4`, og `file` kalte
+    kilden «ASCII text». Bare `grep` («Binary file matches») og menyteksten
+    («pe5logging») viste feilen. Skriv skriptet til fil med Write-verktøyet,
+    og sjekk `grep -c $'\x00'` etter maskinelle endringer.
+56. **En menyprobe åpner ekte menyer ved pekeren.** `TrackPopupMenu` viser
+    menyen der brukerens peker står, og et ekte museklikk velger et punkt. Én
+    kjøring med 80 menyer fikk ett autostart-klikk for mye, og det lot seg ikke
+    gjenskape. Logg tilstanden etter hver blokk, og kjør proben flere ganger
+    før du tror på et avvik.
 
 ---
 
