@@ -26,6 +26,11 @@
 #define ID_TRAY_RESET    1002
 #define ID_TRAY_DESKTOP  1003   // skrivebordsmodus av/paa (fase 12)
 #define IDM_TOGGLE_AUTOSTART 1004   // start ved paalogging av/paa (fase 13)
+// Symbol og intervall fra tray-menyen (fase 17). Punkt i faar FIRST + i.
+// Omraadene er 100 brede; #error under tabellene sikrer at de aldri overlapper.
+#define ID_TRAY_SYMBOL_FIRST   1100
+#define ID_TRAY_INTERVAL_FIRST 1200
+#define ID_TRAY_RANGE_W        100
 #define TIMER_INTERVAL   3000 // 3 sekunder
 
 // --- Popup / graf ---
@@ -204,6 +209,11 @@ static const IntervalDef INTERVALS[] = {
 };
 #define SYMBOL_COUNT   ((int)(sizeof(SYMBOLS) / sizeof(SYMBOLS[0])))
 #define INTERVAL_COUNT ((int)(sizeof(INTERVALS) / sizeof(INTERVALS[0])))
+// Tray-menyens ID-omraader (fase 17). sizeof kan ikke staa i #if, saa vakten
+// er C_ASSERT: vokser en tabell forbi omraadet, stopper bygget her.
+C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
+C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
+C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 
 // 4x9 piksel-font. En rad per byte, bit 3 = venstre kolonne, bit 0 = hoyre.
 // Ett linje med 9px hoye sifre er nesten dobbelt saa lesbart som to linjer
@@ -2489,7 +2499,12 @@ static void StartAnim(HWND hwnd) {
 // Bytter symbol eller intervall. Teller opp configGen og tommer bufferet i
 // SAMME kritiske seksjon, slik at et svar fra forrige konfig som ankommer
 // akkurat naa blir forkastet i stedet for flettet inn.
-static void ApplyConfigChoice(AppContext* ctx, HWND hwnd, int hit) {
+//
+// Kalles fra overlayet og fra tray-menyen (fase 17). Tar ikke noe HWND:
+// panelet kan vaere lukket naar valget kommer fra menyen, og
+// InvalidateRect(NULL, ...) ville tegnet hele skrivebordet paa nytt.
+// hit: [0, SYMBOL_COUNT) er symbol, [SYMBOL_COUNT, +INTERVAL_COUNT) intervall.
+static void ApplyConfigChoice(AppContext* ctx, int hit) {
     BOOL isSym = (hit < SYMBOL_COUNT);
     int  idx   = isSym ? hit : (hit - SYMBOL_COUNT);
     if (isSym  && (idx < 0 || idx >= SYMBOL_COUNT))   return;
@@ -2517,7 +2532,7 @@ static void ApplyConfigChoice(AppContext* ctx, HWND hwnd, int hit) {
     // traden.
     SetEvent(ctx->hWakeEvent);
     SaveConfig(ctx);
-    InvalidateRect(hwnd, NULL, FALSE);
+    if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
 // Zoom og panorering tilbake til standardutsnittet: de siste DEFAULT_VIEW
@@ -3139,7 +3154,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 OverlayRects orr;
                 OverlayLayout(rcO.right, rcO.bottom, &orr);
                 int hit = OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-                if (hit >= 0) ApplyConfigChoice(&g_Ctx, hwnd, hit);
+                if (hit >= 0) ApplyConfigChoice(&g_Ctx, hit);
                 g_Ctx.overlayOpen = FALSE;   // klikk utenfor lukker uten endring
                 g_Ctx.overlayHot  = -1;
                 StartAnim(hwnd);
@@ -3564,9 +3579,36 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     TogglePopup(ctx, hInst);
 }
 
+// Undermenyene for symbol og intervall (fase 17): ett punkt per tabellrad og
+// radiohake paa den valgte. Hengt paa hovedmenyen med MF_POPUP eies de av
+// den, saa DestroyMenu paa hovedmenyen river dem ned - ingen nye haandtak i
+// hvile. Etikettene er tabellenes label, samme tekst som overlayet.
+static HMENU BuildSymbolMenu(void) {
+    HMENU h = CreatePopupMenu();
+    if (!h) return NULL;
+    for (int i = 0; i < SYMBOL_COUNT; i++)
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_SYMBOL_FIRST + i), SYMBOLS[i].label);
+    CheckMenuRadioItem(h, ID_TRAY_SYMBOL_FIRST, ID_TRAY_SYMBOL_FIRST + SYMBOL_COUNT - 1,
+                       (UINT)(ID_TRAY_SYMBOL_FIRST + g_Ctx.symIdx), MF_BYCOMMAND);
+    return h;
+}
+
+static HMENU BuildIntervalMenu(void) {
+    HMENU h = CreatePopupMenu();
+    if (!h) return NULL;
+    for (int i = 0; i < INTERVAL_COUNT; i++)
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_INTERVAL_FIRST + i), INTERVALS[i].label);
+    CheckMenuRadioItem(h, ID_TRAY_INTERVAL_FIRST, ID_TRAY_INTERVAL_FIRST + INTERVAL_COUNT - 1,
+                       (UINT)(ID_TRAY_INTERVAL_FIRST + g_Ctx.ivIdx), MF_BYCOMMAND);
+    return h;
+}
+
 // Tray-menyen. Egen funksjon saa hake og innhold kan testes uten et
 // tray-ikon.
 //
+//       Symbol            >   (o) BTC/USDT  ( ) ETH/USDT  ...
+//       Intervall         >   (o) 1m  ( ) 5m  ...
+//   ---------------------------
 //   [x] Skrivebordsmodus
 //       Standardvisning   Ctrl+0     (graa i skrivebordsmodus)
 //   ---------------------------
@@ -3577,10 +3619,19 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
 // "Standardvisning" er graa, ikke borte, i skrivebordsmodus: den ville gjort
 // flaten om til et 1280x720-vindu inne i WorkerW. Et duplikat faar hverken
 // modusvalget eller autostart - det eier ikke registret og avsluttes naar
-// panelet lukkes. Haken for autostart leses fra Run-nokkelen hver gang.
+// panelet lukkes. Symbol og intervall faar det derimot: overlayet lar det
+// alt bytte sin egen visning, og SaveConfig hopper over duplikater selv.
+// Haken for autostart leses fra Run-nokkelen hver gang.
 static HMENU BuildTrayMenu(void) {
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return NULL;
+    {
+        HMENU hSym = BuildSymbolMenu();
+        HMENU hIv  = BuildIntervalMenu();
+        if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
+        if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Intervall");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    }
     if (!g_isDuplicate) {
         AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_DESKTOP, L"Skrivebordsmodus");
@@ -3629,6 +3680,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (LOWORD(wParam) == IDM_TOGGLE_AUTOSTART) {
                 ToggleAutostart();
                 return 0;
+            }
+            {
+                // Symbol og intervall (fase 17). Omraadesjekk foerst: en postet
+                // ID utenfor tabellene er en stille no-op, ikke en indeks.
+                // Kodingen av hit er den samme som OverlayHit bruker.
+                int id = (int)LOWORD(wParam);
+                if (id >= ID_TRAY_SYMBOL_FIRST && id < ID_TRAY_SYMBOL_FIRST + SYMBOL_COUNT) {
+                    ApplyConfigChoice(&g_Ctx, id - ID_TRAY_SYMBOL_FIRST);
+                    return 0;
+                }
+                if (id >= ID_TRAY_INTERVAL_FIRST && id < ID_TRAY_INTERVAL_FIRST + INTERVAL_COUNT) {
+                    ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (id - ID_TRAY_INTERVAL_FIRST));
+                    return 0;
+                }
             }
             if (LOWORD(wParam) == ID_TRAY_RESET) {
                 // Graa i menyen i skrivebordsmodus; sperres her ogsaa, for en
