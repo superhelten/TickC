@@ -22,6 +22,9 @@
 
 #define WM_TRAYICON      (WM_USER + 1)
 #define WM_APP_DATA      (WM_APP + 1)   // arbeidertraden har nye data
+#ifdef TICKER_PROBE
+#define WM_APP_PROBE     (WM_APP + 2)   // bare testbygg: les indre tilstand (fase 18)
+#endif
 #define ID_TRAY_EXIT     1001
 #define ID_TRAY_RESET    1002
 #define ID_TRAY_DESKTOP  1003   // skrivebordsmodus av/paa (fase 12)
@@ -42,7 +45,11 @@
 #define POPUP_MIN_W      400
 #define POPUP_MIN_H      250
 #define RESIZE_BORDER    6     // bredde pa sonen som starter storrelsesendring
-#define MAX_CANDLES      1440  // 24 timer med 1m-lys, bygges opp mens panelet star apent
+// 6000 lys a 40 byte = 240 KB. Fire dager paa 1m, seksten aar paa 1d. Fylles
+// bakover paa forespoersel (fase 18) og framover mens panelet staar aapent.
+// Fullt buffer stopper bakfyllingen (histDone) - levende lys kastes aldri
+// for aa gi plass til gamle. Var 1440 (ett dogn paa 1m) til og med fase 17.
+#define MAX_CANDLES      6000
 #define SEED_COUNT       300   // forste henting: 5 timer i ett jafs
 #define DEFAULT_VIEW     300   // synlig utsnitt ved apning
 #define MIN_VIEW         8     // minste antall synlige lys ved full zoom
@@ -318,11 +325,12 @@ typedef struct {
     double dispStart, dispCount;   // brokdels-utsnitt
     double dispMin, dispMax;       // animert prisakse
     BOOL   dispValid;              // FALSE = snap ved neste oppdatering
-    long long dispEvictedSeen;     // utkastinger UI har kompensert for
+    long long dispShiftSeen;       // frontShift UI har kompensert for
 
     // --- Arbeidertrad ---
     // Laasen dekker candles[], candleCount, viewStart, viewCount,
-    // followLive, lastPrice og hPopup. Alt annet rores kun av UI-traden.
+    // followLive, lastPrice, hPopup, frontShift, histPending og histDone.
+    // Alt annet rores kun av UI-traden.
     CRITICAL_SECTION lock;
     HANDLE hThread;
     HANDLE hStopEvent;   // manuell reset: signaliserer avslutning
@@ -332,7 +340,16 @@ typedef struct {
     ULONGLONG lastOkTick;    // GetTickCount64 ved siste vellykkede henting
     ULONGLONG nextRetryTick; // naar neste forsok er planlagt
     int       netFailures;   // sammenhengende feil, driver backoffen
-    long long evictedTotal;  // lys som har falt ut i front, monotont
+    // Netto endring FORAN i bufferet, med fortegn: +1 per lys som faller ut
+    // (utkasting), -k per k lys lagt foran (bakfylling, fase 18). UI-traden
+    // flytter visning, hover og pan-anker like mye (ApplyFrontShift). Var
+    // evictedTotal, monoton, til og med fase 17.
+    long long frontShift;
+    // Bakfylling (fase 18). histPending: UI vil ha eldre lys, traden har ikke
+    // hentet enda. histDone: serveren svarte 2xx uten lys, eller bufferet er
+    // fullt - ikke spor igjen for denne konfigen.
+    BOOL      histPending;
+    BOOL      histDone;
 
     // --- Bufrede GDI-objekter ---
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
@@ -821,6 +838,8 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
         ctx->viewCount   = 0;
         ctx->followLive  = TRUE;
         ctx->dispValid   = FALSE;   // nytt buffer: ingenting a ease fra
+        ctx->histPending = FALSE;   // nytt buffer: historikken begynner paa nytt
+        ctx->histDone    = FALSE;
     }
 
     for (int i = 0; i < count; ++i) {
@@ -845,7 +864,7 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
                 memmove(ctx->candles, ctx->candles + 1, (size_t)(n - 1) * sizeof(Candle));
                 n--;
                 ctx->candleCount = n;
-                ctx->evictedTotal++;   // UI-traden forskyver disp-indeksene mot denne
+                ctx->frontShift++;     // UI-traden forskyver disp-indeksene mot denne
                 if (ctx->viewStart > 0) ctx->viewStart--;
             }
             ctx->candles[n]  = *c;
@@ -876,6 +895,46 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
         ctx->viewStart = ctx->candleCount - ctx->viewCount;
     }
     ClampView(ctx);
+}
+
+// Bakfylling (fase 18): legger eldre lys FORAN bufferet. in er stigende i
+// tid, som fra ParseKlines. Kalles under laas.
+//
+// Lys som ikke er eldre enn candles[0] kastes - endTime i spoerringen er
+// candles[0].openTime - 1, saa de skal ikke finnes, men serveren bestemmer.
+// Av resten tas de NYESTE som faar plass under MAX_CANDLES; de eldste
+// ryker, og bufferet er da fullt. Utsnittet flyttes k plasser saa de samme
+// lysene staar under det, og frontShift telles ned saa UI-traden flytter
+// visning, hover og pan-anker like mye. followLive er uroert: et utsnitt
+// som fulgte siste lys, gjoer det fortsatt.
+//
+// histDone settes naar bufferet er fullt, og naar ingenting av det som kom
+// var brukbart: da har serveren ikke noe eldre, og neste vegg-treff skal
+// ikke spoerre igjen.
+static void PrependCandles(AppContext* ctx, const Candle* in, int count) {
+    if (count <= 0 || ctx->candleCount <= 0) return;
+
+    long long oldest = ctx->candles[0].openTime;
+    int usable = 0;
+    while (usable < count && in[usable].openTime < oldest) usable++;
+
+    int room = MAX_CANDLES - ctx->candleCount;
+    int k    = (usable < room) ? usable : room;
+    if (k > 0) {
+        const Candle* src = in + (usable - k);   // de nyeste av de brukbare
+        memmove(ctx->candles + k, ctx->candles, (size_t)ctx->candleCount * sizeof(Candle));
+        memcpy(ctx->candles, src, (size_t)k * sizeof(Candle));
+        ctx->candleCount += k;
+        ctx->frontShift  -= k;
+        // viewCount 0 er "vis alt" (GetView) og skal forbli det: ClampView
+        // ville loeftet 0 til MIN_VIEW. Med et satt utsnitt flyttes det k
+        // plasser, saa de samme lysene staar under det.
+        if (ctx->viewCount > 0) {
+            ctx->viewStart += k;
+            ClampView(ctx);
+        }
+    }
+    if (usable == 0 || ctx->candleCount >= MAX_CANDLES) ctx->histDone = TRUE;
 }
 
 static inline int GlyphIndex(char c) {
@@ -1027,21 +1086,36 @@ static BOOL HttpGet(AppContext* ctx, const wchar_t* path, char* buf, DWORD bufSi
                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, NULL)) {
 
-        for (;;) {
-            DWORD avail = 0;
-            if (!WinHttpQueryDataAvailable(hRequest, &avail) || avail == 0) break;
+        // Statuskoden (fase 18). Foer talte enhver kropp som suksess, ogsaa
+        // en 429 med JSON-feilmelding - parserne fanget det stille som "null
+        // lys" / "ingen pris". Bakfyllingen trenger skillet: 2xx med null lys
+        // betyr "historikken er slutt", alt annet er en feil som skal i
+        // backoff. En 4xx paa de gamle stiene gaar naa samme vei, med samme
+        // utfall som foer.
+        DWORD status = 0, cb = sizeof(status);
+        BOOL  is2xx  = WinHttpQueryHeaders(hRequest,
+                                           WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                           WINHTTP_HEADER_NAME_BY_INDEX, &status, &cb,
+                                           WINHTTP_NO_HEADER_INDEX)
+                       && status >= 200 && status < 300;
 
-            DWORD room = bufSize - 1 - total;
-            if (room == 0) break;
-            if (avail > room) avail = room;
+        if (is2xx) {
+            for (;;) {
+                DWORD avail = 0;
+                if (!WinHttpQueryDataAvailable(hRequest, &avail) || avail == 0) break;
 
-            DWORD got = 0;
-            if (!WinHttpReadData(hRequest, buf + total, avail, &got) || got == 0) break;
-            total += got;
+                DWORD room = bufSize - 1 - total;
+                if (room == 0) break;
+                if (avail > room) avail = room;
+
+                DWORD got = 0;
+                if (!WinHttpReadData(hRequest, buf + total, avail, &got) || got == 0) break;
+                total += got;
+            }
+
+            buf[total] = '\0';
+            ok = (total > 0);
         }
-
-        buf[total] = '\0';
-        ok = (total > 0);
     }
 
     WinHttpCloseHandle(hRequest);
@@ -1181,6 +1255,55 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     return TRUE;
 }
 
+// Bakfylling (fase 18): SEED_COUNT lys eldre enn det eldste vi har. Kjoeres
+// FOER den inkrementelle hentingen i syklusen histPending staar, saa det
+// levende lyset holder seg ferskt uansett. TRUE betyr som ellers "ikke en
+// nettverksfeil". Feiler HttpGet, slippes flagget: neste vegg-treff spoer
+// igjen. Ellers kunne en varig 4xx paa denne stien alene ha sultet ut
+// lys-hentingen.
+static BOOL WorkerFetchHistory(AppContext* ctx) {
+    unsigned  gen;
+    int       si, ii;
+    long long endTime;
+
+    EnterCriticalSection(&ctx->lock);
+    if (!ctx->histPending) { LeaveCriticalSection(&ctx->lock); return TRUE; }
+    if (ctx->candleCount <= 0 || ctx->histDone) {
+        ctx->histPending = FALSE;
+        LeaveCriticalSection(&ctx->lock);
+        return TRUE;
+    }
+    if (ctx->candleCount >= MAX_CANDLES) {
+        ctx->histPending = FALSE;
+        ctx->histDone    = TRUE;
+        LeaveCriticalSection(&ctx->lock);
+        return TRUE;
+    }
+    gen     = ctx->configGen;
+    si      = ctx->symIdx;
+    ii      = ctx->ivIdx;
+    endTime = ctx->candles[0].openTime - 1;   // endTime er inklusiv hos Binance
+    LeaveCriticalSection(&ctx->lock);
+
+    wchar_t path[192];
+    swprintf_s(path, 192, L"/api/v3/klines?symbol=%s&interval=%s&endTime=%lld&limit=%d",
+               SYMBOLS[si].api, INTERVALS[ii].api, endTime, SEED_COUNT);
+
+    BOOL got = HttpGet(ctx, path, s_httpBuf, (DWORD)sizeof(s_httpBuf));
+    int  n   = got ? ParseKlines(s_httpBuf, s_incoming, SEED_COUNT) : 0;
+
+    EnterCriticalSection(&ctx->lock);
+    if (ctx->configGen == gen) {
+        ctx->histPending = FALSE;
+        if (got) {
+            if (n <= 0) ctx->histDone = TRUE;   // 2xx uten lys: historikken er slutt
+            else        PrependCandles(ctx, s_incoming, n);
+        }
+    }
+    LeaveCriticalSection(&ctx->lock);
+    return got;
+}
+
 static BOOL WorkerFetchPrice(AppContext* ctx) {
     unsigned gen;
     int si;
@@ -1213,12 +1336,20 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
 
     for (;;) {
         EnterCriticalSection(&ctx->lock);
-        HWND hp = ctx->hPopup;
+        HWND hp   = ctx->hPopup;
+        BOOL hist = ctx->histPending;
         LeaveCriticalSection(&ctx->lock);
 
         // Star grafen apen trenger vi lys; ellers holder det med prisen.
-        BOOL ok = (hp && IsWindowVisible(hp)) ? WorkerFetchKlines(ctx)
-                                              : WorkerFetchPrice(ctx);
+        // Vil UI ha eldre lys (fase 18), hentes de foerst, og lysene like
+        // etter - to kall i den syklusen, saa det levende lyset ikke venter.
+        BOOL ok;
+        if (hp && IsWindowVisible(hp)) {
+            ok = hist ? WorkerFetchHistory(ctx) : TRUE;
+            if (ok) ok = WorkerFetchKlines(ctx);
+        } else {
+            ok = WorkerFetchPrice(ctx);
+        }
 
         ULONGLONG now = GetTickCount64();
         DWORD wait;
@@ -1454,12 +1585,13 @@ static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, do
 // Uten dette hopper grafen ett lys til venstre hvert minutt saa snart
 // bufferet har naadd taket, og hoverIdx peker paa nabolyset.
 // Idempotent: delta blir 0 andre gang. Kalles under laas.
-static void ApplyEviction(AppContext* ctx) {
-    long long delta = ctx->evictedTotal - ctx->dispEvictedSeen;
-    if (delta <= 0) return;
-    ctx->dispEvictedSeen = ctx->evictedTotal;
+static void ApplyFrontShift(AppContext* ctx) {
+    long long delta = ctx->frontShift - ctx->dispShiftSeen;
+    if (delta == 0) return;
+    ctx->dispShiftSeen = ctx->frontShift;
 
-    // Ingen easing: en utkasting er ikke en bevegelse brukeren skal se.
+    // Ingen easing: en utkasting er ikke en bevegelse brukeren skal se, og en
+    // bakfylling (delta < 0, fase 18) skal ikke flytte bildet i det hele tatt.
     ctx->dispStart -= (double)delta;
     if (ctx->dispStart < 0.0) ctx->dispStart = 0.0;
     if (ctx->hoverIdx >= 0) {
@@ -1470,6 +1602,23 @@ static void ApplyEviction(AppContext* ctx) {
     if (ctx->panAnchorView < 0) ctx->panAnchorView = 0;
 }
 
+// Brukeren staar i veggen (viewStart == 0) og vil bakover (fase 18). Setter
+// histPending og vekker traden - men bare naar linja er frisk: hWakeEvent
+// nullstiller backoffen (den er laget for "panelet ble aapnet"), og et drag i
+// veggen under en frakobling skal ikke slaa backoffen av. Er traden i
+// backoff, ser den flagget paa sin egen syklus. SetEvent staar utenfor
+// laasen, som ellers i fila.
+static void RequestHistory(AppContext* ctx) {
+    BOOL wake = FALSE;
+    EnterCriticalSection(&ctx->lock);
+    if (!ctx->histDone && !ctx->histPending && ctx->candleCount > 0) {
+        ctx->histPending = TRUE;
+        wake = (ctx->netFailures == 0);
+    }
+    LeaveCriticalSection(&ctx->lock);
+    if (wake) SetEvent(ctx->hWakeEvent);
+}
+
 // Setter visningen lik maalet uten animasjon. Brukes naar en animasjon ikke
 // gir mening: forste bilde, nytt buffer etter konfigbytte, panelet apnes.
 // Kalles under laas.
@@ -1478,7 +1627,7 @@ static void SyncDisp(AppContext* ctx) {
     GetView(ctx, &vs, &vc);
     ctx->dispStart = (double)vs;
     ctx->dispCount = (vc > 0) ? (double)vc : 1.0;
-    ctx->dispEvictedSeen = ctx->evictedTotal;
+    ctx->dispShiftSeen = ctx->frontShift;
 
     // Med tomt buffer finnes det ingen prisakse a synkronisere mot. Markerer
     // vi oss som gyldige her, eases dispMin/dispMax fra [0, 1] opp til det
@@ -1962,8 +2111,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     int edge = g.edge;   // aksekanten; right er der lysene slutter
     if (cw <= 0 || ch <= 0) return;
 
-    // Kalles under laas, saa evictedTotal kan leses direkte.
-    ApplyEviction(ctx);
+    // Kalles under laas, saa frontShift kan leses direkte.
+    ApplyFrontShift(ctx);
     if (!ctx->dispValid) SyncDisp(ctx);
 
     // Tegningen leser VISNINGEN. Maalet (vs, vc) brukes bare til spennteksten
@@ -2521,6 +2670,8 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     ctx->viewCount   = 0;
     ctx->followLive  = TRUE;
     ctx->lastPrice   = 0.0;
+    ctx->histPending = FALSE;   // ny konfig: historikken begynner paa nytt
+    ctx->histDone    = FALSE;
     LeaveCriticalSection(&ctx->lock);
 
     ctx->hoverIdx = -1;
@@ -2912,16 +3063,32 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
 
             if (g_Ctx.panning) {
+                BOOL atWall = FALSE;
                 EnterCriticalSection(&g_Ctx.lock);
+                // Ankeret maa kompenseres FOER det leses: en bakfylling
+                // mellom forrige timer-tikk og dette museflyttet ville
+                // ellers gitt ett bilde med hopp paa k lys (fase 18).
+                ApplyFrontShift(&g_Ctx);
                 int vs2, vc2;
                 GetView(&g_Ctx, &vs2, &vc2);
                 if (vc2 > 0 && g.cw > 0) {
                     double slot = (double)g.cw / (double)vc2;
                     int shift = (int)((double)(mx - g_Ctx.panAnchorX) / slot);
-                    g_Ctx.viewStart = g_Ctx.panAnchorView - shift;  // dra hoyre = bakover
+                    int want  = g_Ctx.panAnchorView - shift;        // dra hoyre = bakover
+                    g_Ctx.viewStart = want;
                     ClampView(&g_Ctx);
+                    // I veggen glir fingeren: ankeret flyttes hit, saa
+                    // overskytingen ikke huskes. Uten dette ville draget
+                    // etter en bakfylling (fase 18) hoppet med akkurat det
+                    // brukeren dro forbi veggen foer lysene kom, og et drag
+                    // tilbake fra veggen ville staatt stille like lenge.
+                    if (g_Ctx.viewStart != want) {
+                        g_Ctx.panAnchorView = g_Ctx.viewStart;
+                        g_Ctx.panAnchorX    = mx;
+                    }
                     g_Ctx.followLive =
                         (g_Ctx.viewStart + g_Ctx.viewCount >= g_Ctx.candleCount);
+                    atWall = (g_Ctx.viewStart == 0);
                     // Dra-panorering eases IKKE i X. Fingeren og grafen maa
                     // henge sammen; eased dra foles treigt, ikke mykt.
                     // Y-aksen eases fortsatt - den skal gli naar nye topper
@@ -2933,6 +3100,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     g_Ctx.hoverY   = my;
                 }
                 LeaveCriticalSection(&g_Ctx.lock);
+                if (atWall) RequestHistory(&g_Ctx);   // fase 18
                 StartAnim(hwnd);   // Y-aksen kan ha nytt maal
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
@@ -2965,6 +3133,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             BOOL ctrl   = (GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0;
             int notches = GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
 
+            BOOL atWall = FALSE;
             EnterCriticalSection(&g_Ctx.lock);
             int n = g_Ctx.candleCount;
             if (n > 0) {
@@ -3000,9 +3169,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 ClampView(&g_Ctx);
                 g_Ctx.followLive = (g_Ctx.viewStart + g_Ctx.viewCount >= g_Ctx.candleCount);
                 g_Ctx.hoverIdx   = HitCandle(&g_Ctx, &g, pt.x, pt.y);
+                atWall = (g_Ctx.viewStart == 0);
             }
             LeaveCriticalSection(&g_Ctx.lock);
 
+            // Veggen (fase 18). Ogsaa zoom inn med ankeret helt til venstre
+            // paa et ferskt panel lander her - ett kall paa 50 KB, ufarlig.
+            if (atWall) RequestHistory(&g_Ctx);
             StartAnim(hwnd);   // maalet flyttet seg; visningen skal ease dit
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -3019,6 +3192,38 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
+
+#ifdef TICKER_PROBE
+        // Testbygg (fase 18): leser indre tilstand uten aa roere den, saa en
+        // probe kan vente paa at en bakfylling har landet og sjekke at
+        // utsnittet peker paa de samme lysene foer og etter. Bygges bare med
+        // /DTICKER_PROBE; produksjonsbygget har ikke meldingen.
+        case WM_APP_PROBE: {
+            LRESULT r = -1;
+            EnterCriticalSection(&g_Ctx.lock);
+            int pvs, pvc;
+            GetView(&g_Ctx, &pvs, &pvc);
+            switch (wParam) {
+                case 0:  r = g_Ctx.candleCount; break;
+                case 1:  r = pvs; break;
+                case 2:  r = pvc; break;
+                case 3:  r = (LRESULT)g_Ctx.frontShift; break;
+                case 4:  r = g_Ctx.histDone; break;
+                case 5:  r = g_Ctx.histPending; break;
+                case 6:  r = (g_Ctx.candleCount > 0)
+                             ? (LRESULT)(g_Ctx.candles[0].openTime / 1000) : 0; break;
+                case 7:  r = (pvs < g_Ctx.candleCount)
+                             ? (LRESULT)(g_Ctx.candles[pvs].openTime / 1000) : 0; break;
+                case 8:  r = (LRESULT)(g_Ctx.dispStart * 1000.0); break;   // tusendels lys
+                case 9:  r = g_Ctx.netFailures; break;
+                case 10: r = g_Ctx.followLive; break;
+                case 11: r = g_Ctx.hoverIdx; break;
+                default: break;
+            }
+            LeaveCriticalSection(&g_Ctx.lock);
+            return r;
+        }
+#endif
 
         // Animasjonsklokka. Driver alt tidsavhengig fra ett sted, og dor
         // naar alt har satt seg - i hvile gaar det ingen timer.
@@ -3054,7 +3259,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     int tvs = 0, tvc = 0, tn = 0;
                     double tMin = 0.0, tMax = 1.0;
                     EnterCriticalSection(&g_Ctx.lock);
-                    ApplyEviction(&g_Ctx);
+                    ApplyFrontShift(&g_Ctx);
                     tn = g_Ctx.candleCount;
                     GetView(&g_Ctx, &tvs, &tvc);
                     if (tn > 0 && tvc > 0) PriceRange(&g_Ctx, tvs, tvc, &tMin, &tMax);
