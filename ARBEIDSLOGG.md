@@ -95,7 +95,8 @@ den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
 `[ + ]` — ellers feiler
 `LNK1104: cannot open file 'ticker.exe'`.
 
-Fotavtrykk: ~3,6 MB private bytes, ~164 KB exe. (Panelet er 1280×720 nå, mot
+Fotavtrykk: ~3,5 MB private bytes, 195 KB exe etter fase 23 (187 KB etter
+fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
 380×300 i fase 1 — dobbeltbufferet er 8× større.)
 
 ---
@@ -2380,6 +2381,15 @@ siste pris lå oppå et varselmerke 12 px under, og et tall kuttet på langs
 stakk fram. Et merke som er dekket av stempelet eller av et senere tegnet
 merke (under 16 px) tegnes nå som ren flate. Proben fikk en sjekk for det.
 
+**Rettet etter flettingen, funnet av produksjonsbygget:** exe-en vokste fra
+187 392 til 216 064 byte. `AlertRound` brukte `pow(10, floor(log10(x)))`, og
+de to kallene alene dro inn ~21 KB CRT-matematikk — for en avrunding med ni
+mulige svar. Byttet mot en trapp (`q *= 10`) over 1 og deling på 10 eller
+100 under 1 (deling, fordi 0,1 og 0,01 ikke finnes eksakt). **195 072 byte**
+etterpå, +7,7 KB for hele fasen. Enhetstestene 20/20 og 109/109 i to nye
+kjøringer på det bygget. Alle tidligere bygg i fasen var testbygg; bare
+produksjonsbygget viste størrelsen (fallgruve 75).
+
 **Verifisert.** Enhetstester på ekte kode (funksjonene limt ut av
 `ticker.c`): **20/20** — `AlertHit` på begge sider, på nivået, pris 0 og
 negativ, nivå 0; `AlertRound` for BTC 1m/1d og SOL, gulvet 0,01, og
@@ -2935,6 +2945,13 @@ stempelet).
     En probe som leter etter linja, må lete i `y ± 2` og godta ± 1.
 74. **Beskrivelsen i en `Check` er ikke en formatstreng.** `%%` skrives ut
     som to prosenttegn. Rød kjøring sa «2 %% over prisen».
+75. **Se på exe-størrelsen etter produksjonsbygget, og bygg det før
+    flettingen.** Ett kall til `pow` og ett til `log10` la 21 KB på exe-en
+    (statisk CRT, `pow` har tabeller); `exp`, `sqrt`, `floor`, `ceil` og
+    `fabs` var der fra før og koster lite. `/W4` sier ingenting, testbygget
+    er større av andre grunner, og fase 23 oppdaget det først etter
+    `--no-ff`-flettingen. Sammenlikn `ticker.exe` med forrige fases tall
+    (187 392 etter fase 22, 195 072 etter fase 23) før du fletter.
 
 ---
 

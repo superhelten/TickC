@@ -647,11 +647,23 @@ static BOOL AlertHit(double now, double signedLevel) {
 // piksel fra der det ble satt, men leser 75120 og ikke 75123.4567. Gulvet er
 // 0,01: finere enn det vises ikke noe sted (fallgruve 16 - terskelen regnes
 // fra piksler, ikke fra et fast tall i dollar).
+//
+// En trapp, ikke pow(10, floor(log10(x))): de to kallene alene la 28 KB paa
+// exe-en (187 -> 216 KB, maalt - CRT-ens pow med tabeller), for en avrunding
+// som har ni mulige svar. Under 1 deles det paa 10 eller 100 i stedet for aa
+// gange med 0,1 eller 0,01, som ikke finnes eksakt: 751235 / 10 er riktig
+// avrundet, 751235 * 0,1 er 75123,500000000015.
 static double AlertRound(double price, double pxStep) {
     if (price <= 0.0 || pxStep <= 0.0) return price;
-    double q = pow(10.0, floor(log10(pxStep)));
-    if (q < 0.01) q = 0.01;
-    double r = floor(price / q + 0.5) * q;
+    double r;
+    if (pxStep >= 1.0) {
+        double q = 1.0;
+        while (q * 10.0 <= pxStep && q < 1.0e6) q *= 10.0;
+        r = floor(price / q + 0.5) * q;
+    } else {
+        double inv = (pxStep >= 0.1) ? 10.0 : 100.0;
+        r = floor(price * inv + 0.5) / inv;
+    }
     return (r > 0.0) ? r : price;
 }
 
