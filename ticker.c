@@ -376,6 +376,14 @@ typedef struct {
     // arbeidertraden. Treffdeteksjonen henger paa DENNE, ikke paa noe
     // fade-niva - knappene har ingen fade, de skifter farge momentant.
     int    btnHot;
+    // Verktoylinja i headerens rad 2 (fase 22). tbHot er pillen musa staar
+    // paa, -1 for ingen - samme regel som btnHot: logisk tilstand, ingen
+    // fade. showVol er brukerens valg og lagres i registret; dispVolF er
+    // VISNINGEN av det, 0..1, og eases i WM_TIMER saa stolpene synker ned i
+    // stedet for aa blinke bort. Alle tre er UI-eid.
+    int    tbHot;
+    BOOL   showVol;
+    double dispVolF;
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brBox, brBoxEdge;
     HBRUSH brVolUp, brVolDown;       // volumstolper (fase 21)
@@ -2886,6 +2894,7 @@ static BOOL ZoomView(AppContext* ctx, double frac, int notches) {
 static void HidePanel(HWND hwnd) {
     g_Ctx.hoverIdx = -1;
     g_Ctx.btnHot   = -1;
+    g_Ctx.tbHot    = -1;
     if (g_isDuplicate) {
         ShowWindow(hwnd, SW_HIDE);
         SendMessageW(g_Ctx.hWnd, WM_COMMAND, ID_TRAY_EXIT, 0);
@@ -3332,6 +3341,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // ledig headerflate (HTCAPTION): den forlater klientomraadet uten
             // aa forlate vinduet. Uten dette blir knappen staaende opplyst.
             g_Ctx.btnHot        = -1;
+            g_Ctx.tbHot         = -1;
             StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -3369,6 +3379,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 14: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[(int)lParam].volume * 100.0) : -1; break;
                 case 15: r = (LRESULT)g_probePaintUs; break;
+                // Fase 22: verktoylinja.
+                case 16: r = g_Ctx.ivIdx; break;
+                case 17: r = g_Ctx.symIdx; break;
+                case 18: r = g_Ctx.showVol; break;
+                case 19: r = g_Ctx.tbHot; break;
+                case 20: r = g_Ctx.overlayOpen; break;
+                case 21: r = (LRESULT)(g_Ctx.dispVolF * 1000.0); break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -3874,6 +3891,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ctx->overlayF    = 0.0;
             ctx->overlayHot  = -1;
             ctx->btnHot      = -1;
+            ctx->tbHot       = -1;
             SaveWindowPlacement(ctx->hPopup);
             ShowWindow(ctx->hPopup, SW_HIDE);
             return;
@@ -4350,6 +4368,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.curArrow    = LoadCursorW(NULL, IDC_ARROW);
     g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
     g_Ctx.btnHot      = -1;
+    g_Ctx.tbHot       = -1;
+    g_Ctx.showVol     = TRUE;   // fase 22; LoadConfig kan skru det av
+    g_Ctx.dispVolF    = 1.0;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
     // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
