@@ -30,6 +30,9 @@ mot prisaksen og lar den stiplede siste-pris-linja bygge bro over den.
 **Fase 16** setter ett skalert pris-stempel på skrivebordets høyre kant —
 flatens eneste tekst. **Fase 17** gir tray-menyen undermenyene «Symbol» og
 «Intervall», så skrivebordsmodus kan bytte uten å gå veien om panelet.
+**Fase 18** henter eldre lys når brukeren panorerer inn i veggen: bufferet
+fylles bakover til historikkens start eller til 6000 lys, uten at bildet
+flytter seg.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -43,12 +46,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md` og
 `docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md` og
 `docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md` og
-`docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md`. Design:
+`docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md` og
+`docs/superpowers/plans/2026-09-18-ticker-historikk.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~3990 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~4190 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -105,7 +109,8 @@ gjør `PostMessage(WM_APP_DATA)` **etter** at låsen er sluppet.
 
 ### Datalag
 
-- `candles[1440]` — fast statisk array, 24 timer med 1m-lys. **Ingen malloc noe sted.**
+- `candles[6000]` — fast statisk array, 240 KB. Fylles framover mens panelet
+  står åpent og bakover på forespørsel (fase 18). **Ingen malloc noe sted.**
 - Første henting seeder 300 lys (`limit=300`, ~50 KB). Deretter `limit=3` (~500 byte).
 - `MergeCandles()` fletter på `openTime`: samme tidsstempel **oppdaterer**
   (lyset under forming endrer seg), nyere **legges til**, eldste faller ut ved taket.
@@ -447,7 +452,7 @@ tikk — ikke et fast tall i lys eller dollar. Se målingene for hvorfor.
 | **Dra-panorering** | **X følger musa direkte**, Y eases |
 | Y-akse ved nye data | eases |
 | Symbol-/intervallbytte, panelåpning, buffer-reset | snapper (`dispValid = FALSE`) |
-| Indeksforskyvning ved utkasting | snapper (`ApplyEviction`) |
+| Indeksforskyvning ved utkasting og bakfylling | snapper (`ApplyFrontShift`) |
 
 `SyncDisp` markerer seg **ikke** som gyldig når bufferet er tomt. Gjorde den
 det, sto aksen på `[0, 1]` gjennom et symbolbytte og gled opp til det ekte
@@ -508,7 +513,7 @@ er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
 
 | Navn | Verdi | Betydning |
 |---|---|---|
-| `MAX_CANDLES` | 1440 | 24 t buffer |
+| `MAX_CANDLES` | 6000 | 4 dager på 1m, 16 år på 1d; var 1440 til fase 17 |
 | `SEED_COUNT` / `DEFAULT_VIEW` | 300 | 5 t frø / standard utsnitt |
 | `MIN_VIEW` | 8 | maks innzoom |
 | `ZOOM_STEP` | 1.2 | per hjulhakk |
@@ -1962,6 +1967,47 @@ radiohakene står på BTC/USDT og 1m, lik `SymbolIndex` 0 og `IntervalIndex` 0
 i `Software\Ticker`. Undermenyenes egne punkter har ID −1 (`MF_POPUP`), som
 `WM_COMMAND` aldri ser.
 
+### Fase 18 — historikk på forespørsel
+
+Plan, målinger og avvik: `docs/superpowers/plans/2026-09-18-ticker-historikk.md`.
+Gren `historikk`, flettet inn med `--no-ff`. Valgt av agenten etter fri
+gjennomgang; begrunnelsen står i planen.
+
+**Endringen:** panorerer brukeren inn i veggen (`viewStart` 0), ber UI-tråden
+om eldre lys, og arbeidertråden henter `SEED_COUNT` lys med
+`endTime = candles[0].openTime - 1` før den vanlige hentingen i samme syklus.
+`PrependCandles` legger dem foran, flytter utsnittet like mye og teller
+`frontShift` ned, så bildet ikke rører seg.
+
+- **`evictedTotal` er blitt `frontShift`**, med fortegn: +1 per utkasting,
+  −k per bakfylling. `ApplyEviction` er blitt `ApplyFrontShift` og flytter
+  `dispStart`, `hoverIdx` og `panAnchorView` begge veier. Panoreringsblokka
+  kaller den under lås før den leser ankeret.
+- **Ankeret glir i veggen.** Klemmer `ClampView`, flyttes ankeret dit
+  utsnittet faktisk står. Før husket det overskytingen: et drag 15 lys forbi
+  veggen ga et hopp på 16 lys ved neste museflytt etter at lysene kom, og et
+  drag tilbake fra veggen sto stille like lenge.
+- **`HttpGet` sjekker statuskoden.** Ikke-2xx er FALSE. Før talte en 429 med
+  JSON-kropp som suksess, og parserne fanget det stille. Bakfyllingen trenger
+  skillet: 2xx med null lys er «historikken er slutt», alt annet backoff.
+- **`RequestHistory` vekker tråden bare når `netFailures` er 0.**
+  `hWakeEvent` nullstiller backoffen, og et drag i veggen under en frakobling
+  skal ikke slå den av. I backoff ser tråden flagget på sin egen syklus.
+- **`histDone`** på 2xx uten lys, på svar der ingenting var eldre, og på
+  fullt buffer. Nullstilles med `histPending` der `candleCount` settes til 0.
+- **`MAX_CANDLES` 6000.** Levende lys kastes aldri for å gi plass til gamle.
+- **`WM_APP_PROBE`** bak `#ifdef TICKER_PROBE`: testbyggets vindu mot indre
+  tilstand. Produksjonsbygget har ikke meldingen.
+
+**Verifisert:** enhetsharness **36/36** mot de faktiske funksjonene
+(`PrependCandles`, `ApplyFrontShift`, `MergeCandles`, `HttpGet` mot Binance
+med 400, 404, 200 og `[]`). Ende til ende **33/33 i to kjøringer**: bakfylling
+landet etter 353–372 ms, `viewStart` 0 → 300 med samme eldste synlige
+tidsstempel og pikselidentisk bilde; drag i veggen gir ett lys per spor etter
+landing, ikke hopp; hjulspam under henting; SOL/USDT 1d uttømmes på 8 runder
+til **11.08.2020**, noteringsdagen; BTC/USDT 1m fyller 6000 på 19 runder;
+`R` gir siste 300; **GDI/USER 30/14** flatt.
+
 ---
 
 ## Kjente begrensninger
@@ -2036,8 +2082,11 @@ i `Software\Ticker`. Undermenyenes egne punkter har ID −1 (`MF_POPUP`), som
   Begge går gjennom samme `DrawChart`, og pristaggen bruker de samme `axL`/`axR`
   som stempelet. Men ingen av dem er fanget, fordi det ville flyttet den ekte
   pekeren eller lagt en flate på skrivebordet.
-- **Historikken er «hva panelet har sett».** Nyåpnet: 5 timer. Åpent en
-  arbeidsdag: opp mot 24.
+- **Historikken hentes bare når brukeren ber om den** (fase 18). Nyåpnet:
+  5 timer på 1m. Hvert vegg-treff gir 300 lys til, opp til 6000 eller
+  historikkens start. Skrivebordsmodus har ingen input og får aldri mer enn
+  det den har sett. Et hull i Binance' egen historikk (vedlikehold) prependes
+  som det er: lysene er indeksbaserte, så tiden komprimeres over hullet.
 
 ---
 
@@ -2338,12 +2387,12 @@ i `Software\Ticker`. Undermenyenes egne punkter har ID −1 (`MF_POPUP`), som
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak12` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 17, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak11` er slettet: de dekket fase 1 til 16, og den
+**Bare `ticker.c.bak13` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 18, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak12` er slettet: de dekket fase 1 til 17, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
-(fase 14), `.bak10` (fase 15), `.bak11` (fase 16) og `.bak12` (fase 17). Filene
-er ignorert av git; mønsteret er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]`
-alene slapp de tosifrede gjennom.
+(fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17) og
+`.bak13` (fase 18). Filene er ignorert av git; mønsteret er `*.bak[0-9]*`, med
+stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede gjennom.
