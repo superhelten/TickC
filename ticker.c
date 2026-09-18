@@ -180,6 +180,14 @@
 // CLR_DIM, som aksene brukte foer, gir 4,12:1. Bare aksene - CLR_DIM styrer
 // ogsaa knapper, header og overlay, og de er ikke en del av denne endringen.
 #define CLR_AXIS         RGB(0xA0, 0xAA, 0xB8)
+
+// Volumstolper (fase 21): nederste VOL_FRAC av grafflaten, bak lysene.
+// Fargene er CLR_UP/CLR_DOWN blandet ~28 % mot CLR_BG - dempet nok til aa
+// ligge bak lysene, mettet nok til aa skille retning. Eksakte verdier, saa
+// en probe kan telle dem.
+#define VOL_FRAC         0.22
+#define CLR_VOL_UP       RGB(0x09, 0x54, 0x2D)
+#define CLR_VOL_DOWN     RGB(0x51, 0x21, 0x2D)
 // Vannmerket blandes mot hvitt med alfa fra WatermarkAlpha(W). Hvitt fordi
 // den gamle faste fargen #15191F var noytral: CLR_BG + 8 i alle kanaler,
 // altsaa ~3,3 % mot hvitt.
@@ -252,6 +260,7 @@ typedef struct {
     double high;
     double low;
     double close;
+    double volume;      // basisvolum i lyset (fase 21). 48 byte per lys.
 } Candle;
 
 // Chart-flaten regnes ut to steder (tegning og muse-treff) - de MA
@@ -324,6 +333,7 @@ typedef struct {
     // alene. Det er derfor easingen ikke rorer traadkontrakten.
     double dispStart, dispCount;   // brokdels-utsnitt
     double dispMin, dispMax;       // animert prisakse
+    double dispVolMax;             // animert volumskala (fase 21), 0 = ingen stolper
     BOOL   dispValid;              // FALSE = snap ved neste oppdatering
     long long dispShiftSeen;       // frontShift UI har kompensert for
 
@@ -368,6 +378,7 @@ typedef struct {
     int    btnHot;
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brBox, brBoxEdge;
+    HBRUSH brVolUp, brVolDown;       // volumstolper (fase 21)
 
 
     // --- Vedvarende dobbeltbuffer ---
@@ -417,6 +428,20 @@ static BOOL g_desktopMode = FALSE;
 static UINT g_msgTaskbarCreated = 0;   // Explorer startet paa nytt
 static char s_httpBuf[98304];    // 300 lys gir ~50 KB svar
 static Candle s_incoming[SEED_COUNT];
+// Volumstolper (fase 21) tegnes med PolyPolygon i bolker: ett kall per 256
+// stolper i stedet for ett FillRect per lys. Maalt ved 1280x720 med 300
+// synlige lys: FillRect per lys la 0,40 ms paa en opptegning paa 1,44 ms.
+// Statisk, ikke stakk - som resten av bufrene i fila.
+#define VOL_BATCH 256
+static POINT s_volPts[VOL_BATCH * 4];
+static INT   s_volCnt[VOL_BATCH];
+#ifdef TICKER_PROBE
+// Bare testbygg (fase 21): varigheten av siste fulle opptegning i
+// mikrosekunder, QPC rundt den trege stien i PaintPopup. Leses med
+// WM_APP_PROBE 15, saa en probe kan maale median over mange bilder uten
+// aa ta skjermbilder samtidig (fallgruve 37).
+static LONGLONG g_probePaintUs = 0;
+#endif
 
 // Holder utsnittet innenfor dataene.
 static void ClampView(AppContext* ctx) {
@@ -1154,9 +1179,10 @@ static int ParseKlines(const char* json, Candle* out, int maxCount) {
         if (!*p) break;
         p++;
 
-        double v[4];
+        // Felt 1-5: open, high, low, close, volum - alle siterte strenger.
+        double v[5];
         int ok = 1;
-        for (int f = 0; f < 4; ++f) {
+        for (int f = 0; f < 5; ++f) {
             while (*p && *p != '"') p++;
             if (!*p) { ok = 0; break; }
             p++;                 // forbi aapnende hermetegn
@@ -1174,6 +1200,7 @@ static int ParseKlines(const char* json, Candle* out, int maxCount) {
         out[count].high  = v[1];
         out[count].low   = v[2];
         out[count].close = v[3];
+        out[count].volume = v[4];   // fase 21
         count++;
 
         // Hopp til slutten av denne indre arrayen
@@ -1581,6 +1608,18 @@ static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, do
     *outMax = mx + pad;
 }
 
+// Stoerste volum i utsnittet (fase 21): stolpenes skala. 0 naar ingen lys
+// har volum - da tegnes ingen stolper, i stedet for at hoeyden blir NaN.
+// Kalles under laas, som PriceRange.
+static double VolumeMax(const AppContext* ctx, int vs, int vc) {
+    double mx = 0.0;
+    for (int i = 0; i < vc; ++i) {
+        double v = ctx->candles[vs + i].volume;
+        if (v > mx) mx = v;
+    }
+    return mx;
+}
+
 // Faller lys ut i front, flyttes ALT som er en absolutt indeks like mye.
 // Uten dette hopper grafen ett lys til venstre hvert minutt saa snart
 // bufferet har naadd taket, og hoverIdx peker paa nabolyset.
@@ -1637,11 +1676,13 @@ static void SyncDisp(AppContext* ctx) {
     if (ctx->candleCount <= 0 || vc <= 0) {
         ctx->dispMin   = 0.0;
         ctx->dispMax   = 1.0;
+        ctx->dispVolMax = 0.0;
         ctx->dispValid = FALSE;
         return;
     }
 
     PriceRange(ctx, vs, vc, &ctx->dispMin, &ctx->dispMax);
+    ctx->dispVolMax = VolumeMax(ctx, vs, vc);   // fase 21
     ctx->dispValid = TRUE;
 }
 
@@ -1671,6 +1712,14 @@ static void FormatCandleTime(long long unixMs, long long intervalMs,
 
 // Layout og treffdeteksjon deler en funksjon. To uavhengige utregninger av
 // samme flate ender med a peke forskjellige steder - se feil #7 i loggen.
+// Volum for hover-boksen (fase 21): kompakt, saa DOGE-volum i millioner
+// faar plass i 104 px. Under tusen to desimaler, ellers K/M med en desimal.
+static void FormatVolume(double v, wchar_t* out, size_t cch) {
+    if (v >= 1e6)      swprintf_s(out, cch, L"%.1fM", v / 1e6);
+    else if (v >= 1e3) swprintf_s(out, cch, L"%.1fK", v / 1e3);
+    else               swprintf_s(out, cch, L"%.2f", v);
+}
+
 #define OVL_ROWS_MAX  16
 #define OVL_ROW_H     22
 #define OVL_COL_W     104
@@ -2175,6 +2224,48 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     if (i0 < 0) i0 = 0;
     if (i1 > n) i1 = n;
 
+    // --- Volumstolper (fase 21) ---
+    // Bak lysene, i de nederste VOL_FRAC av flaten, innenfor samme klipp.
+    // Skalaen er dispVolMax - VISNINGEN, som eases i WM_TIMER - ikke
+    // maalet, ellers hopper stolpene mens lysene glir. Retningen er lysets
+    // egen (close mot open), samme regel som lysfargen og en annen enn
+    // siste-pris-linjas (se den). Nederste rad er y = bottom, inklusiv, som
+    // for veker og rutenettlinje 4 (fallgruve 33); FillRect er eksklusiv i
+    // bunnen, derfor bottom + 1. Ingen geometri- eller treffkode roeres:
+    // stolpene er et overlegg i lysenes egen flate.
+    //
+    // Ett PolyPolygon per farge og bolk paa VOL_BATCH stolper, med NULL_PEN:
+    // polygonfyllet utelater hoeyre og nedre kant som Rectangle, saa hjoernene
+    // [x0, x1) x [bottom + 1 - h, bottom + 1) fyller noeyaktig de samme
+    // pikslene som FillRect ville gjort.
+    if (ctx->dispVolMax > 0.0) {
+        int bandH = (int)((double)ch * VOL_FRAC);
+        HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
+        for (int pass = 0; pass < 2; ++pass) {          // 0 = opp, 1 = ned
+            SelectObject(hdc, pass == 0 ? ctx->brVolUp : ctx->brVolDown);
+            int k = 0;
+            for (int i = i0; i < i1; ++i) {
+                const Candle* c = &ctx->candles[i];
+                if ((c->close >= c->open) != (pass == 0)) continue;
+                int h = (int)(c->volume / ctx->dispVolMax * (double)bandH + 0.5);
+                if (h <= 0) continue;
+                if (h > bandH) h = bandH;   // midt i easingen kan et lys ligge over skalaen
+                int cx = left + (int)(((double)i - dStart + 0.5) * slot);
+                int x0 = cx - bodyW / 2, x1 = x0 + bodyW;
+                int y0 = bottom + 1 - h, y1 = bottom + 1;
+                POINT* p = &s_volPts[k * 4];
+                p[0].x = x0; p[0].y = y0;
+                p[1].x = x1; p[1].y = y0;
+                p[2].x = x1; p[2].y = y1;
+                p[3].x = x0; p[3].y = y1;
+                s_volCnt[k++] = 4;
+                if (k == VOL_BATCH) { PolyPolygon(hdc, s_volPts, s_volCnt, k); k = 0; }
+            }
+            if (k > 0) PolyPolygon(hdc, s_volPts, s_volCnt, k);
+        }
+        SelectObject(hdc, oldPenV);
+    }
+
     // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
     // stedet for fire egne penner og pensler. Det er fire GDI-objekter
     // mindre; det vedvarende bufferet tar to, saa tallet i hvile gaar ned med
@@ -2427,7 +2518,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     wchar_t tbuf[24];
     FormatCandleTime(hc->openTime, ctx->intervalMs, tbuf, 24);
 
-    const int BOX_W = 104, BOX_H = 74, LINE_H = 13;
+    // BOX_H: 4 px topp + tidsrad + O/H/L/C/V (fase 21) = 4 + 6 * 13 + 5.
+    const int BOX_W = 104, BOX_H = 87, LINE_H = 13;
     int bx = hx + 12;
     if (bx + BOX_W > right) bx = hx - 12 - BOX_W;   // flipp til venstre ved kanten
     if (bx < left) bx = left;
@@ -2444,16 +2536,17 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     SetTextColor(hdc, CLR_TEXT);
     DrawTextW(hdc, tbuf, -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    const wchar_t* lbl[4] = { L"O", L"H", L"L", L"C" };
-    double val[4] = { hc->open, hc->high, hc->low, hc->close };
+    const wchar_t* lbl[5] = { L"O", L"H", L"L", L"C", L"V" };
+    double val[5] = { hc->open, hc->high, hc->low, hc->close, hc->volume };
     COLORREF cclr = (hc->close >= hc->open) ? CLR_UP : CLR_DOWN;
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         ty += LINE_H;
         RECT rcRow = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
         SetTextColor(hdc, CLR_DIM);
         DrawTextW(hdc, lbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        swprintf_s(buf, 64, L"%.2f", val[i]);
+        if (i == 4) FormatVolume(val[i], buf, 64);   // fase 21
+        else        swprintf_s(buf, 64, L"%.2f", val[i]);
         SetTextColor(hdc, (i == 3) ? cclr : CLR_TEXT);
         DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
     }
@@ -2599,6 +2692,11 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
         return;
     }
 
+#ifdef TICKER_PROBE
+    LARGE_INTEGER qpc0;
+    QueryPerformanceCounter(&qpc0);
+#endif
+
     // Traden kan flette inn nye lys naar som helst; laasen holder
     // bufferet stabilt gjennom hele opptegningen (~1,8 ms).
     EnterCriticalSection(&ctx->lock);
@@ -2626,6 +2724,15 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
 
     BitBlt(hdcDst, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
     ctx->bbValid = TRUE;
+
+#ifdef TICKER_PROBE
+    {
+        LARGE_INTEGER qpc1, qpf;
+        QueryPerformanceCounter(&qpc1);
+        QueryPerformanceFrequency(&qpf);
+        g_probePaintUs = (qpc1.QuadPart - qpc0.QuadPart) * 1000000LL / qpf.QuadPart;
+    }
+#endif
 
     EndPaint(hwnd, &ps);
 }
@@ -3245,6 +3352,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 11: r = g_Ctx.hoverIdx; break;
                 case 12: r = g_Ctx.panning; break;   // fase 20
                 case 13: r = (GetCapture() == hwnd); break;   // fase 20, egen traad
+                // Fase 21. lParam er lysindeksen. Volumet ganges med 100:
+                // LRESULT er 32 bit paa x86, og proben kjoerer BTC (1m-volum
+                // i tierklassen), saa to desimaler faar plass med god margin.
+                case 14: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
+                             ? (LRESULT)(g_Ctx.candles[(int)lParam].volume * 100.0) : -1; break;
+                case 15: r = (LRESULT)g_probePaintUs; break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -3284,12 +3397,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     ChartRect gE = ChartGeometry(rcE.right, rcE.bottom);
 
                     int tvs = 0, tvc = 0, tn = 0;
-                    double tMin = 0.0, tMax = 1.0;
+                    double tMin = 0.0, tMax = 1.0, tVol = 0.0;
                     EnterCriticalSection(&g_Ctx.lock);
                     ApplyFrontShift(&g_Ctx);
                     tn = g_Ctx.candleCount;
                     GetView(&g_Ctx, &tvs, &tvc);
-                    if (tn > 0 && tvc > 0) PriceRange(&g_Ctx, tvs, tvc, &tMin, &tMax);
+                    if (tn > 0 && tvc > 0) {
+                        PriceRange(&g_Ctx, tvs, tvc, &tMin, &tMax);
+                        tVol = VolumeMax(&g_Ctx, tvs, tvc);   // fase 21
+                    }
                     LeaveCriticalSection(&g_Ctx.lock);
 
                     if (tn > 0 && tvc > 0 && g_Ctx.dispValid &&
@@ -3300,13 +3416,21 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         if (snapX <= 0.0) snapX = 1e-9;
                         if (snapY <= 0.0) snapY = 1e-9;
 
-                        struct { double* v; double t; double snap; } eases[4] = {
-                            { &g_Ctx.dispStart, (double)tvs, snapX },
-                            { &g_Ctx.dispCount, (double)tvc, snapX },
-                            { &g_Ctx.dispMin,   tMin,        snapY },
-                            { &g_Ctx.dispMax,   tMax,        snapY },
+                        // Volumskalaen eases som prisaksen: en kvart piksel av
+                        // baandhoeyden i volum-enheter (fase 21). Uten easing
+                        // ville stolpene hoppet idet et stoerre lys kom inn i
+                        // utsnittet, mens lysene glir.
+                        double snapV = SNAP_PX * tVol / ((double)gE.ch * VOL_FRAC);
+                        if (snapV <= 0.0) snapV = 1e-9;
+
+                        struct { double* v; double t; double snap; } eases[5] = {
+                            { &g_Ctx.dispStart,  (double)tvs, snapX },
+                            { &g_Ctx.dispCount,  (double)tvc, snapX },
+                            { &g_Ctx.dispMin,    tMin,        snapY },
+                            { &g_Ctx.dispMax,    tMax,        snapY },
+                            { &g_Ctx.dispVolMax, tVol,        snapV },
                         };
-                        for (int e = 0; e < 4; ++e) {
+                        for (int e = 0; e < 5; ++e) {
                             if (*eases[e].v == eases[e].t) continue;
                             *eases[e].v = AnimStep(*eases[e].v, eases[e].t, dt,
                                                    ANIM_TAU_VIEW, eases[e].snap);
@@ -4222,6 +4346,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.brBg      = CreateSolidBrush(CLR_BG);
     g_Ctx.brBox     = CreateSolidBrush(CLR_BOX);
     g_Ctx.brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
+    g_Ctx.brVolUp   = CreateSolidBrush(CLR_VOL_UP);     // fase 21
+    g_Ctx.brVolDown = CreateSolidBrush(CLR_VOL_DOWN);
 
     // Arbeidertraden startes forst naar vinduet og ikonet finnes, siden
     // den poster meldinger til hWnd med en gang.
@@ -4305,6 +4431,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     DeleteObject(g_Ctx.penGrid);  DeleteObject(g_Ctx.penCross);
     DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brBox);
     DeleteObject(g_Ctx.brBoxEdge);
+    DeleteObject(g_Ctx.brVolUp);     DeleteObject(g_Ctx.brVolDown);
     DeleteObject(g_Ctx.penLastUp);   DeleteObject(g_Ctx.penLastDown);
     DeleteObject(g_Ctx.penBtn);      DeleteObject(g_Ctx.penBtnHot);
     DeleteObject(g_Ctx.penBtnWhite); DeleteObject(g_Ctx.brClose);

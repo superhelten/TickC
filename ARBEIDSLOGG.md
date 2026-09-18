@@ -39,6 +39,8 @@ nullstiller `staleSecsShown` når forbindelsen er tilbake.
 **Fase 20** gjør grafen tastaturstyrt — piltaster, `PgUp`/`PgDn`,
 `Home`/`End` og `+`/`-` gjennom samme `PanView`/`ZoomView` som hjulet — og
 slipper panoreringen når et annet vindu tar capture (`WM_CAPTURECHANGED`).
+**Fase 21** legger volumstolper i de nederste 22 % av grafflaten, bak
+lysene, med skala som eases som prisaksen, og en `V`-rad i hover-boksen.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -55,7 +57,8 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md` og
 `docs/superpowers/plans/2026-09-18-ticker-historikk.md` og
 `docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md` og
-`docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md`. Design:
+`docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md` og
+`docs/superpowers/plans/2026-09-18-ticker-volum.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
@@ -117,7 +120,8 @@ gjør `PostMessage(WM_APP_DATA)` **etter** at låsen er sluppet.
 
 ### Datalag
 
-- `candles[6000]` — fast statisk array, 240 KB. Fylles framover mens panelet
+- `candles[6000]` — fast statisk array, 288 KB (48 byte per lys med volum,
+  fase 21; 240 KB til og med fase 20). Fylles framover mens panelet
   står åpent og bakover på forespørsel (fase 18). **Ingen malloc noe sted.**
 - Første henting seeder 300 lys (`limit=300`, ~50 KB). Deretter `limit=3` (~500 byte).
 - `MergeCandles()` fletter på `openTime`: samme tidsstempel **oppdaterer**
@@ -557,6 +561,8 @@ er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
 | `CHART_TOP_MIN` | 32 | minste `rcChart.top`, sjekket med `#error` |
 | `POPUP_MIN_W` / `H` | 400 / 250 | minste størrelse, DPI-skalert i `WM_GETMINMAXINFO` |
 | `HDR_GAP` | 8 | minste luft mellom headertekster og mot knapperaden |
+| `VOL_FRAC` | 0,22 | volumstolpenes bånd, andel av grafflatens høyde (fase 21) |
+| `CLR_VOL_UP` / `CLR_VOL_DOWN` | `#09542D` / `#51212D` | stolpefarger, `CLR_UP`/`CLR_DOWN` blandet ~28 % mot `CLR_BG` |
 
 ---
 
@@ -738,8 +744,12 @@ Nettverkskallet var 130× dyrere enn hele opptegningen. Tråden var hele gevinst
 |---|---|
 | Før GDI-cache | 1,796 ms |
 | Etter GDI-cache | **1,255 ms** (−30 %) |
+| Fase 21, før volumstolper (1280×720, 300 lys, median 172 bilder) | 1,44 ms |
+| Fase 21, med volumstolper (`PolyPolygon` i bolker) | **1,56 ms** (+0,12 ms; `FillRect` per lys ga 1,84) |
 
 Zoomet helt ut er *raskere* (1,5 ms) fordi lysene da er 1 px brede.
+Tallene fra fase 21 er målt med QPC rundt den trege stien i `PaintPopup`
+i testbygget (probe-felt 15), ikke med `PrintWindow` i flukt (fallgruve 37).
 
 ### Enhetstester på ekte kode
 
@@ -2121,6 +2131,54 @@ ga `vs` 68 / `vc` 173 før og etter i hver kjøring). Stien er lest.
 
 ---
 
+### Fase 21 — volumstolper under lysene
+
+Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-volum.md`.
+Gren `volum`, flettet inn med `--no-ff`. Valgt av agenten blant fire
+kandidater; hvilemodus og oppløsningsbytte ble lagt bort fordi ingen av dem
+kan observeres i en probe på denne maskinen (begrunnelsen står i planen).
+
+**Endringen, i to commits.** Først instrumentering: `Candle.volume`
+(48 byte per lys, bufferet 288 KB), probe-felt 14 (volum ved indeks, ×100 —
+`LRESULT` er 32 bit på x86) og 15 (siste fulle opptegning i µs, QPC rundt
+den trege stien i `PaintPopup`, bare testbygg). Så funksjonen:
+`ParseKlines` leser felt 5 (sitert streng som OHLC); `VolumeMax` over
+målutsnittet der `PriceRange` regnes; `dispVolMax` eases i `WM_TIMER` som
+femte verdi, snapp = en kvart piksel av båndhøyden; stolpene tegnes etter
+rutenettet og før lysene, innenfor samme klipp, i de nederste `VOL_FRAC` =
+22 % av grafflaten, `bodyW` brede på lysets `cx`, nederste rad på
+`y = bottom` inklusiv. Skalaen tegningen leser er *visningen*, aldri
+målet. Retningen er lysets egen (close mot open). Ett `PolyPolygon` per
+farge og bolk på 256 stolper med `NULL_PEN`, som fyller nøyaktig
+`FillRect`-pikslene. Hover-boksen får en `V`-rad (74 → 87 px) med
+`K`/`M`-format. **Skrivebordsmodus tegner stolpene også:** fase 14 fjernet
+det som må leses fovealt (tall); stolper leses perifert som lysene.
+`ChartGeometry`, `HitCandle`, aksene og stempelet er urørt.
+
+**Verifisert** ende til ende, **24/24**, i testbygg mot
+`Software\TickerTest`. Rød kjøring mot commit 1: volum 0 i alle seks lys,
+0 stolpepiksler, boks 72 px (8 FAIL). Grønn: volum > 0 i seks lys spredt
+over bufferet (3,16–14,44 BTC på 1m); **5 748** eksakt stolpefargede
+piksler i panelet, alle i `[559, 702]` = nøyaktig båndet `[bottom + 1 −
+144, bottom]`, ingen over det, ingen utenfor grafflaten i x, høyeste
+stolpe når båndets topp; hover-boksens lengste loddrette `CLR_BOX`-løp
+**85** (72 før); skrivebordsflaten 3840×1600 fanget med `PrintWindow`
+under WorkerW: 47 019 stolpepiksler i `[1249, 1599]`, båndtopp 1248;
+GDI/USER stabile (32/14 → 33/14 etter et modusbytte fram og tilbake).
+
+**Opptegning ved 1280×720, 300 lys, median over 172 fulle bilder, samme
+probe og samme kjøreforhold (ingen `PrintWindow` imens):** 1,44 ms uten
+stolper (commit 1), 1,84 ms med ett `FillRect` per lys (+0,40 ms),
+**1,56 ms** med `PolyPolygon` i bolker (+0,12 ms). p90 1,63 / 2,08 /
+1,75 ms. Bolkevarianten ble valgt på tallene; `FillRect`-varianten hadde
+også 24/24. Tabellen i *Målinger* er oppdatert.
+
+**Ikke testet:** et par med volum 0 i hele utsnittet (`dispVolMax` 0 →
+ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
+(BTC-volum på 1m er under tusen).
+
+---
+
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
@@ -2541,13 +2599,14 @@ ga `vs` 68 / `vc` 173 før og etter i hver kjøring). Stien er lest.
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak15` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 20, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak14` er slettet: de dekket fase 1 til 19, og den
+**Bare `ticker.c.bak16` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 21, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak15` er slettet: de dekket fase 1 til 20, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
-`.bak13` (fase 18), `.bak14` (fase 19) og `.bak15` (fase 20). Filene er ignorert av git; mønsteret
+`.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20) og `.bak16`
+(fase 21). Filene er ignorert av git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
