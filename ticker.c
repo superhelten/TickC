@@ -3244,6 +3244,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 10: r = g_Ctx.followLive; break;
                 case 11: r = g_Ctx.hoverIdx; break;
                 case 12: r = g_Ctx.panning; break;   // fase 20
+                case 13: r = (GetCapture() == hwnd); break;   // fase 20, egen traad
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -3455,6 +3456,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             return 0;
 
+        // Capture tatt fra oss midt i et drag (fase 20): Alt+Tab, Win-tasten,
+        // en meny eller et annet vindu som kaller SetCapture. WM_LBUTTONUP
+        // kommer da aldri hit, og panning ble staaende TRUE til neste klikk
+        // i grafen - med fase 19-snarveiene sperret saa lenge. Maalt i
+        // proben: pan=1 etter Alt+Tab, museslippet gikk til et annet vindu.
+        //
+        // Var egen ReleaseCapture i WM_LBUTTONUP sender ogsaa denne, men da
+        // er panning allerede FALSE, og lParam er vinduet som tar over -
+        // begge deler gjoer handleren til en no-op der. Ingen ReleaseCapture
+        // her inne: det er dokumentert forbudt i denne meldingen.
+        case WM_CAPTURECHANGED:
+            if (g_Ctx.panning && (HWND)lParam != hwnd) {
+                g_Ctx.panning = FALSE;
+                SetCursor(g_Ctx.curArrow);
+            }
+            return 0;
+
         case WM_KEYDOWN: {
             BOOL ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             // Ctrl+0: tilbake til fabrikkgeometri, sentrert paa den skjermen
@@ -3483,6 +3501,63 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 else if (!ctrl && wParam == VK_F11) bh = BTN_MAX;
                 if (bh >= 0) {
                     OnButtonClick(hwnd, bh);
+                    return 0;
+                }
+            }
+            // Navigasjon i grafen (fase 20), gjennom samme PanView/ZoomView
+            // som hjulet. Venstre/hoeyre er ett hjulhakk (vc / 8 lys), PgUp/
+            // PgDn et helt utsnitt, Home eldste lys (veggen ber om historikk
+            // som et drag ville gjort, fase 18), End den levende kanten.
+            // + og - er ett zoomtrinn om MIDTEN av utsnittet - hjulet zoomer
+            // om pekeren, men en tast har ingen peker. Baade hovedtastaturets
+            // OEM-koder og det numeriske tastaturets. Ctrl er tillatt paa
+            // + og - (Ctrl++ som i en nettleser), men ikke paa de andre, saa
+            // Ctrl+piltast staar ledig.
+            //
+            // Samme sperrer som hjulet og snarveiene over: ikke med overlayet
+            // aapent (det eier hjulet og R), ikke i skrivebordsmodus, ikke
+            // midt i en panorering (ankeret ville hoppet). Hover nullstilles
+            // som R gjoer: aa regne lyset under pekeren paa nytt ville latt
+            // traadkorset gli med lyset under easingen og bli staaende
+            // forskjoevet fra pekeren til neste musebevegelse.
+            if (!g_desktopMode && !g_Ctx.panning && !g_Ctx.overlayOpen) {
+                int  pan = 0, zoom = 0, navKey = 1;
+                switch (wParam) {
+                    case VK_LEFT:       pan = -1; break;    // hakk
+                    case VK_RIGHT:      pan = +1; break;
+                    case VK_PRIOR:      pan = -2; break;    // helt utsnitt
+                    case VK_NEXT:       pan = +2; break;
+                    case VK_HOME:       pan = -3; break;    // til veggen
+                    case VK_END:        pan = +3; break;    // til kanten
+                    case VK_OEM_PLUS:   case VK_ADD:      zoom = +1; break;
+                    case VK_OEM_MINUS:  case VK_SUBTRACT: zoom = -1; break;
+                    default:            navKey = 0; break;
+                }
+                if (navKey && (zoom != 0 || !ctrl)) {
+                    BOOL atWall = FALSE;
+                    EnterCriticalSection(&g_Ctx.lock);
+                    if (g_Ctx.candleCount > 0) {
+                        if (zoom != 0) {
+                            atWall = ZoomView(&g_Ctx, 0.5, zoom);
+                        } else {
+                            int vs, vc;
+                            GetView(&g_Ctx, &vs, &vc);
+                            int step = vc / 8;
+                            if (step < 1) step = 1;
+                            int delta = 0;
+                            if (pan == -1 || pan == 1) delta = pan * step;
+                            else if (pan == -2)        delta = -vc;
+                            else if (pan == 2)         delta = vc;
+                            else if (pan == -3)        delta = -g_Ctx.candleCount;
+                            else                       delta = g_Ctx.candleCount;
+                            atWall = PanView(&g_Ctx, delta);
+                        }
+                        g_Ctx.hoverIdx = -1;
+                    }
+                    LeaveCriticalSection(&g_Ctx.lock);
+                    if (atWall) RequestHistory(&g_Ctx);
+                    StartAnim(hwnd);   // maalet flyttet seg; visningen eases dit
+                    InvalidateRect(hwnd, NULL, FALSE);
                     return 0;
                 }
             }
