@@ -41,6 +41,9 @@ nullstiller `staleSecsShown` når forbindelsen er tilbake.
 slipper panoreringen når et annet vindu tar capture (`WM_CAPTURECHANGED`).
 **Fase 21** legger volumstolper i de nederste 22 % av grafflaten, bak
 lysene, med skala som eases som prisaksen, og en `V`-rad i hover-boksen.
+**Fase 22** gjør headerens rad 2 til en verktøylinje: symbolpille (åpner
+overlayet), en pille per intervall og en `VOL`-bryter som eases, med `V` og
+`1`…`6` fra tastaturet og «Volumstolper» i tray-menyen.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -58,12 +61,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-18-ticker-historikk.md` og
 `docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md` og
 `docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md` og
-`docs/superpowers/plans/2026-09-18-ticker-volum.md`. Design:
+`docs/superpowers/plans/2026-09-18-ticker-volum.md` og
+`docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~4460 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~4750 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -257,6 +261,39 @@ nettopp når man vil lukke panelet. Samme grunn som `DrawOverlay` ligger der.
 **Headerteksten krymper med `BTN_STRIP_W`** (118 px), ellers lå den
 høyrestilte prosenten rett under krysset.
 
+#### Verktøylinja (fase 22)
+
+Headerens rad 2 (y 28–42) er en verktøylinje der symbollinja sto som ren
+tekst: `[BTC/USDT ▾]  [1m][5m][15m][1t][4t][1d]  [VOL]`, venstrestilt fra
+`PAD_L`. `ToolbarLayout(W, out[TBAR_COUNT])` er **eneste sannhetskilde**,
+som `ButtonLayout`: tegning, `WM_NCHITTEST`, hover og klikk leser den.
+Bredder er **faste konstanter**, ikke målt tekst — `WM_NCHITTEST` har ingen
+DC. En `C_ASSERT` holder hele linja innenfor `HeaderRow2Limit` ved
+`POPUP_MIN_W`; under det skjules piller fra høyre, hele, aldri halve.
+
+| Pille | Handling |
+|---|---|
+| symbol `▾` | åpner overlayet (det samme som høyreklikk i grafen); aktiv mens det står åpent |
+| `1m` … `1d` | `ApplyConfigChoice` — samme sti som overlayet og tray-menyen; klikk på den aktive er en no-op |
+| `VOL` | `SetShowVolume` — **ikke** `ApplyConfigChoice`: bufferet skal ikke tømmes for et tegnevalg |
+
+Pillene er `HTCLIENT`, mellomrommene og resten av headeren `HTCAPTION`
+(fallgruve 21). `tbHot` følger `btnHot`s regler: satt etter
+`TrackMouseEvent`-armeringen, sperret med overlayet åpent og under
+panorering, nullstilt i `WM_MOUSELEAVE`. Ingen fade. Hvile er dempet tekst,
+hover `CLR_BOX`-flate, aktiv `CLR_BOX` med `CLR_BOXEDGE`-ramme. Ingen nye
+GDI-objekter. **Tegnes fra `PaintPopup`**, som knappene: rett etter et bytte
+er bufferet tomt, og `DrawChart` returnerer tidlig.
+
+`showVol` er valget (registret, `ShowVolume`); `dispVolF` ∈ [0, 1] er
+visningen, eased i `WM_TIMER` som sjette verdi, uavhengig av om det finnes
+lys. Stolpehøyden ganges med den; ved 1,0 er faktoren eksakt. Er flaten
+ikke synlig når valget endres (tray-menyen med lukket panel), snapper den.
+
+**Frakoblet-teksten** (`frakoblet Ns`) sto i symbollinja. Den tegnes nå til
+høyre for siste pille, fra `DrawChart` (helsefeltene leses under låsen), og
+bare når hele teksten får plass før `HeaderRow2Limit`.
+
 #### Hurtigsti for hover-opptegning
 
 Et hover-skifte invaliderer **kun knapperaden** (`ButtonStrip(W)`), ikke hele
@@ -323,6 +360,9 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `PgUp` / `PgDn` | et helt utsnitt bakover / framover (fase 20) |
 | `Home` / `End` | eldste lys — veggen ber om historikk som et drag — / den levende kanten med `followLive` (fase 20) |
 | `+` / `-` (også numerisk, også med `Ctrl`) | ett zoomtrinn inn / ut om **midten** av utsnittet (fase 20) |
+| `V` | VOL-pillen: volumstolpene av/på, eased (fase 22) |
+| `1` … `6` | intervallpillene i rekkefølge, 1m … 1d (fase 22) |
+| «Volumstolper» i tray-menyen | samme bryter — virker også i skrivebordsmodus (fase 22) |
 | Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
 
 **Standardvisningen er DPI-skalert:** `MulDiv(1280, GetDpiForWindow(hwnd), 96)`,
@@ -509,8 +549,9 @@ Bygges i `EnsureWatermark`, som per definisjon bare kjører når
 ### Registret
 
 `HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
-`PanelWidth`, `PanelHeight`, `PanelX`, `PanelY`, `PanelHasPos` og
-`DesktopMode` (fase 12). Leses i `WinMain` **før `CreateThread`**, slik at
+`PanelWidth`, `PanelHeight`, `PanelX`, `PanelY`, `PanelHasPos`,
+`DesktopMode` (fase 12) og `ShowVolume` (fase 22, standard 1; skrives av
+`SaveConfig` sammen med indeksene). Leses i `WinMain` **før `CreateThread`**, slik at
 første henting går mot riktig par. Indeksene er bundet sjekket. Enhver feilsti
 lander på BTC/USDT 1m.
 
@@ -564,6 +605,9 @@ er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
 | `HDR_GAP` | 8 | minste luft mellom headertekster og mot knapperaden |
 | `VOL_FRAC` | 0,22 | volumstolpenes bånd, andel av grafflatens høyde (fase 21) |
 | `CLR_VOL_UP` / `CLR_VOL_DOWN` | `#09542D` / `#51212D` | stolpefarger, `CLR_UP`/`CLR_DOWN` blandet ~28 % mot `CLR_BG` |
+| `TBAR_TOP` / `TBAR_H` | 28 / 15 | verktøylinjas rad: y i [28, 43), under prisens grunnlinje og over grafflaten (fase 22) |
+| `TBAR_SYM_W` / `TBAR_IV_W` / `TBAR_VOL_W` | 74 / 28 / 32 | faste pillebredder; sum med luft 300 px, slutt på x = 310 mot grensen 312 ved 400 px |
+| `TBAR_GAP` / `TBAR_GROUP_GAP` | 2 / 8 | mellom intervallpiller / mellom gruppene |
 
 ---
 
@@ -2192,6 +2236,44 @@ også 24/24. Tabellen i *Målinger* er oppdatert.
 ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
 (BTC-volum på 1m er under tusen).
 
+### Fase 22 — verktøylinje i headeren
+
+Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md`.
+Gren `verktoylinje`, flettet inn med `--no-ff`. Brukeren la fram to idéer —
+verktøylinje og pris-varsler på prisaksen — og agenten valgte. Varslene er
+lagt bort som kandidat: utløseren (levende pris krysser en linje) kan ikke
+framprovoseres i en probe uten et *skrivende* probe-felt, og lyd og ballong
+kan ikke observeres. Begrunnelsen står i planen.
+
+**Endringen, i to commits.** Først instrumentering: `tbHot`, `showVol`,
+`dispVolF` og probe-felt 16–21 (`ivIdx`, `symIdx`, `showVol`, `tbHot`,
+`overlayOpen`, `dispVolF` × 1000). Så funksjonen: `ToolbarLayout` /
+`ToolbarHit` / `ToolbarStrip` (ren funksjon av bredden, faste pillebredder,
+`C_ASSERT` mot 400 px), `DrawToolbar` fra `PaintPopup`, `HTCLIENT` over
+pillene i `WM_NCHITTEST`, hover og klikk ved siden av knappenes,
+`OnToolbarClick` (intervall → `ApplyConfigChoice`, symbol → overlayet, VOL →
+`SetShowVolume`), `dispVolF` som sjette easede verdi, `V` og `1`…`6`,
+«Volumstolper» i tray-menyen (`ID_TRAY_VOLUME` 1005) og `ShowVolume` i
+registret. Symbollinja som tekst er borte; `frakoblet Ns` står til høyre for
+siste pille når hele teksten får plass. Se **Verktøylinja** under *Vinduet*.
+`HEADER_H`, `ChartGeometry`, `HitCandle` og alle graf-y-er er urørt.
+
+**Verifisert** ende til ende, **81/81 i to kjøringer**; rød kjøring mot
+commit 1 ga 33 FAIL med kontrollene grønne. `HTCLIENT` på alle åtte piller
+og `HTCAPTION` i hvert mellomrom; pilletilstander lest fra hjørnepiksler;
+0 tekstpiksler innenfor 3 px fra en pillekant; pillene tegnet med tomt
+buffer rett etter et bytte; `IntervalIndex` og `ShowVolume` i registret;
+19 mellomverdier av `dispVolF` på veien til eksakt 0 og 0 stolpepiksler
+(6 267 med VOL på); `DOWN` + `DBLCLK` = to vekslinger; hover med ekte
+peker og `WM_MOUSELEAVE` ut i mellomrommet; alt tegnet og klikkbart ved
+400×250; valgene overlever omstart uten animasjon. Opptegning 1 479 µs før,
+1 606 / 1 517 µs etter (median, 168–177 bilder). GDI/USER 34/14 før og etter
+(«før» tatt etter første overlay).
+
+**Ikke testet:** den ekte tray-menyen (bare kommandoen), bryteren i
+skrivebordsmodus, skjuling av piller under 400 px, og frakoblet-tekstens
+nye plass.
+
 ---
 
 ## Kjente begrensninger
@@ -2207,9 +2289,17 @@ ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
   samme kjøring med QPC i testbygget). Fordelingen per ledd står i fase 10. Eldre tall (0,462 ms på ~380×300 i del C, ~0,85 ms ved
   1280×720 i fase 7) er målt under andre forhold og lot seg ikke gjenskape med
   uendret kode i fase 9.
-- **Symbollinjas ellipse er ikke sett i drift.** Selv den lengste formen,
-  med «frakoblet Ns», får plass ved 400 px. Grenen er der for DPI-skalering
-  og framtidige lengre etiketter.
+- **Frakoblet-telleren vises ikke i headeren på smale paneler** (fase 22).
+  Verktøylinja slutter på x = 310; teksten trenger ~75 px til før
+  prisaksens etikett, altså et panel på ~480 px eller mer. Dempet pris,
+  tray-tips og ikon bærer tilstanden uansett. Symbollinjas ellipse-gren
+  er borte sammen med symbollinja.
+- **Et duplikat arver `ShowVolume` fra registret, ikke fra panelet det ble
+  startet fra** (fase 22). `--dup` bærer symbol og intervall, ikke
+  volumvalget; i praksis er de like, fordi hovedinstansen skriver valget
+  i det det tas. Et duplikat skriver aldri.
+- **Verktøylinja har ingen tastaturfokus-markør.** Pillene nås med `V` og
+  `1`…`6`, ikke med `Tab`.
 - **Flere instanser deler registret.** Duplikater skriver ingenting, men
   startes flere *hovedinstanser* for hånd (to ganger `ticker.exe`), vinner den
   som lukkes sist. Hver instans har også sitt eget tray-ikon — et duplikat
@@ -2405,7 +2495,9 @@ ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
     og fire penner og pensler er erstattet av `DC_PEN`/`DC_BRUSH`. Fase 19
     og 20 målte 30/14; **fra fase 21 er det 32/14** — de to stolpepenslene
     lages i `WinMain`. Et modusbytte fram og tilbake gir +1 (33/14), sett
-    også i bygget uten fase 21.
+    også i bygget uten fase 21. Fase 22 la ikke til noe: 34/14 før og
+    etter i både rødt og grønt bygg, målt *etter* første overlay (+2,
+    fallgruve 65).
 
 28. **`WM_SETCURSOR` må returnere `TRUE` for å holde pekeren, og `break` for
     alt annet.** Returnerer du `0` i default-grenen, mister kantsonene sine
@@ -2614,18 +2706,33 @@ ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
     lager selv inndata med `SendInput`, så målingen gjelder bare før den
     begynner.
 
+67. **Egne makronavn kan kollidere med `commctrl.h`.** `TB_TOP` finnes der
+    (`TB_*` er verktøylinje-meldingene), og `windows.h` drar den inn selv
+    med `WIN32_LEAN_AND_MEAN`. Resultatet er `C4005`, ikke en feil — bygget
+    lykkes med *deres* verdi om rekkefølgen er en annen. Fase 22 bruker
+    `TBAR_*`. Hold deg unna `TB_`, `LV_`, `TV_`, `SB_`, `WM_`, `CB_`, `LB_`.
+68. **Python `read_text`/`write_text` normaliserer linjeskift.**
+    `ARBEIDSLOGG.md` er CRLF i arbeidskopien; et redigeringsskript som leser
+    og skriver uten videre, gjør den til LF. Git skjuler det (autocrlf), men
+    fila på disk er en annen. Skriv loggen med `newline="\r\n"`; `ticker.c`
+    er LF og skal skrives med `newline="\n"`.
+69. **En probe som tar «GDI før» må varme opp det *røde* bygget med noe det
+    har.** Overlayet åpnes med postet `WM_RBUTTONUP` i grafen og lukkes med
+    postet `ESC` — begge finnes i alle bygg siden fase 2 — så «før» er
+    sammenliknbart mellom rød og grønn kjøring (fallgruve 65).
+
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak16` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 21, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak15` er slettet: de dekket fase 1 til 20, og den
+**Bare `ticker.c.bak17` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 22, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak16` er slettet: de dekket fase 1 til 21, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
-`.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20) og `.bak16`
-(fase 21). Filene er ignorert av git; mønsteret
+`.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
+(fase 21) og `.bak17` (fase 22). Filene er ignorert av git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
