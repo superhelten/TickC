@@ -63,7 +63,7 @@ Se **Vinduet** under. Planer:
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~4320 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~4460 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -135,7 +135,8 @@ Dobbeltbuffret gjennom en minne-DC, `WM_ERASEBKGND` returnerer 1.
 Begge tegneloopene går over **`vc` (synlige lys)**, ikke hele historikken —
 tegnearbeidet er derfor uavhengig av hvor mye historikk som er lagret.
 
-GDI-objekter er bufret: ni faste farger lages ved oppstart, de blandede
+GDI-objekter er bufret: elleve faste farger lages ved oppstart (ni til og
+med fase 20, pluss de to stolpepenslene fra fase 21), de blandede
 fade-fargene bare når `(chrome, closeHot)` endrer seg.
 
 ### Vinduet
@@ -2165,6 +2166,20 @@ stolpe når båndets topp; hover-boksens lengste loddrette `CLR_BOX`-løp
 **85** (72 før); skrivebordsflaten 3840×1600 fanget med `PrintWindow`
 under WorkerW: 47 019 stolpepiksler i `[1249, 1599]`, båndtopp 1248;
 GDI/USER stabile (32/14 → 33/14 etter et modusbytte fram og tilbake).
+Hvilenivået 32/14 er to høyere enn fase 20s 30/14 fordi de to
+stolpepenslene lages ved oppstart; +1 etter modusbytte fantes også i
+bygget uten fase 21 (30 → 31 i rød-kjøringen).
+
+**Rettelse etter fletting:** `PolyPolygon` fylte med ALTERNATE. Med flere
+lys enn piksler (`vc > cw`) er `slot` under 1, `bodyW` klemmes til 1, og
+nabolys lander på samme `cx`; to like rektangler i samme bolk nuller
+hverandre under partall/oddetall-regelen, så stolpen forsvant.
+`SetPolyFillMode(WINDING)` rundt bolkene. Målt i proben: to like
+rektangler 10×16 gir 0 piksler under ALTERNATE og 160 under WINDING; fullt
+utzoomet med 1800 lys på 1176 px har raden `y = bottom` stolpefarge i
+873 av 1176 kolonner under ALTERNATE (rød kjøring) og 1169 / 1166 av
+1176 under WINDING (28/28 i to kjøringer). Fyllmodusen koster ikke målbart
+(medianer 1,46–1,66 ms mot 1,58 i ALTERNATE-kjøringen).
 
 **Opptegning ved 1280×720, 300 lys, median over 172 fulle bilder, samme
 probe og samme kjøreforhold (ingen `PrintWindow` imens):** 1,44 ms uten
@@ -2187,8 +2202,9 @@ ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
   tray-menyens «Standardvisning» setter tilbake til **1280×720** sentrert,
   klemt til arbeidsområdet om skjermen er mindre.
 - **Opptegningen holder ikke 0,85 ms.** Etter fase 10 er medianen 1,33 ms
-  ved 1280×720 og 5,13 ms ved 3840×1600, målt 17.09.2026. Fordelingen per
-  ledd står i fase 10. Eldre tall (0,462 ms på ~380×300 i del C, ~0,85 ms ved
+  ved 1280×720 og 5,13 ms ved 3840×1600, målt 17.09.2026. Etter fase 21
+  er den 1,56 ms ved 1280×720 med 300 lys (1,44 uten stolpene, målt i
+  samme kjøring med QPC i testbygget). Fordelingen per ledd står i fase 10. Eldre tall (0,462 ms på ~380×300 i del C, ~0,85 ms ved
   1280×720 i fase 7) er målt under andre forhold og lot seg ikke gjenskape med
   uendret kode i fase 9.
 - **Symbollinjas ellipse er ikke sett i drift.** Selv den lengste formen,
@@ -2386,7 +2402,10 @@ ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
     31/14 når alt har satt seg. Måler du midt i en stresstest, ser du en
     lekkasje som ikke finnes. **Fra fase 10 er hviletallet 29/14** i vanlig
     modus og 26/6 i skrivebordsmodus. Dobbeltbufferet lever nå mellom bildene,
-    og fire penner og pensler er erstattet av `DC_PEN`/`DC_BRUSH`.
+    og fire penner og pensler er erstattet av `DC_PEN`/`DC_BRUSH`. Fase 19
+    og 20 målte 30/14; **fra fase 21 er det 32/14** — de to stolpepenslene
+    lages i `WinMain`. Et modusbytte fram og tilbake gir +1 (33/14), sett
+    også i bygget uten fase 21.
 
 28. **`WM_SETCURSOR` må returnere `TRUE` for å holde pekeren, og `break` for
     alt annet.** Returnerer du `0` i default-grenen, mister kantsonene sine
