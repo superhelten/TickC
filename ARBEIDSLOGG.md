@@ -2482,9 +2482,9 @@ avkuttet svar og søppel etter tallet for prisen; `high < low`, nan, inf,
 nullpriser, negativt volum, open utenfor spennet, tid bakover, duplisert tid,
 `openTime` 0, usiterte felt, for kort array og søppel etter et tall for
 lysene. Ende til ende (`probe_resume.c`), **22/22 i to kjøringer**, rød
-kjøring **7 FAIL**: oppvåkning gir ny henting etter **281–297 ms** tre av tre, i begge kjøringer (282–406 i en tidligere)
-(hvilesyklusen er 3 000 ms), forbindelsen slippes hver gang og neste henting
-lykkes over den nye; `PBT_APMSUSPEND`, `PBT_APMRESUMESUSPEND` og
+kjøring **7 FAIL**: oppvåkning gir ny henting etter **281–297 ms** tre av tre
+i begge kjøringer (hvilesyklusen er 3 000 ms), forbindelsen slippes hver
+gang og neste henting lykkes over den nye; `PBT_APMSUSPEND`, `PBT_APMRESUMESUSPEND` og
 `PBT_APMPOWERSTATUSCHANGE` vekker ikke; ti oppvåkninger på rad gir 2
 hentinger (auto-reset-hendelsen slår dem sammen); med panelet åpent går
 **300 ekte lys gjennom den nye parseren med 0 forkastet**, og oppvåkning
