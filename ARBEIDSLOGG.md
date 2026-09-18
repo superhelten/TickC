@@ -95,9 +95,15 @@ den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
 `[ + ]` — ellers feiler
 `LNK1104: cannot open file 'ticker.exe'`.
 
-Fotavtrykk: ~3,5 MB private bytes, 195 KB exe etter fase 23 (187 KB etter
-fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
+Fotavtrykk: ~3,5 MB private bytes, 195 KB exe etter fase 24 (195 584 byte;
+195 072 etter fase 23, 187 KB etter fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
 380×300 i fase 1 — dobbeltbufferet er 8× større.)
+
+**`ticker.c` er også gyldig C++** (målt i fase 24): `cl /TP /W4 /O2` gir
+0 feil, 0 advarsler og en exe på byte-identisk størrelse. Fila bygges fortsatt
+som C — et språkbytte alene gir ingenting — men døra står åpen den dagen en
+funksjon faktisk trenger en container. Se *Avviste forslag* for hva STL og
+nlohmann/json koster.
 
 ---
 
@@ -138,6 +144,12 @@ gjør `PostMessage(WM_APP_DATA)` **etter** at låsen er sluppet.
   (lyset under forming endrer seg), nyere **legges til**, eldste faller ut ved taket.
 - Oppdages et tidshull (> 2 lysintervaller) nullstilles bufferet, slik at grafen
   ikke tegner en sammenhengende kurve over dødtid.
+- **Alt fra nettet går gjennom en sunnhetssjekk** (fase 24): `PriceSane`
+  (`0 < v < 1e15`, usant for NaN) og `CandleSane` (OHLC sunne, `high ≥ low`,
+  open og close innenfor, volum `≥ 0`, `openTime > 0`). `ParseKlines` hopper
+  over usunne lys og lys hvis tid ikke er strengt stigende, og beholder
+  resten. `candles[]` og `lastPrice` holder derfor aldri NaN, inf eller 0 fra
+  et svar.
 
 ### Tegning
 
@@ -2426,6 +2438,71 @@ den samme); et duplikats varsler; det grå spøkelset med fullt sett (klikket
 er testet, fargen ikke); merke dekket av et *annet merke* (bare av
 stempelet).
 
+### Fase 24 — sunne inndata og oppvåkning fra dvale
+
+Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-robuste-inndata.md`.
+Gren `robuste-inndata`, flettet inn med `--no-ff`.
+
+**Mandatet var et arkitekturdirektiv:** behold C nær Win32, flytt «høyere
+logikk» til C++ — `std::vector` og RAII i stedet for `malloc`/`realloc`/`free`,
+`std::string` og nlohmann/json for API-svarene, klasser rundt SMA/EMA/RSI —
+med null lekkasjer og feiltoleranse mot nettbrudd og ugyldige svar som
+overordnet krav, og full frihet til å forme det. **Direktivet beskriver en
+annen kodebase enn denne.** Det finnes ingen `malloc` å erstatte (alle
+buffere er statiske, se *Datalag*), ingen indikatorer å kapsle inn, og én
+kildefil. Midlene ble derfor **målt, ikke adoptert** — tallene står under
+*Avviste forslag* — mens målet i direktivets punkt 3 ble fasen: finn det som
+faktisk kan gå galt med inndata og nett, og rett det.
+
+**Funnet ved gjennomlesing:** parserne stolte på `atof`, som ikke kan feile.
+`"price":"abc"` ga 0.0 og `TRUE`, `"1e999"` ga inf, `"nan"` ga NaN — rett inn
+i `lastPrice` og `candles[]`. En inf i et lys sprenger Y-skalaen (og
+`double → int` i koordinatene er udefinert oppførsel), en NaN-pris tegner et
+blankt ikon. Et lys med usiterte felt lånte tallene fra *neste* lys, fordi
+letingen etter hermetegn ikke stoppet ved klammene. `PrependCandles` antar
+stigende tid uten at noe garanterte det. Og et 2xx-svar med bare søppel satte
+`histDone` for godt. Ingenting av dette er sett fra Binance — men appen står
+på i ukevis, og «serveren bestemmer» (kommentaren i `PrependCandles`).
+
+**Endringen, i to commits.** Først instrumentering: tellerne 110–112 på
+hovedvinduet (hentesykluser, oppvåkninger, forkastede verdier), bare i
+testbygget. Så funksjonen: `PriceSane`, `CandleSane`, `ParseQuotedNumber`
+(`strtod` med sluttpeker: ett helt tall mellom hermetegnene, ellers NULL);
+`FastParsePrice` rører ikke ut-verdien uten en sunn pris; `ParseKlines`
+hopper over usunne lys og teller dem i `*rejected`; `WorkerFetchHistory`
+regner «null lys, noen forkastet» som en feil og ikke som slutten på
+historikken. `WM_POWERBROADCAST` / `PBT_APMRESUMEAUTOMATIC` setter `dropConn`
+(nytt felt i låsedomenet) og `hWakeEvent`; tråden slipper `hConnect` først i
+neste syklus (teller 113). `MergeCandles`, `PrependCandles`, backoffen og
+all tegning er urørt. **Exe 195 072 → 195 584 byte (+512).**
+
+**Verifisert.** Enhetstester på ekte kode: **31/31**, rød kjøring mot
+commit 1 ga **22 FAIL** — tekst, tom streng, 0, negativ, nan, inf, overflow,
+avkuttet svar og søppel etter tallet for prisen; `high < low`, nan, inf,
+nullpriser, negativt volum, open utenfor spennet, tid bakover, duplisert tid,
+`openTime` 0, usiterte felt, for kort array og søppel etter et tall for
+lysene. Ende til ende (`probe_resume.c`), **22/22 i to kjøringer**, rød
+kjøring **7 FAIL**: oppvåkning gir ny henting etter **281–297 ms** tre av tre
+i begge kjøringer (hvilesyklusen er 3 000 ms), forbindelsen slippes hver
+gang og neste henting lykkes over den nye; `PBT_APMSUSPEND`, `PBT_APMRESUMESUSPEND` og
+`PBT_APMPOWERSTATUSCHANGE` vekker ikke; ti oppvåkninger på rad gir 2
+hentinger (auto-reset-hendelsen slår dem sammen); med panelet åpent går
+**300 ekte lys gjennom den nye parseren med 0 forkastet**, og oppvåkning
+vekker også lysgrenen (297 ms). GDI/USER **23/5 før og etter** 13
+oppvåkninger; ren avslutning, kode 0. Proben sender ingen taster eller klikk
+og trenger ikke en inaktiv maskin.
+
+**Ikke testet:** ekte dvale. Proben *sender* `WM_POWERBROADCAST`; at Windows
+leverer den til et skjult toppnivåvindu er dokumentert, men ikke målt her, og
+fallgruve 47 er nettopp en sendt melding som var grønn mens den ekte
+hendelsen avslørte en feil. Oppførselen når nettet ikke er oppe ved første
+forsøk (forventet: én feil, så 6 s) er lest, ikke kjørt. Fase 23-proben
+(prisvarsler, 109 sjekker) er **ikke kjørt på nytt** — den krever en inaktiv
+maskin; stien fra `WM_APP_DATA` og ut er urørt. Et usunt lys *ende til ende*
+(bare i enhetstestene — det finnes ikke noe skrivende probe-felt for et helt
+svar), og bakfyllingen (fase 18) gjennom den nye parseren (samme funksjon som
+seed-svaret, men stien med `rejected` er bare lest).
+
 ---
 
 ## Kjente begrensninger
@@ -2529,13 +2606,13 @@ stempelet).
   nytt er ikke målt — maskinen har én skjerm, og den ekte hendelsen kan ikke
   drives fra en probe. Lagt bort i fase 23-planen. En tur innom panelmodus
   og tilbake fra tray-menyen bygger flaten på nytt.
-- **Oppvåkning fra dvale gir ingen umiddelbar henting**
-  (`WM_POWERBROADCAST` håndteres ikke). Tråden kommer seg selv: den seeder
-  på nytt når siste lys er eldre enn 5 intervaller og slipper `hConnect`
-  etter tre feil, men første forsøk kan ligge opptil 60 s unna (backoffens
-  tak), og `frakoblet Ns` viser dvalens lengde imens. Anbefalt som neste
-  fase i fase 23-planen. Prisvarslene tåler dvale: et passert nivå fyrer på
-  første pris etterpå.
+- **Oppvåkning fra dvale er bare prøvd med en sendt melding** (fase 24).
+  `PBT_APMRESUMEAUTOMATIC` vekker tråden og slipper forbindelsen, men ekte
+  dvale kan ikke drives fra en probe. Er nettet ikke oppe ved første forsøk,
+  feiler det, og backoffen går 6 s, 12 s, … derfra. `frakoblet Ns` viser
+  dvalens lengde til første vellykkede henting (`GetTickCount64` teller
+  søvnen med). Prisvarslene tåler dvale: et passert nivå fyrer på første
+  pris etterpå.
 - **Skrivebordsmodus kobler input-køene sammen.** Et barn av et vindu i en
   annen prosess får Windows til å koble trådenes input (implisitt
   `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
@@ -2580,6 +2657,21 @@ stempelet).
   vektorene 0,015 ms, altså 1,8 % av en opptegning. Ikke verdt kompleksiteten
   — men mekanismen finnes allerede i `EnsureWatermark` om budsjettet skal
   holdes bokstavelig.
+- **C++ med STL og nlohmann/json** (arkitekturdirektivet bak fase 24). Målt
+  med prosjektets egne flagg (`/W4 /O2`, x86, statisk CRT) på et minimalt
+  program: C med `strstr` + `atof` **102 400 byte**; samme med `std::vector`
+  og `std::string` **114 176** (+11,8 KB, krever `/EHsc`); samme med
+  nlohmann/json 3.11.3 **222 720** (+120 KB — 62 % av hele `ticker.exe` — og
+  headeren bygger ikke rent på `/W4`). Det nlohmann skulle kjøpe, trygg
+  parsing, koster 512 byte som `strtod` med sluttpeker og `CandleSane`.
+  `std::vector` har ingenting å erstatte: det finnes ingen `malloc`, og en
+  fast `candles[6000]` kan verken lekke eller feile i en allokering etter tre
+  uker i drift — det kan en vektor. Unntak på tvers av `WndProc` er udefinert,
+  så hver meldingshåndterer måtte hatt sin egen `try`. Språkbyttet i seg selv
+  er gratis (`ticker.c` er gyldig C++, se *Bygg*), så avgjørelsen kan tas på
+  nytt når en funksjon trenger en container med ukjent størrelse. Indikatorer
+  (SMA/EMA/RSI) er ikke avvist — de finnes bare ikke ennå, og er en løkke over
+  `candles[]` inn i en statisk `double[MAX_CANDLES]`.
 - **WebView2 + Lightweight Charts:** ville brutt målet om lavt fotavtrykk med
   50–100× (Edge-subprosesser bruker 100–200 MB mot våre 3,3 MB).
 
@@ -2951,21 +3043,40 @@ stempelet).
     `fabs` var der fra før og koster lite. `/W4` sier ingenting, testbygget
     er større av andre grunner, og fase 23 oppdaget det først etter
     `--no-ff`-flettingen. Sammenlikn `ticker.exe` med forrige fases tall
-    (187 392 etter fase 22, 195 072 etter fase 23) før du fletter.
+    (187 392 etter fase 22, 195 072 etter fase 23, 195 584 etter fase 24)
+    før du fletter.
+76. **`atof` kan ikke feile.** Tekst gir 0.0, `"1e999"` gir inf, `"nan"` gir
+    NaN (UCRT leser den), og `"12x"` gir 12 — alt uten et ord. Bruk `strtod`
+    med sluttpeker og krev at den står på det lukkende hermetegnet, og slipp
+    verdien gjennom et *område* (`v > 0.0 && v < 1e15`): sammenlikningene er
+    usanne for NaN og taket tar inf, uten `isnan`/`isfinite` og uten noe nytt
+    fra CRT-en (fallgruve 75).
+77. **Hovedvinduet lages før `InitializeCriticalSection`.** En ny
+    meldingshåndterer i `WndProc` som går inn i låsen, kan få en *sendt*
+    melding i vinduet mellom `CreateWindowExW` og låsen i `WinMain`.
+    `WM_POWERBROADCAST` verner seg med `g_Ctx.hWakeEvent` — den settes etter
+    låsen, så er den satt, finnes låsen.
+78. **Sammenlikn håndtak i samme tilstand.** Fase 24-proben målte GDI/USER
+    med panelet lukket, åpnet panelet, og målte igjen: 23/5 → 32/12, rød
+    sjekk, ingen lekkasje. «Før» og «etter» må være samme vindussett.
+79. **Les koden før du tar et direktiv på ordet.** Fase 24-mandatet ba om å
+    erstatte `malloc` med `std::vector` i en kodebase uten `malloc`. To
+    `grep` og tre små bygg i scratchpad avgjorde det; tallene står i
+    *Avviste forslag*. Mål midlene, lever målet.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak18` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 23, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak17` er slettet: de dekket fase 1 til 22, og den
+**Bare `ticker.c.bak19` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 24, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak18` er slettet: de dekket fase 1 til 23, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22) og `.bak18` (fase 23). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23) og `.bak19` (fase 24). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
