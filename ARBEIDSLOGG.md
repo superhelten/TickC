@@ -44,6 +44,10 @@ lysene, med skala som eases som prisaksen, og en `V`-rad i hover-boksen.
 **Fase 22** gjør headerens rad 2 til en verktøylinje: symbolpille (åpner
 overlayet), en pille per intervall og en `VOL`-bryter som eases, med `V` og
 `1`…`6` fra tastaturet og «Volumstolper» i tray-menyen.
+**Fase 23** gir prisvarsler: et klikk i priskolonnen setter en rav linje på
+den prisen, et klikk på merket fjerner den, og når prisen når nivået fyrer
+varselet én gang med etterglød, ballong og lyd — også med panelet lukket.
+Testbygget fikk **skrivende** probe-felt som injiserer en pris.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -62,12 +66,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md` og
 `docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md` og
 `docs/superpowers/plans/2026-09-18-ticker-volum.md` og
-`docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md`. Design:
+`docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md` og
+`docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~4750 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~5360 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -294,6 +299,51 @@ ikke synlig når valget endres (tray-menyen med lukket panel), snapper den.
 høyre for siste pille, fra `DrawChart` (helsefeltene leses under låsen), og
 bare når hele teksten får plass før `HeaderRow2Limit`.
 
+#### Prisvarsler (fase 23)
+
+Priskolonnen (`x > edge`, `y ∈ [top, bottom]`) er varslenes flate. Den var
+en no-op for klikk til og med fase 22.
+
+| Handling | Oppførsel |
+|---|---|
+| Peker i kolonnen, tom flate | hånd, **spøkelse**: dempet rav linje tvers over grafen og et *rammet* merke med den avrundede prisen. Grått når alle åtte plassene er brukt |
+| Klikk på tom flate | `AlertAdd` på `AlertPriceAtY(y)` — varselet settes, skrives til registret |
+| Peker på et merke | merket blir rødt som lukkeknappen (`alertHot`) — men ikke et *nysatt* merke før pekeren har forlatt det én gang (`alertFresh`) |
+| Klikk på et merke | `AlertRemove` — nærmeste merke innenfor `[y − 8, y + 8)`, flaten som er tegnet |
+| `A` med trådkors | varsel på trådkorsets pris; uten trådkors ingenting |
+| «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises; grått uten varsler |
+
+**Siden lagres, ikke forrige pris.** `alerts[sym][i]` er en double med siden
+i fortegnet: `+nivå` ble satt over prisen og fyrer når prisen er ≥, `−nivå`
+under og fyrer når den er ≤. `AlertHit(now, signedLevel)` er en ren funksjon;
+`now ≤ 0` fyrer aldri (rett etter et symbolbytte er `lastPrice` 0). Et nivå
+som ble krysset mens appen sto av eller maskinen sov, fyrer derfor på første
+pris etterpå, og et symbolbytte har ingen «forrige pris» å sammenlikne feil.
+
+**Utløseren bor i `WM_APP_DATA`** (`CheckAlerts` etter `UpdateIcon`): det ene
+stedet hver ny pris passerer på UI-tråden — panelet åpent, lukket og i
+skrivebordsmodus. Alt varselrelatert er **UI-eid**; trådkontrakten er urørt.
+Et varsel fyrer **én gang** og fjernes. Bare gjeldende symbols varsler
+prøves — prisen vi har, er dets.
+
+**Når det fyrer** (`FireAlert`): etterglød på nivået i full rav som toner ut
+(`alertFlashF` 1 → 0, `ALERT_TAU_FLASH`, sjuende easede verdi, bare når
+panelet er synlig), ballong fra tray-ikonet (`NIF_INFO`, `NIIF_NOSOUND`, fra
+en **kopi** av `nid` — `UpdateIcon` eier originalen) og
+`MessageBeep(MB_ICONASTERISK)`. Én lyd, og den kommer også når Windows holder
+ballongen tilbake.
+
+**Tegning og treff leser samme kilde** (fallgruve 14): `AlertY` og
+`AlertPriceAtY` leser `dispMin`/`dispMax` med samme avkutting som lysene.
+`AlertRound` runder til største tierpotens ≤ én piksel i pris, gulv 0,01
+(fallgruve 16). Linjene tegnes **bak lysene**, over stolpene, innenfor
+klippet; merkene på stempelets flate, og stempelet øverst. Rutenettetiketter
+under 16 px fra et merke tegnes ikke. `DC_PEN`/`DC_BRUSH` — **ingen nye
+GDI-objekter**. Skrivebordsmodus tegner linjene, ikke merkene.
+
+**Dobbeltklikk-flaten er `[left, edge]`**, ikke `[left, W)` som til og med
+fase 22: i kolonnen er et raskt dobbeltklikk sett + fjern (fallgruve 38).
+
 #### Hurtigsti for hover-opptegning
 
 Et hover-skifte invaliderer **kun knapperaden** (`ButtonStrip(W)`), ikke hele
@@ -349,7 +399,7 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | «Skrivebordsmodus» i tray-menyen | bytter mellom panel og skrivebordsflate; haken viser gjeldende modus, valget lagres (fase 12) |
 | Tray-klikk | fremme og aktivt → skjul; ellers vis, gjenopprett og gi fokus |
 | `Ctrl` + `0` / «Standardvisning» | sentrer 1280×720 på skjermen vinduet står på (grå i skrivebordsmodus) |
-| Dobbeltklikk på grafen eller prisaksen | nullstiller zoom og panorering (eases) |
+| Dobbeltklikk på grafen | nullstiller zoom og panorering (eases). Til og med fase 22 også på prisaksen; den er varslenes nå (fase 23) |
 | `R` | nullstiller zoom og panorering (ikke mens overlayet er åpent) |
 | `ESC` | lagvis: lukk overlayet → nullstill utsnittet → skjul til systemstatusfeltet (duplikat: avslutt) |
 | Dobbeltklikk i ledig headerflate | maksimerer / gjenoppretter |
@@ -363,6 +413,8 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `V` | VOL-pillen: volumstolpene av/på, eased (fase 22) |
 | `1` … `6` | intervallpillene i rekkefølge, 1m … 1d (fase 22) |
 | «Volumstolper» i tray-menyen | samme bryter — virker også i skrivebordsmodus (fase 22) |
+| Klikk i priskolonnen / `A` | setter eller fjerner et prisvarsel — se *Prisvarsler* over (fase 23) |
+| «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises (fase 23) |
 | Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
 
 **Standardvisningen er DPI-skalert:** `MulDiv(1280, GetDpiForWindow(hwnd), 96)`,
@@ -562,6 +614,15 @@ som aldri kjører når prosessen drepes utenfra. Den leses bare når verken
 `--desktop-mode` eller `--dup` er gitt. Flagget vinner for den kjøringen, og
 et duplikat er alltid et panel og skriver aldri.
 
+**Prisvarslene (fase 23)** er de eneste verdiene som ikke er `REG_DWORD`:
+`Alerts_BTCUSDT`, `Alerts_ETHUSDT` … — én `REG_BINARY` per symbol, doubler
+med siden i fortegnet. Navnet er API-symbolet, ikke indeksen, så en endret
+symboltabell aldri flytter et varsel til et annet symbol. `SaveAlerts`
+skriver i det et varsel settes, fjernes eller fyrer (som `DesktopMode`), og
+sletter verdien med siste varsel. `LoadAlerts` forkaster enkeltvis: feil
+type, lengde som ikke er et helt antall doubler, NaN, 0, ≥ 1e9 og alt over
+åtte. Et duplikat verken leser eller skriver dem.
+
 **Autostart (fase 13) ligger utenfor `Software\Ticker`:**
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, verdien `Ticker`,
 `REG_SZ`, stien til exe-en i anførselstegn. Den leses hver gang tray-menyen
@@ -608,6 +669,11 @@ er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
 | `TBAR_TOP` / `TBAR_H` | 28 / 15 | verktøylinjas rad: y i [28, 43), under prisens grunnlinje og over grafflaten (fase 22) |
 | `TBAR_SYM_W` / `TBAR_IV_W` / `TBAR_VOL_W` | 74 / 28 / 32 | faste pillebredder; sum med luft 300 px, slutt på x = 310 mot grensen 312 ved 400 px |
 | `TBAR_GAP` / `TBAR_GROUP_GAP` | 2 / 8 | mellom intervallpiller / mellom gruppene |
+| `ALERT_MAX` | 8 | prisvarsler per symbol, faste plasser, 256 byte i alt (fase 23) |
+| `CLR_ALERT` / `CLR_ALERT_LINE` | `#FFB020` / `#86601B` | rav: merke og etterglød / linja over dataflaten, blandet halvveis mot `CLR_BG`. Ikke blant de elleve faste fargene, så en probe kan telle dem |
+| `ALERT_HIT_PX` | 8 | halve merkehøyden: treffet er flaten som er tegnet |
+| `ALERT_TAU_FLASH` | 900,0 | tidskonstant for ettergløden når et varsel fyrer (ms), snapp 0,02 |
+| `ALERT_PRICE_MAX` | 1e9 | øvre grense for et nivå, vern mot et håndredigert register |
 
 ---
 
@@ -793,10 +859,16 @@ Nettverkskallet var 130× dyrere enn hele opptegningen. Tråden var hele gevinst
 | Fase 21, med volumstolper (`PolyPolygon` i bolker) | **1,56 ms** (+0,12 ms; `FillRect` per lys ga 1,84) |
 | Fase 22, før verktøylinja (rød kjøring, median 177 bilder) | 1,48 ms |
 | Fase 22, med verktøylinja (to kjøringer, 171 og 168 bilder) | **1,61 / 1,52 ms** (p90 1,75 / 1,70 mot 1,62) |
+| Fase 23, uten varsler (to kjøringer, median av 150 tvungne bilder) | 1,89 / 1,94 ms |
+| Fase 23, med **åtte** varsler i utsnittet | **2,01 / 2,11 ms** (+0,11 / +0,17 ms) |
 
 Zoomet helt ut er *raskere* (1,5 ms) fordi lysene da er 1 px brede.
 Tallene fra fase 21 og 22 er målt med QPC rundt den trege stien i `PaintPopup`
 i testbygget (probe-felt 15), ikke med `PrintWindow` i flukt (fallgruve 37).
+Fase 23 tvinger bildene med `RedrawWindow(RDW_UPDATENOW)` fra proben i
+stedet for å vente på animasjonsklokka; grunnlinja er derfor ikke
+sammenliknbar med fase 22 (rød kjøring, samme metode: 1,73 ms) — bare
+differansen innen samme kjøring er det.
 
 ### Enhetstester på ekte kode
 
@@ -2276,6 +2348,74 @@ peker og `WM_MOUSELEAVE` ut i mellomrommet; alt tegnet og klikkbart ved
 skrivebordsmodus, skjuling av piller under 400 px, og frakoblet-tekstens
 nye plass.
 
+### Fase 23 — prisvarsler på prisaksen
+
+Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md`.
+Gren `prisvarsler`, flettet inn med `--no-ff`. Brukeren la fram tre
+kandidater — prisvarsler med prisinjeksjon i proben, re-initialisering etter
+hvilemodus og oppløsnings-/DPI-bytte i skrivebordsmodus — og agenten valgte.
+Hvilemodus er lagt bort som **anbefalt neste fase** (liten, men den ekte
+hendelsen kan ikke drives fra en probe, fallgruve 47); DPI-byttet står som
+kjent begrensning (én skjerm). Begrunnelsene står i planen.
+
+**Avgjørelsen fase 22 ventet på:** testbygget har nå **skrivende**
+probe-felt. De finnes bare bak `/DTICKER_PROBE`, bor på hovedvinduet, og
+injeksjonen bærer prisen i meldingen og prøver utløseren synkront
+(fallgruve 70). Produksjonsbygget har ikke meldingen.
+
+**Endringen, i to commits.** Først instrumentering: tilstandsfeltene i
+`AppContext`, lesende felt 22–32, skrivende 100 (injiser pris) og 101
+(demp). Så funksjonen: `AlertHit` og `AlertRound` (rene), `AlertY` /
+`AlertPriceAtY` / `AlertAxisHit` (leser `disp*`, fallgruve 14), `AlertAdd` /
+`AlertRemove` / `AlertsClear`, `FireAlert`, `CheckAlerts` fra `WM_APP_DATA`,
+`OnAxisClick`, hover i `WM_MOUSEMOVE` (`axisHotY`, `alertHot`, `alertFresh`),
+hånden i `WM_SETCURSOR`, `A`-tasten, `alertFlashF` som sjuende easede
+verdi, `SaveAlerts` / `LoadAlerts`, «Fjern prisvarsler (N)»
+(`ID_TRAY_ALERTS_CLEAR` 1006), og tegningen i `DrawChart`: linjer bak
+lysene, merker, spøkelse og etterglød. Se **Prisvarsler** under *Vinduet*.
+`ChartGeometry`, `HitCandle`, låsens dekning og nettverkstråden er urørt.
+
+**Rettet underveis, funnet på skjermbilde og ikke av proben:** stempelet for
+siste pris lå oppå et varselmerke 12 px under, og et tall kuttet på langs
+stakk fram. Et merke som er dekket av stempelet eller av et senere tegnet
+merke (under 16 px) tegnes nå som ren flate. Proben fikk en sjekk for det.
+
+**Verifisert.** Enhetstester på ekte kode (funksjonene limt ut av
+`ticker.c`): **20/20** — `AlertHit` på begge sider, på nivået, pris 0 og
+negativ, nivå 0; `AlertRound` for BTC 1m/1d og SOL, gulvet 0,01, og
+egenskapen |avrundet − pris| ≤ en halv piksel over ca. 1 250 steglengder.
+Ende til ende, **109/109 i to kjøringer**; rød kjøring mot commit 1 ga
+**52 FAIL** med alle kontrollene grønne, også den skrivende proben selv
+(felt 100 og 101 finnes i begge bygg). Klikk på rad 300 setter nivået
+innenfor én piksel i pris (81 066,00 mot 81 065,82; linja på rad 299,
+fallgruve 73), fortegnet følger siden, 1 074 ravpiksler i merket og 1 161 i
+linja med lysene over; spøkelset er rammet (365 px) med linja på pekerens
+rad; hånden over kolonnen; rødt merke under ekte peker, rav mens det er
+nysatt; `A` med og uten trådkors; nærmeste merke fjernes; raskt dobbeltklikk
+er sett + fjern og **nullstiller ikke** utsnittet, mens dobbeltklikk i
+grafen fortsatt gjør det. Utløseren: en cent under fyrer ikke, *på* nivået
+fyrer, én gang, registret ryddet med en gang; nedre varsel speilvendt;
+pris 0 fyrer ikke; to av tre varsler forbi samme pris fyrer i samme prøve
+og det riktige står igjen; nivå 0, duplikat og det niende avvises.
+Etterglød 1 000 → mellomverdi → eksakt 0, 1 186 ravaktige piksler over
+lysene og 0 etterpå. Symbolene er atskilt (ETH har ingen, BTC-varselet
+overlever turen). Fyrer med panelet skjult, uten etterglød. **Ett varsel
+udempet per kjøring:** `Shell_NotifyIconW(NIM_MODIFY, NIF_INFO)` svarte
+`TRUE`. 400×250 virker. Overlever omstart med side; et register skrevet for
+hånd (krysset nivå, NaN, −1e12, 0 og ett gyldig) gir én fyring på første
+pris og ett varsel igjen. Opptegning med **åtte** varsler: +0,11 og
++0,17 ms (1 893 → 2 006 og 1 938 → 2 110 µs, median av 150) — åtte
+`GetTextExtentPoint32W` + `DrawTextW`; ett eller to varsler er i støyen.
+GDI/USER **34/14 før og etter** i alle tre kjøringer.
+
+**Ikke testet:** at ballongen faktisk *vises* og lyden *høres* (bare svaret
+fra `Shell_NotifyIconW`); den ekte tray-menyen (bare kommandoen);
+varsellinjene i skrivebordsmodus (samme `DrawChart`, ikke fanget); utløseren
+gjennom en ekte henting (bare injisert — stien fra `WM_APP_DATA` og ut er
+den samme); et duplikats varsler; det grå spøkelset med fullt sett (klikket
+er testet, fargen ikke); merke dekket av et *annet merke* (bare av
+stempelet).
+
 ---
 
 ## Kjente begrensninger
@@ -2291,6 +2431,31 @@ nye plass.
   samme kjøring med QPC i testbygget). Fordelingen per ledd står i fase 10. Eldre tall (0,462 ms på ~380×300 i del C, ~0,85 ms ved
   1280×720 i fase 7) er målt under andre forhold og lot seg ikke gjenskape med
   uendret kode i fase 9.
+- **Prisvarslene prøves mot én pris per henting** (fase 23), altså hvert
+  tredje sekund: lysets lukkekurs med panelet åpent, ticker-prisen ellers.
+  En spiss som går forbi nivået og tilbake mellom to hentinger fyrer
+  ingenting — lysets `high`/`low` leses ikke. Under en frakobling prøves
+  ingenting; første pris etterpå fyrer det som er passert.
+- **Bare varslene til symbolet som vises, er våkne** (fase 23). Appen henter
+  ett symbol om gangen; et varsel på ETH sover mens BTC vises, og fyrer på
+  første ETH-pris etter byttet dersom nivået er passert i mellomtiden.
+- **Et varsel utenfor det synlige prisområdet tegnes ikke** (fase 23),
+  heller ikke som en markør i kanten — samme regel som siste-pris-stempelet.
+  Det er våkent likevel. Det fjernes ved å panorere eller zoome til det
+  synes, eller med «Fjern prisvarsler (N)», som tar alle for symbolet og er
+  stedet antallet vises.
+- **Et varsel satt tett på prisen kan fyre med én gang** (fase 23). Siden
+  velges mot siste lys' lukkekurs; med panelet lukket prøves ticker-prisen,
+  og de to kan ligge noen cent fra hverandre.
+- **Et duplikat har egne, flyktige varsler** (fase 23): det leser og skriver
+  ikke registret, men varsler satt i det fyrer fra dets eget tray-ikon og
+  dør med panelet. To *hovedinstanser* startet for hånd fyrer begge det
+  samme varselet.
+- **Ballongen kan holdes tilbake av «Ikke stør»**, og lyden er systemlyden
+  «Stjerne» — er den slått av i Windows, er varselet stumt. Ettergløden
+  vises bare når panelet er synlig i det varselet fyrer.
+- **De ytterste 6 px av priskolonnen er skaleringskant** (`HTRIGHT`), ikke
+  varselflate, når panelet ikke er maksimert.
 - **Frakoblet-telleren vises ikke i headeren på smale paneler** (fase 22).
   Verktøylinja slutter på x = 310; teksten trenger ~75 px til før
   prisaksens etikett, altså et panel på ~480 px eller mer. Dempet pris,
@@ -2347,6 +2512,20 @@ nye plass.
   Flaten dekker hele skjermen, men tekst og marger får samme pikselstørrelse
   som ved 100 %, altså mindre på skjermen. Det følger av at hele layouten er
   i rå piksler (se *Avviste forslag*, DPI-manifest).
+- **Skjermkonfigurasjon som endres mens appen kjører, håndteres ikke**
+  (`WM_DISPLAYCHANGE` / `WM_DPICHANGED`). Skrivebordsflaten får størrelsen
+  sin når den lages, og bygges bare på nytt når WorkerW rives ned eller
+  modus byttes. Ny oppløsning eller skalering uten at Explorer starter på
+  nytt er ikke målt — maskinen har én skjerm, og den ekte hendelsen kan ikke
+  drives fra en probe. Lagt bort i fase 23-planen. En tur innom panelmodus
+  og tilbake fra tray-menyen bygger flaten på nytt.
+- **Oppvåkning fra dvale gir ingen umiddelbar henting**
+  (`WM_POWERBROADCAST` håndteres ikke). Tråden kommer seg selv: den seeder
+  på nytt når siste lys er eldre enn 5 intervaller og slipper `hConnect`
+  etter tre feil, men første forsøk kan ligge opptil 60 s unna (backoffens
+  tak), og `frakoblet Ns` viser dvalens lengde imens. Anbefalt som neste
+  fase i fase 23-planen. Prisvarslene tåler dvale: et passert nivå fyrer på
+  første pris etterpå.
 - **Skrivebordsmodus kobler input-køene sammen.** Et barn av et vindu i en
   annen prosess får Windows til å koble trådenes input (implisitt
   `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
@@ -2499,7 +2678,8 @@ nye plass.
     lages i `WinMain`. Et modusbytte fram og tilbake gir +1 (33/14), sett
     også i bygget uten fase 21. Fase 22 la ikke til noe: 34/14 før og
     etter i både rødt og grønt bygg, målt *etter* første overlay (+2,
-    fallgruve 65).
+    fallgruve 65). Fase 23 heller ikke: 34/14 i rød og begge grønne
+    kjøringer, etter ti sett/fjern, en ballong og en `MessageBeep`.
 
 28. **`WM_SETCURSOR` må returnere `TRUE` for å holde pekeren, og `break` for
     alt annet.** Returnerer du `0` i default-grenen, mister kantsonene sine
@@ -2727,19 +2907,48 @@ nye plass.
     har.** Overlayet åpnes med postet `WM_RBUTTONUP` i grafen og lukkes med
     postet `ESC` — begge finnes i alle bygg siden fase 2 — så «før» er
     sammenliknbart mellom rød og grønn kjøring (fallgruve 65).
+70. **En skrivende probe må bære verdien i meldingen, ikke legge den i et
+    delt felt.** Den nærliggende løsningen er å skrive `lastPrice` under
+    låsen og så sende `WM_APP_DATA`, som leser feltet på nytt.
+    Arbeidertråden skriver det samme feltet hvert tredje sekund, så
+    injeksjonen ville blitt borte når en ekte henting landet imellom —
+    sjelden, altså en test som feiler av og til (resonnert, ikke målt).
+    Fase 23 sender prisen i `lParam` (`wParam` = 1), og
+    `SendMessage` returnerer først når utløseren er prøvd. De skrivende
+    feltene (100–103) bor på **hovedvinduet**, så de virker med panelet
+    skjult; de lesende bor fortsatt på panelet.
+71. **Et postet klikk etterlater hover-tilstand.** `OnAxisClick` setter
+    `axisHotY` fordi et ekte klikk har pekeren der; et postet klikk har
+    ingen `WM_MOUSEMOVE` foran seg og ingen `WM_MOUSELEAVE` etter. Bildet
+    etter et postet klikk i priskolonnen har derfor et spøkelse (linje og
+    rammet merke) på klikkets rad. Pikselsjekker må enten regne med det
+    eller poste `WM_MOUSELEAVE` først.
+72. **`grep -c $'\x00'` teller alle linjer.** I bash er `$'\x00'` en tom
+    streng, og den tomme strengen finnes på hver linje — sjekken fra
+    fallgruve 55 svarer «4837» på en ren fil. `grep -P '\x00'` virker ikke
+    i dette oppsettet («supports only unibyte and UTF-8 locales»). Bruk
+    Python: `open(f, 'rb').read().count(b'\x00')`, og tell ikke-ASCII og
+    rene LF i samme slengen (fallgruve 3 og 68).
+73. **Pris → y → pris går ikke rundt.** Lysene kutter y med `(int)`, og
+    varslene må gjøre det samme for å ligge på lysenes rader (fallgruve
+    14). Et klikk på rad 300 ga nivået 80 832,00, som tegnes på rad 299.
+    En probe som leter etter linja, må lete i `y ± 2` og godta ± 1.
+74. **Beskrivelsen i en `Check` er ikke en formatstreng.** `%%` skrives ut
+    som to prosenttegn. Rød kjøring sa «2 %% over prisen».
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak17` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 22, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak16` er slettet: de dekket fase 1 til 21, og den
+**Bare `ticker.c.bak18` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 23, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak17` er slettet: de dekket fase 1 til 22, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21) og `.bak17` (fase 22). Filene er ignorert av git; mønsteret
+(fase 21), `.bak17` (fase 22) og `.bak18` (fase 23). Filene er ignorert av
+git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.

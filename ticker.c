@@ -30,6 +30,7 @@
 #define ID_TRAY_DESKTOP  1003   // skrivebordsmodus av/paa (fase 12)
 #define IDM_TOGGLE_AUTOSTART 1004   // start ved paalogging av/paa (fase 13)
 #define ID_TRAY_VOLUME   1005   // volumstolper av/paa (fase 22)
+#define ID_TRAY_ALERTS_CLEAR 1006   // fjern prisvarslene for symbolet (fase 23)
 // Symbol og intervall fra tray-menyen (fase 17). Punkt i faar FIRST + i.
 // Omraadene er 100 brede; #error under tabellene sikrer at de aldri overlapper.
 #define ID_TRAY_SYMBOL_FIRST   1100
@@ -231,6 +232,21 @@ C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 
+// Prisvarsler (fase 23): faste plasser per symbol, ingen malloc. Aatte er
+// flere enn prisaksen rommer uten at merkene dekker hverandre ved 250 px
+// hoyde (16 px per merke), og 4 x 8 doubler er 256 byte.
+#define ALERT_MAX          8
+// Rav: ikke blant de elleve faste fargene, saa en probe kan telle piksler,
+// og verken opp (groenn) eller ned (roed) - et varsel har ingen retning foer
+// det fyrer. Linja over dataflaten er samme farge blandet halvveis ned mot
+// CLR_BG: et nivaa er en referanse som rutenettet, ikke et signal, og skal
+// ikke rope hoyere enn lysene. Merket paa aksen baerer den mettede fargen.
+#define CLR_ALERT          RGB(0xFF, 0xB0, 0x20)
+#define CLR_ALERT_LINE     RGB(0x86, 0x60, 0x1B)
+#define ALERT_HIT_PX       8      // halve merkehoyden: treff = det som er tegnet
+#define ALERT_TAU_FLASH    900.0  // etterglooden naar et varsel fyrer (ms)
+#define ALERT_PRICE_MAX    1.0e9  // vern mot et register redigert for haand
+
 // Verktoylinja (fase 22): symbolpille, en pille per intervall og VOL, i
 // headerens rad 2 - der symbollinja sto som ren tekst. Faste bredder, ikke
 // maalt tekst: WM_NCHITTEST maa kunne regne ut pillene uten en DC, og
@@ -389,7 +405,7 @@ typedef struct {
     // telles ikke som vaare, og skal ikke gjennom DestroyCursor. Bufres
     // likevel: WM_SETCURSOR fyrer ved hver musebevegelse, og et oppslag per
     // melding er unodig arbeid i en sti som ellers er gratis.
-    HCURSOR curPan, curArrow;
+    HCURSOR curPan, curArrow, curHand;   // curHand: priskolonnen (fase 23)
     HBRUSH brClose;
     // Hvilken knapp musa staar paa, -1 for ingen. UI-eid, aldri roert av
     // arbeidertraden. Treffdeteksjonen henger paa DENNE, ikke paa noe
@@ -403,6 +419,34 @@ typedef struct {
     int    tbHot;
     BOOL   showVol;
     double dispVolF;
+    // Prisvarsler (fase 23). Alt er UI-eid: varslene settes fra musa og
+    // proeves i WM_APP_DATA, begge paa UI-traaden, saa traadkontrakten er
+    // uroert. Per symbol - et nivaa i dollar er meningsloest paa tvers av
+    // symboler (fallgruve 16). Fortegnet baerer SIDEN: +nivaa fyrer naar
+    // prisen er >= nivaaet (varselet ble satt over prisen), -nivaa naar den
+    // er <= (satt under). Siden lagres, i stedet for aa sammenlikne forrige
+    // og neste pris, saa et nivaa som ble krysset mens appen sto av eller
+    // maskinen sov fyrer ved foerste pris etterpaa, og et symbolbytte ikke
+    // kan sammenlikne SOL mot BTC.
+    // alertHot og axisHotY er hover-tilstand i priskolonnen, samme regel som
+    // btnHot: logisk tilstand, -1 for ingen. alertFlashF er etterglooden til
+    // et varsel som har fyrt, 1..0, og eases av klokka.
+    double alerts[SYMBOL_COUNT][ALERT_MAX];
+    int    alertCount[SYMBOL_COUNT];
+    int    alertHot;
+    int    axisHotY;
+    // Nivaaet til varselet som NETTOPP ble satt med et klikk, 0 = ingen.
+    // Pekeren staar da paa det nye merket, og alertHot sier (korrekt) at et
+    // klikk til fjerner det - men et merke som blir roedt i det det settes,
+    // leser som en feil. Det tegnes derfor rav til pekeren har forlatt det
+    // en gang. Bare tegningen leser feltet; treffet henger paa alertHot
+    // (fallgruve 12). Et nivaa, ikke en indeks: fjerning flytter indeksene.
+    double alertFresh;
+    double alertFlashLevel;
+    double alertFlashF;
+    int    alertFired;       // antall varsler som har fyrt siden oppstart
+    double alertLastFired;   // nivaaet til det siste
+    BOOL   alertNotifyOk;    // svaret fra Shell_NotifyIconW paa siste ballong
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brBox, brBoxEdge;
     HBRUSH brVolUp, brVolDown;       // volumstolper (fase 21)
@@ -468,6 +512,11 @@ static INT   s_volCnt[VOL_BATCH];
 // WM_APP_PROBE 15, saa en probe kan maale median over mange bilder uten
 // aa ta skjermbilder samtidig (fallgruve 37).
 static LONGLONG g_probePaintUs = 0;
+// Bare testbygg (fase 23): demper ballong og lyd naar et varsel fyrer, saa en
+// probe kan fyre mange varsler uten aa plage den som sitter ved maskinen.
+// Settes med WM_APP_PROBE 101 til hovedvinduet. En kjoering fyrer ett varsel
+// udempet og leser svaret fra Shell_NotifyIconW (felt 29).
+static BOOL g_probeMute = FALSE;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -581,6 +630,29 @@ static DWORD NetBackoffMs(int failures, ULONGLONG tickSeed) {
     // denne klemmingen ga failures>=5 opptil 67,5 s - maalt, ikke antatt.
     if (out > NET_RETRY_MAX) out = NET_RETRY_MAX;
     return out;
+}
+
+// Prisvarsler (fase 23). Har et varsel fyrt? signedLevel baerer siden i
+// fortegnet: +nivaa ble satt OVER prisen og fyrer naar prisen er >= nivaaet,
+// -nivaa ble satt UNDER og fyrer naar den er <=. now <= 0 er "ingen pris
+// enda" (rett etter et symbolbytte er lastPrice 0) og fyrer aldri - uten
+// vernet ville hvert nedre varsel fyrt paa 0 (fallgruve 17).
+static BOOL AlertHit(double now, double signedLevel) {
+    if (now <= 0.0 || signedLevel == 0.0) return FALSE;
+    return (signedLevel > 0.0) ? (now >= signedLevel) : (now <= -signedLevel);
+}
+
+// Runder et nivaa pekt ut med musa til den stoerste tierpotensen som ikke er
+// stoerre enn en piksel i pris (pxStep), saa varselet flytter seg under en
+// piksel fra der det ble satt, men leser 75120 og ikke 75123.4567. Gulvet er
+// 0,01: finere enn det vises ikke noe sted (fallgruve 16 - terskelen regnes
+// fra piksler, ikke fra et fast tall i dollar).
+static double AlertRound(double price, double pxStep) {
+    if (price <= 0.0 || pxStep <= 0.0) return price;
+    double q = pow(10.0, floor(log10(pxStep)));
+    if (q < 0.01) q = 0.01;
+    double r = floor(price / q + 0.5) * q;
+    return (r > 0.0) ? r : price;
 }
 
 // Skiller "ingen lagret posisjon" fra en ekte koordinat, som godt kan vaere
@@ -737,6 +809,67 @@ static void SaveConfig(const AppContext* ctx) {
     RegSetValueExW(k, L"IntervalIndex", 0, REG_DWORD, (const BYTE*)&iv, sizeof(iv));
     DWORD sv = ctx->showVol ? 1 : 0;
     RegSetValueExW(k, L"ShowVolume",    0, REG_DWORD, (const BYTE*)&sv, sizeof(sv));
+    RegCloseKey(k);
+}
+
+// Prisvarslene (fase 23): en REG_BINARY per symbol, "Alerts_BTCUSDT", med
+// nivaaene som doubler med siden i fortegnet. Navnet er API-symbolet, ikke
+// indeksen: tabellen kan faa flere symboler eller ny rekkefolge, og et varsel
+// paa 75 000 skal aldri havne paa SOL. Egen funksjon, ikke en del av
+// SaveConfig, av samme grunn som SaveDesktopMode: den skrives i det brukeren
+// setter eller fjerner et varsel, og naar et fyrer - ikke i WM_DESTROY, som
+// aldri kjoerer naar prosessen drepes. Et symbol uten varsler faar verdien
+// slettet. Et duplikat skriver ikke og leser ikke: varslene det setter lever
+// med panelet, og et varsel i registret fyrer en gang, fra hovedinstansen.
+static void SaveAlerts(const AppContext* ctx) {
+    if (g_isDuplicate) return;
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return;
+    }
+    for (int s = 0; s < SYMBOL_COUNT; ++s) {
+        wchar_t name[48];
+        swprintf_s(name, 48, L"Alerts_%s", SYMBOLS[s].api);
+        int n = ctx->alertCount[s];
+        if (n <= 0) {
+            RegDeleteValueW(k, name);
+        } else {
+            RegSetValueExW(k, name, 0, REG_BINARY, (const BYTE*)ctx->alerts[s],
+                           (DWORD)(n * sizeof(double)));
+        }
+    }
+    RegCloseKey(k);
+}
+
+// Bundet sjekk som i LoadConfig: feil type, en lengde som ikke er et helt
+// antall doubler, for mange, NaN, null eller et tall uten mening forkastes
+// enkeltvis, og resten beholdes.
+static void LoadAlerts(AppContext* ctx) {
+    if (g_isDuplicate) return;
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return;
+    }
+    for (int s = 0; s < SYMBOL_COUNT; ++s) {
+        wchar_t name[48];
+        swprintf_s(name, 48, L"Alerts_%s", SYMBOLS[s].api);
+        double tmp[ALERT_MAX];
+        DWORD cb = sizeof(tmp), type = 0;
+        ctx->alertCount[s] = 0;
+        if (RegQueryValueExW(k, name, NULL, &type, (BYTE*)tmp, &cb) != ERROR_SUCCESS ||
+            type != REG_BINARY || cb % sizeof(double) != 0) {
+            continue;
+        }
+        int n = (int)(cb / sizeof(double));
+        for (int i = 0; i < n && ctx->alertCount[s] < ALERT_MAX; ++i) {
+            double a = fabs(tmp[i]);
+            // Skrevet som "ikke innenfor", saa NaN - som svarer nei paa alle
+            // sammenlikninger - faller ut sammen med uendelig.
+            if (!(a > 0.0 && a < ALERT_PRICE_MAX)) continue;
+            ctx->alerts[s][ctx->alertCount[s]++] = tmp[i];
+        }
+    }
     RegCloseKey(k);
 }
 
@@ -1679,6 +1812,47 @@ static int HitCandle(const AppContext* ctx, const ChartRect* g, int mx, int my) 
     return idx;
 }
 
+// Prisvarsler (fase 23): pris <-> y. Tegning og treff MAA lese samme kilde
+// (fallgruve 14), saa begge veier gaar gjennom disse to, og begge leser
+// VISNINGEN (dispMin/dispMax) med samme range-vern og samme avkutting som
+// lysene i DrawChart. Klemmingen foer (int) er for et nivaa langt utenfor
+// utsnittet: 75 000 paa en SOL-akse med spenn 1 gir 5e7 piksler, og et
+// varsel fra registret kan vaere hva som helst under ALERT_PRICE_MAX.
+static int AlertY(const AppContext* ctx, const ChartRect* g, double level) {
+    double range = ctx->dispMax - ctx->dispMin;
+    if (range < 1e-9) range = 1.0;
+    double yd = ((ctx->dispMax - level) / range) * (double)g->ch;
+    if (yd < -100000.0) yd = -100000.0;
+    if (yd >  100000.0) yd =  100000.0;
+    return g->top + (int)yd;
+}
+
+// Prisen paa hoyde y, rundet til under en piksel (AlertRound).
+static double AlertPriceAtY(const AppContext* ctx, const ChartRect* g, int y) {
+    double range = ctx->dispMax - ctx->dispMin;
+    if (range < 1e-9) range = 1.0;
+    if (g->ch <= 0) return 0.0;
+    double p = ctx->dispMax - ((double)(y - g->top) / (double)g->ch) * range;
+    return AlertRound(p, range / (double)g->ch);
+}
+
+// Hvilket varsel staar pekeren paa i priskolonnen? Naermeste merke innenfor
+// ALERT_HIT_PX - altsaa noyaktig den flaten merket er tegnet paa - og -1
+// ellers. Merker utenfor [top, bottom] er ikke tegnet og kan ikke treffes.
+static int AlertAxisHit(const AppContext* ctx, const ChartRect* g, int my) {
+    int best = -1, bestD = ALERT_HIT_PX + 1;
+    int s = ctx->symIdx;
+    for (int i = 0; i < ctx->alertCount[s]; ++i) {
+        int y = AlertY(ctx, g, fabs(ctx->alerts[s][i]));
+        if (y < g->top || y > g->bottom) continue;
+        // Merket er [y - 8, y + 8): FillRect er eksklusiv i bunnen.
+        if (my < y - ALERT_HIT_PX || my >= y + ALERT_HIT_PX) continue;
+        int d = abs(my - y);
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+}
+
 // Antall desimaler paa prisaksen velges fra AVSTANDEN mellom etikettene, ikke
 // fra prisens storrelse. SOL rundt 97 dollar har et spenn paa under en dollar:
 // med "%.0f" leste alle fem etikettene "97". BTC rundt 75 000 trenger ingen
@@ -2106,6 +2280,19 @@ static void EnsurePillFont(AppContext* ctx, int H) {
     ctx->pillFontH = ctx->hFontPill ? fh : 0;
 }
 
+// Teksten i et merke paa prisaksen (fase 23): to desimaler der de faar
+// plass, ellers aksens opploesning - samme regel som stempelet for siste
+// pris, maalt paa den ferdig formaterte strengen (feil #5). Fonten maa vaere
+// valgt inn i hdc foer kallet.
+static void FormatTagPrice(HDC hdc, double p, double range, int avail,
+                           wchar_t* out, size_t cch) {
+    SIZE sz = { 0, 0 };
+    swprintf_s(out, cch, L"%.2f", p);
+    if (GetTextExtentPoint32W(hdc, out, (int)wcslen(out), &sz) && sz.cx > avail) {
+        swprintf_s(out, cch, L"%.*f", PriceDecimals(range / 4.0), p);
+    }
+}
+
 static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     RECT rcAll = { 0, 0, W, H };
     // Vannmerket ligger I bakgrunnen, for rutenett, lys og akser - grafen
@@ -2383,6 +2570,28 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         SetPolyFillMode(hdc, oldFill);
     }
 
+    // --- Varsellinjer (fase 23) ---
+    // Bak lysene og over stolpene, innenfor samme klipp, fra left til edge
+    // som rutenettet: et nivaa er en referanse, og lysene er det som leses.
+    // Dempet rav (CLR_ALERT_LINE), heltrukket - stiplet er siste pris, og
+    // prikket er traadkorset. DC_PEN, saa ingen nye GDI-objekter. Tegnes i
+    // begge modi: paa skrivebordet er linja romlig referanse som rutenettet,
+    // mens merket med tallet bare finnes i panelet (fase 14).
+    // Utenfor [top, bottom] tegnes ingenting, samme regel som siste pris.
+    {
+        int na = ctx->alertCount[ctx->symIdx];
+        if (na > 0) {
+            SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, CLR_ALERT_LINE);
+            for (int a = 0; a < na; ++a) {
+                int y = AlertY(ctx, &g, fabs(ctx->alerts[ctx->symIdx][a]));
+                if (y < top || y > bottom) continue;
+                MoveToEx(hdc, left, y, NULL);
+                LineTo(hdc, edge, y);
+            }
+        }
+    }
+
     // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
     // stedet for fire egne penner og pensler. Det er fire GDI-objekter
     // mindre; det vedvarende bufferet tar to, saa tallet i hvile gaar ned med
@@ -2445,13 +2654,102 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             int yl = top + (int)(((maxP - lp) / range) * ch);
             if (yl >= top && yl <= bottom) yPill = yl;
         }
+        // Varselmerkene (fase 23) og spoekelsesmerket under pekeren ligger i
+        // samme kolonne og er like hoye, saa de faar samme kollisjonsregel
+        // som stempelet: en etikett under 16 px unna tegnes ikke.
+        int yTag[ALERT_MAX + 1], nTag = 0;
+        int sA = ctx->symIdx, nA = ctx->alertCount[sA];
+        for (int a = 0; a < nA; ++a) {
+            int y = AlertY(ctx, &g, fabs(ctx->alerts[sA][a]));
+            if (y >= top && y <= bottom) yTag[nTag++] = y;
+        }
+        BOOL ghost = (ctx->axisHotY >= top && ctx->axisHotY <= bottom &&
+                      (ctx->alertHot < 0 || ctx->alertHot >= nA));
+        if (ghost) yTag[nTag++] = ctx->axisHotY;
+
         for (int i = 0; i <= 4; ++i) {
             int y = top + (ch * i) / 4;
             if (yPill != INT_MIN && abs(y - yPill) < 16) continue;
+            BOOL hidden = FALSE;
+            for (int t = 0; t < nTag; ++t) if (abs(y - yTag[t]) < 16) hidden = TRUE;
+            if (hidden) continue;
             double p = maxP - (range * i) / 4.0;
             swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
             RECT rcLbl = { axL, y - 8, axR, y + 8 };
             DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+
+        // --- Varselmerker paa prisaksen (fase 23) ---
+        // Samme flate som stempelet og traadkorsets etikett: [edge + 1,
+        // axR + 3) x [y - 8, y + 8). Rav flate med moerk tekst. Merket
+        // pekeren staar paa (alertHot) blir roedt som lukkeknappen: et klikk
+        // der FJERNER varselet, og fargen sier det foer klikket. Stempelet
+        // for siste pris tegnes etterpaa og ligger oeverst - er de to paa
+        // samme hoyde, er varselet i ferd med aa fyre.
+        for (int a = 0; a < nA; ++a) {
+            double lvl = fabs(ctx->alerts[sA][a]);
+            int y = AlertY(ctx, &g, lvl);
+            if (y < top || y > bottom) continue;
+            BOOL hot = (a == ctx->alertHot && ctx->alerts[sA][a] != ctx->alertFresh);
+            RECT rcA = { edge + 1, y - 8, axR + 3, y + 8 };
+            SetDCBrushColor(hdc, hot ? CLR_CLOSEHOT : CLR_ALERT);
+            FillRect(hdc, &rcA, (HBRUSH)GetStockObject(DC_BRUSH));
+            // Ligger stempelet eller et senere tegnet merke oppaa dette,
+            // stikker bare en stripe av flaten fram - og med den et tall
+            // kuttet paa langs. Samme regel som etikettene: et avkuttet tall
+            // er verre enn ikke noe tall (sett i PrintWindow: "81034.00"
+            // halvveis under stempelet). Flaten tegnes, teksten ikke.
+            BOOL covered = (yPill != INT_MIN && abs(y - yPill) < 16);
+            for (int b = a + 1; b < nA && !covered; ++b) {
+                int yb = AlertY(ctx, &g, fabs(ctx->alerts[sA][b]));
+                if (yb >= top && yb <= bottom && abs(y - yb) < 16) covered = TRUE;
+            }
+            if (covered) continue;
+            FormatTagPrice(hdc, lvl, range, axR - axL, buf, 64);
+            SetTextColor(hdc, hot ? CLR_BTNHOT : CLR_BG);
+            RECT rcAT = { axL, y - 8, axR, y + 8 };
+            DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+
+        // Spoekelsesmerket: pekeren staar i priskolonnen paa et tomt sted, og
+        // et klikk SETTER et varsel her. Rammet, ikke fylt, med linja tvers
+        // over grafen, saa brukeren ser hvilke lys nivaaet skjaerer foer
+        // klikket. Er alle plassene brukt, er det graatt, og klikket gjoer
+        // ingenting. Prisen er den AVRUNDEDE - den som faktisk blir satt.
+        if (ghost) {
+            int y = ctx->axisHotY;
+            BOOL full = (nA >= ALERT_MAX);
+            COLORREF gc = full ? CLR_DIM : CLR_ALERT;
+            SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, full ? CLR_CROSS : CLR_ALERT_LINE);
+            MoveToEx(hdc, left, y, NULL);
+            LineTo(hdc, edge, y);
+            RECT rcG = { edge + 1, y - 8, axR + 3, y + 8 };
+            FillRect(hdc, &rcG, ctx->brBox);
+            SetDCBrushColor(hdc, gc);
+            FrameRect(hdc, &rcG, (HBRUSH)GetStockObject(DC_BRUSH));
+            FormatTagPrice(hdc, AlertPriceAtY(ctx, &g, y), range, axR - axL, buf, 64);
+            SetTextColor(hdc, gc);
+            RECT rcGT = { axL, y - 8, axR, y + 8 };
+            DrawTextW(hdc, buf, -1, &rcGT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+        SetTextColor(hdc, CLR_AXIS);   // tidsaksen under arver fargen
+    }
+
+    // --- Ettergloed (fase 23) ---
+    // Et varsel som har fyrt er FJERNET; igjen staar en linje i full rav som
+    // toner ut over et par sekunder (alertFlashF, 1..0, eases av klokka), saa
+    // den som ser paa panelet ser HVOR det smalt. Blandet mot CLR_BG som alt
+    // annet her - ugjennomsiktig over bakgrunnen er identisk med alfa. Over
+    // lysene, ikke bak: dette er et signal, ikke en referanse. Begge modi.
+    if (ctx->alertFlashF > 0.0) {
+        int y = AlertY(ctx, &g, ctx->alertFlashLevel);
+        if (y >= top && y <= bottom) {
+            int t = (int)(ctx->alertFlashF * 255.0 + 0.5);
+            SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, Blend(CLR_BG, CLR_ALERT, t));
+            MoveToEx(hdc, left, y, NULL);
+            LineTo(hdc, edge, y);
         }
     }
 
@@ -2959,6 +3257,12 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     LeaveCriticalSection(&ctx->lock);
 
     ctx->hoverIdx = -1;
+    // Fase 23: alertHot er en indeks i FORRIGE symbols varsler, og
+    // ettergloeden staar paa forrige symbols prisnivaa.
+    ctx->alertHot    = -1;
+    ctx->axisHotY    = -1;
+    ctx->alertFresh  = 0.0;
+    ctx->alertFlashF = 0.0;
     ctx->wmValid  = FALSE;   // vannmerket viser forrige symbol/intervall
     ctx->dispValid = FALSE;  // nytt buffer: ingenting a ease fra
     UpdatePopupTitle(ctx);   // tittellinja og oppgavelinja skal folge med
@@ -2986,6 +3290,131 @@ static void SetShowVolume(AppContext* ctx, BOOL on) {
     } else {
         ctx->dispVolF = on ? 1.0 : 0.0;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Prisvarsler (fase 23). Alt her kjoerer paa UI-traaden og roerer bare
+// UI-eide felter; laasen tas kun for aa lese referanseprisen.
+// ---------------------------------------------------------------------------
+
+// Setter et varsel paa level for gjeldende symbol. Siden avgjoeres mot
+// referanseprisen NAA: siste lys' lukkekurs naar grafen har data (det er den
+// brukeren ser stempelet for), ellers lastPrice. FALSE naar det ikke finnes
+// noen pris aa velge side mot, naar nivaaet ER prisen (ingen side, og det
+// ville fyrt paa neste henting), naar nivaaet finnes fra foer, eller naar
+// alle plassene er brukt.
+static BOOL AlertAdd(AppContext* ctx, double level) {
+    int s = ctx->symIdx;
+    if (!(level > 0.0 && level < ALERT_PRICE_MAX)) return FALSE;
+    if (ctx->alertCount[s] >= ALERT_MAX) return FALSE;
+
+    double ref;
+    EnterCriticalSection(&ctx->lock);
+    ref = (ctx->candleCount > 0) ? ctx->candles[ctx->candleCount - 1].close
+                                 : ctx->lastPrice;
+    LeaveCriticalSection(&ctx->lock);
+    if (ref <= 0.0 || level == ref) return FALSE;
+
+    for (int i = 0; i < ctx->alertCount[s]; ++i) {
+        if (fabs(fabs(ctx->alerts[s][i]) - level) < 0.005) return FALSE;
+    }
+    ctx->alerts[s][ctx->alertCount[s]++] = (level > ref) ? level : -level;
+    SaveAlerts(ctx);
+    if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
+    return TRUE;
+}
+
+// Rekkefolgen har ingen betydning, saa hullet fylles med det siste.
+static void AlertRemove(AppContext* ctx, int i) {
+    int s = ctx->symIdx;
+    if (i < 0 || i >= ctx->alertCount[s]) return;
+    ctx->alerts[s][i] = ctx->alerts[s][--ctx->alertCount[s]];
+    ctx->alertHot = -1;   // indeksen peker ikke lenger paa det samme
+    SaveAlerts(ctx);
+    if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
+}
+
+// Tray-menyens "Fjern prisvarsler": gjeldende symbol, ikke alle - menyen
+// viser antallet for det symbolet, og det er de linjene brukeren ser.
+static void AlertsClear(AppContext* ctx) {
+    if (ctx->alertCount[ctx->symIdx] == 0) return;
+    ctx->alertCount[ctx->symIdx] = 0;
+    ctx->alertHot = -1;
+    SaveAlerts(ctx);
+    if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
+}
+
+// Et varsel har fyrt. Tre kanaler, fordi brukeren kan vaere tre steder:
+// ser paa panelet (ettergloeden paa linja), ser paa noe annet (ballongen fra
+// tray-ikonet), eller ser ikke paa skjermen (lyden). Ballongen er NIIF_NOSOUND
+// og lyden vaar egen MessageBeep: en lyd, ikke to, og den kommer ogsaa naar
+// Windows holder ballongen tilbake (Ikke stoer). nid kopieres: UpdateIcon eier
+// originalen og setter uFlags selv, og en NIF_INFO som ble staaende der ville
+// vist ballongen paa nytt ved hver prisoppdatering.
+static void FireAlert(AppContext* ctx, double signedLevel, double price) {
+    double level = fabs(signedLevel);
+    ctx->alertFired++;
+    ctx->alertLastFired = level;
+
+    if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
+        ctx->alertFlashLevel = level;
+        ctx->alertFlashF     = 1.0;
+        StartAnim(ctx->hPopup);
+        InvalidateRect(ctx->hPopup, NULL, FALSE);
+    }
+
+#ifdef TICKER_PROBE
+    if (g_probeMute) return;
+#endif
+    NOTIFYICONDATAW n = ctx->nid;
+    n.uFlags      = NIF_INFO;
+    n.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
+    swprintf_s(n.szInfoTitle, 64, L"%s  %.2f", SYMBOLS[ctx->symIdx].label, level);
+    swprintf_s(n.szInfo, 256, L"Prisen krysset varselet %s. Siste pris: $%.2f",
+               (signedLevel > 0.0) ? L"oppover" : L"nedover", price);
+    ctx->alertNotifyOk = Shell_NotifyIconW(NIM_MODIFY, &n);
+    MessageBeep(MB_ICONASTERISK);
+}
+
+// Proever varslene for gjeldende symbol mot en ny pris. Kalles fra
+// WM_APP_DATA, altsaa en gang per henting - ogsaa med panelet lukket, der
+// traaden henter ticker-prisen, og i skrivebordsmodus. Et varsel fyrer EN
+// gang og fjernes: en pris som vipper rundt nivaaet ville ellers pipe hvert
+// tredje sekund. Bakfra, fordi AlertRemove-moensteret flytter det siste inn i
+// hullet. Bare gjeldende symbol: prisen vi har, er dets.
+static void CheckAlerts(AppContext* ctx, double price) {
+    int s = ctx->symIdx;
+    BOOL any = FALSE;
+    for (int i = ctx->alertCount[s] - 1; i >= 0; --i) {
+        double a = ctx->alerts[s][i];
+        if (!AlertHit(price, a)) continue;
+        ctx->alerts[s][i] = ctx->alerts[s][--ctx->alertCount[s]];
+        any = TRUE;
+        FireAlert(ctx, a, price);
+    }
+    if (any) {
+        ctx->alertHot = -1;
+        SaveAlerts(ctx);
+    }
+}
+
+// Klikk i priskolonnen: paa et merke fjerner det, paa tom flate setter et
+// nytt paa den avrundede prisen der. Hover regnes om med en gang - pekeren
+// staar paa det nye merket, og et postet klikk har ingen WM_MOUSEMOVE foran
+// seg. Egen funksjon fordi WM_LBUTTONDBLCLK ogsaa lander her (fallgruve 38):
+// et raskt dobbeltklikk er sett + fjern, ikke sett + nullstill utsnittet.
+static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
+    int hit = AlertAxisHit(&g_Ctx, g, my);
+    g_Ctx.alertFresh = 0.0;
+    if (hit >= 0) {
+        AlertRemove(&g_Ctx, hit);
+    } else if (AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx, g, my))) {
+        int s = g_Ctx.symIdx;
+        g_Ctx.alertFresh = g_Ctx.alerts[s][g_Ctx.alertCount[s] - 1];
+    }
+    g_Ctx.axisHotY = my;
+    g_Ctx.alertHot = AlertAxisHit(&g_Ctx, g, my);
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 // Klikk paa en pille i verktoylinja. Egen funksjon av samme grunn som
@@ -3093,6 +3522,8 @@ static void HidePanel(HWND hwnd) {
     g_Ctx.hoverIdx = -1;
     g_Ctx.btnHot   = -1;
     g_Ctx.tbHot    = -1;
+    g_Ctx.alertHot = -1;
+    g_Ctx.axisHotY = -1;
     if (g_isDuplicate) {
         ShowWindow(hwnd, SW_HIDE);
         SendMessageW(g_Ctx.hWnd, WM_COMMAND, ID_TRAY_EXIT, 0);
@@ -3326,6 +3757,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 SetCursor(g_Ctx.curPan);
                 return TRUE;
             }
+            // Priskolonnen (fase 23) er klikkbar - sett eller fjern et varsel
+            // - og sier det med haanden. axisHotY er -1 under panorering og
+            // med overlayet aapent, saa grenen over og overlayet vinner.
+            if (g_Ctx.axisHotY >= 0 && LOWORD(lParam) == HTCLIENT) {
+                SetCursor(g_Ctx.curHand);
+                return TRUE;
+            }
             break;
 
         case WM_PAINT:
@@ -3439,6 +3877,33 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     RECT tstrip;
                     ToolbarStrip(rc.right, &tstrip);
                     InvalidateRect(hwnd, &tstrip, FALSE);
+                }
+            }
+
+            // Priskolonnen (fase 23). Samme plass og samme sperrer som
+            // knappene og pillene: foer de tidlige returene, og ingenting
+            // lyser mens overlayet eller et drag eier musa. dispValid er
+            // FALSE uten data - da finnes ingen akse aa peke paa. x > edge:
+            // kolonnen x = edge er linjas siste piksel, merkene begynner paa
+            // edge + 1. Hele flaten er skitten: spoekelseslinja gaar tvers
+            // over grafen, som traadkorset.
+            {
+                int axY = -1, aHot = -1;
+                if (!g_Ctx.overlayOpen && !g_Ctx.panning && g_Ctx.dispValid &&
+                    mx > g.edge && my >= g.top && my <= g.bottom) {
+                    axY  = my;
+                    aHot = AlertAxisHit(&g_Ctx, &g, my);
+                }
+                // Pekeren har forlatt det nysatte merket: fra naa er det
+                // et merke som alle andre, og blir roedt neste gang.
+                if (g_Ctx.alertFresh != 0.0 &&
+                    (aHot < 0 || g_Ctx.alerts[g_Ctx.symIdx][aHot] != g_Ctx.alertFresh)) {
+                    g_Ctx.alertFresh = 0.0;
+                }
+                if (axY != g_Ctx.axisHotY || aHot != g_Ctx.alertHot) {
+                    g_Ctx.axisHotY = axY;
+                    g_Ctx.alertHot = aHot;
+                    InvalidateRect(hwnd, NULL, FALSE);
                 }
             }
 
@@ -3565,6 +4030,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // aa forlate vinduet. Uten dette blir knappen staaende opplyst.
             g_Ctx.btnHot        = -1;
             g_Ctx.tbHot         = -1;
+            g_Ctx.alertHot      = -1;   // fase 23: priskolonnen ligger helt
+            g_Ctx.axisHotY      = -1;   // ute ved kanten, pekeren gaar ofte ut her
+            g_Ctx.alertFresh    = 0.0;
             StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -3609,6 +4077,24 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 19: r = g_Ctx.tbHot; break;
                 case 20: r = g_Ctx.overlayOpen; break;
                 case 21: r = (LRESULT)(g_Ctx.dispVolF * 1000.0); break;
+                // Fase 23: prisvarsler. Nivaaer og priser ganges med 100 av
+                // samme grunn som volumet; BTC x 100 er syv sifre. 23 baerer
+                // fortegnet (siden), lParam er plassen. De SKRIVENDE feltene
+                // (100 og oppover) ligger i WndProc, paa hovedvinduet, saa
+                // et varsel kan fyres med panelet skjult.
+                case 22: r = g_Ctx.alertCount[g_Ctx.symIdx]; break;
+                case 23: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.alertCount[g_Ctx.symIdx])
+                             ? (LRESULT)floor(g_Ctx.alerts[g_Ctx.symIdx][(int)lParam] * 100.0 + 0.5) : 0; break;
+                case 24: r = g_Ctx.alertFired; break;
+                case 25: r = (LRESULT)floor(g_Ctx.alertLastFired * 100.0 + 0.5); break;
+                case 26: r = g_Ctx.alertHot; break;
+                case 27: r = g_Ctx.axisHotY; break;
+                case 28: r = (LRESULT)(g_Ctx.alertFlashF * 1000.0); break;
+                case 29: r = g_Ctx.alertNotifyOk; break;
+                case 30: r = (LRESULT)floor(g_Ctx.lastPrice * 100.0 + 0.5); break;
+                case 31: r = (LRESULT)floor(g_Ctx.dispMin * 100.0 + 0.5); break;
+                case 32: r = (LRESULT)floor(g_Ctx.dispMax * 100.0 + 0.5); break;
+                case 33: r = (LRESULT)floor(g_Ctx.alertFresh * 100.0 + 0.5); break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -3635,6 +4121,16 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                                               ANIM_TAU_FADE, 0.5);
                     if ((int)(before + 0.5) != (int)(g_Ctx.overlayF + 0.5)) redraw = TRUE;
                     if (g_Ctx.overlayF != ovlTarget) settled = FALSE;
+                }
+
+                // Ettergloeden til et varsel som har fyrt (fase 23): 1 -> 0.
+                // Snapper paa 0,02: fem av 242 fargetrinn over CLR_BG i den
+                // sterkeste kanalen (roed), saa det siste hoppet ikke synes.
+                if (g_Ctx.alertFlashF > 0.0) {
+                    g_Ctx.alertFlashF = AnimStep(g_Ctx.alertFlashF, 0.0, dt,
+                                                 ALERT_TAU_FLASH, 0.02);
+                    redraw = TRUE;
+                    if (g_Ctx.alertFlashF > 0.0) settled = FALSE;
                 }
 
                 // View- og Y-akse-easing. Maalet leses under laas; selve
@@ -3753,8 +4249,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 GetClientRect(hwnd, &rcD);
                 ChartRect gd = ChartGeometry(rcD.right, rcD.bottom);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
-                // [g.left, W): grafen og aksemargen til hoyre for den.
-                if (mx >= gd.left && mx < rcD.right && my >= gd.top && my <= gd.bottom) {
+                // [g.left, edge]: grafen og luftrommet. Til og med fase 22
+                // gikk flaten helt til W, med aksemargen. Priskolonnen er
+                // varslenes naa (fase 23) og faller gjennom til
+                // WM_LBUTTONDOWN som knappene: der er andre klikk i et raskt
+                // dobbeltklikk et klikk til paa merket det foerste satte.
+                if (mx >= gd.left && mx <= gd.edge && my >= gd.top && my <= gd.bottom) {
                     ResetView(&g_Ctx);
                     EnterCriticalSection(&g_Ctx.lock);
                     g_Ctx.hoverIdx = HitCandle(&g_Ctx, &gd, mx, my);
@@ -3811,6 +4311,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
 
             ChartRect gg = ChartGeometry(rc.right, rc.bottom);
+            // Priskolonnen (fase 23): sett eller fjern et varsel. Samme
+            // flate som hover-blokka i WM_MOUSEMOVE, og samme krav om data.
+            if (g_Ctx.dispValid && dx > gg.edge && dy >= gg.top && dy <= gg.bottom) {
+                OnAxisClick(hwnd, &gg, dy);
+                return 0;
+            }
             if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= gg.bottom) {
                 // Start panorering. SetCapture sikrer at vi faar museslipp
                 // ogsaa hvis pekeren forlater vinduet underveis.
@@ -3820,6 +4326,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 g_Ctx.viewCount     = vc;
                 LeaveCriticalSection(&g_Ctx.lock);
                 g_Ctx.panning       = TRUE;
+                g_Ctx.alertHot      = -1;   // fase 23: draget eier musa
+                g_Ctx.axisHotY      = -1;
                 g_Ctx.panAnchorX    = dx;
                 g_Ctx.panAnchorView = vs;
                 SetCapture(hwnd);
@@ -3932,6 +4440,24 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
                 if (!ctrl && wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
                     OnToolbarClick(hwnd, TBAR_IV_FIRST + (int)(wParam - '1'));
+                    return 0;
+                }
+                // A (fase 23): sett et varsel paa traadkorsets pris - det
+                // samme tallet som staar i etiketten paa aksen, rundet som
+                // et klikk i kolonnen ville gjort. Uten traadkors finnes
+                // ingen pris aa peke paa, og tasten gjoer ingenting. hoverY
+                // klemmes som i DrawChart: krysset tegnes aldri utenfor
+                // [top, bottom], saa varselet skal heller ikke havne der.
+                if (!ctrl && wParam == 'A') {
+                    if (g_Ctx.hoverIdx >= 0 && g_Ctx.dispValid) {
+                        RECT rcA;
+                        GetClientRect(hwnd, &rcA);
+                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom);
+                        int hy = g_Ctx.hoverY;
+                        if (hy < ga.top)    hy = ga.top;
+                        if (hy > ga.bottom) hy = ga.bottom;
+                        AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx, &ga, hy));
+                    }
                     return 0;
                 }
                 int  pan = 0, zoom = 0, navKey = 1;
@@ -4239,6 +4765,8 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     // meldingsrekkefolge vi ikke styrer, og en rod lukkeknapp som henger igjen
     // ved gjenapning er ikke verdt aa vaere avhengig av den.
     ctx->btnHot      = -1;
+    ctx->alertHot    = -1;      // fase 23, samme grunn
+    ctx->axisHotY    = -1;
     ctx->dispValid   = FALSE;   // panelet skal apne ferdig, ikke gli paa plass
 
     UpdatePopupTitle(ctx);
@@ -4376,6 +4904,17 @@ static HMENU BuildTrayMenu(void) {
         // VOL-bryteren (fase 22) - skrivebordsmodus har ingen verktoylinje.
         AppendMenuW(hMenu, MF_STRING | (g_Ctx.showVol ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_VOLUME, L"Volumstolper	V");
+        // Prisvarslene (fase 23) settes i panelets priskolonne, men maa kunne
+        // ryddes herfra: skrivebordsmodus tegner linjene og har ingen input.
+        // Antallet gjelder symbolet som vises. Graatt, ikke borte, uten
+        // varsler - punktet er ogsaa stedet brukeren ser AT de finnes.
+        {
+            wchar_t lbl[48];
+            int na = g_Ctx.alertCount[g_Ctx.symIdx];
+            swprintf_s(lbl, 48, L"Fjern prisvarsler (%d)", na);
+            AppendMenuW(hMenu, MF_STRING | (na > 0 ? MF_ENABLED : MF_GRAYED),
+                        ID_TRAY_ALERTS_CLEAR, lbl);
+        }
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     }
     if (!g_isDuplicate) {
@@ -4431,6 +4970,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 SetShowVolume(&g_Ctx, !g_Ctx.showVol);
                 return 0;
             }
+            if (LOWORD(wParam) == ID_TRAY_ALERTS_CLEAR) {
+                AlertsClear(&g_Ctx);
+                return 0;
+            }
             {
                 // Symbol og intervall (fase 17). Omraadesjekk foerst: en postet
                 // ID utenfor tabellene er en stille no-op, ikke en indeks.
@@ -4472,6 +5015,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             price  = g_Ctx.lastPrice;
             okTick = g_Ctx.lastOkTick;
             LeaveCriticalSection(&g_Ctx.lock);
+#ifdef TICKER_PROBE
+            // Injisert pris (fase 23): wParam 1 baerer prisen x 100 i lParam
+            // og gaar foran lastPrice. Arbeidertraaden kan skrive en ekte
+            // pris mellom probens skriving og denne lesingen; da ville
+            // injeksjonen blitt borte omtrent en gang per tusen, og en test
+            // av en utloeser som feiler av og til er verre enn ingen.
+            if (wParam == 1) price = (double)(LONG)lParam / 100.0;
+#endif
 
             // okTick == 0 betyr at vi aldri har lykkes enda. Da er vi ikke
             // "frakoblet" - vi har bare ikke kommet i gang.
@@ -4486,6 +5037,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!stale) g_Ctx.staleSecsShown = 0;
 
             UpdateIcon(&g_Ctx, price, stale);
+            // Prisvarslene (fase 23) proeves HER, ikke i traaden og ikke i
+            // MergeCandles: dette er det ene stedet hver ny pris passerer
+            // paa UI-traaden, med panelet aapent (lysenes lukkekurs), lukket
+            // (ticker-prisen) og i skrivebordsmodus. Etter UpdateIcon, saa
+            // ballongen kommer fra et ikon som alt viser prisen som fyrte.
+            // En frakoblet linje gir ingen ny pris, og samme pris to ganger
+            // fyrer ingenting nytt: varselet er borte etter foerste gang.
+            CheckAlerts(&g_Ctx, price);
             if (g_Ctx.hPopup && IsWindowVisible(g_Ctx.hPopup)) {
                 // Klokka maa ga mens vi er frakoblet, ellers fryser
                 // sekundtelleren i undertittelen.
@@ -4495,6 +5054,44 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
+
+#ifdef TICKER_PROBE
+        // Testbygg (fase 23): de SKRIVENDE probe-feltene. Til og med fase 22
+        // leste proben bare; en utloeser som henger paa at den levende prisen
+        // krysser en linje kan ikke framprovoseres slik. Feltene bor paa
+        // hovedvinduet, ikke paa panelet, saa et varsel kan fyres mens
+        // panelet er skjult eller ikke finnes. Produksjonsbygget har ikke
+        // meldingen, saa der er proben fortsatt bare lesende - den finnes ikke.
+        //   100  injiser pris: lParam = pris x 100. Skriver lastPrice og
+        //        kjoerer WM_APP_DATA SYNKRONT, saa utloeseren er proevd naar
+        //        SendMessage returnerer.
+        //   101  demp ballong og lyd: lParam 0/1.
+        case WM_APP_PROBE:
+            if (wParam == 100) {
+                EnterCriticalSection(&g_Ctx.lock);
+                g_Ctx.lastPrice = (double)(LONG)lParam / 100.0;
+                LeaveCriticalSection(&g_Ctx.lock);
+                SendMessageW(hwnd, WM_APP_DATA, 1, lParam);
+                return 1;
+            }
+            if (wParam == 101) {
+                g_probeMute = (lParam != 0);
+                return 1;
+            }
+            //   102  sett et varsel paa et EKSAKT nivaa: lParam = nivaa x 100.
+            //        Gjennom AlertAdd, saa side, tak og duplikatvern er de
+            //        ekte. Lar utloesertestene staa uavhengig av y -> pris,
+            //        som testes for seg med postede klikk.
+            //   103  fjern varslene for symbolet (samme som tray-punktet).
+            if (wParam == 102) {
+                return AlertAdd(&g_Ctx, (double)(LONG)lParam / 100.0) ? 1 : 0;
+            }
+            if (wParam == 103) {
+                AlertsClear(&g_Ctx);
+                return 1;
+            }
+            return 0;
+#endif
 
         case WM_DESTROY:
             SaveConfig(&g_Ctx);
@@ -4635,8 +5232,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.brClose     = CreateSolidBrush(CLR_CLOSEHOT);
     g_Ctx.curArrow    = LoadCursorW(NULL, IDC_ARROW);
     g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
+    g_Ctx.curHand     = LoadCursorW(NULL, IDC_HAND);
     g_Ctx.btnHot      = -1;
     g_Ctx.tbHot       = -1;
+    g_Ctx.alertHot    = -1;     // fase 23: 0 ville betydd "foerste varsel under pekeren"
+    g_Ctx.axisHotY    = -1;
     g_Ctx.showVol     = TRUE;   // fase 22; LoadConfig kan skru det av
     g_Ctx.dispVolF    = 1.0;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
@@ -4691,6 +5291,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // modus (fase 12). Flagget vinner for denne kjoeringen, og et duplikat
     // er alltid et panel.
     if (!g_desktopMode && !g_isDuplicate) g_desktopMode = LoadDesktopMode();
+    // Prisvarslene (fase 23). Etter --dup-tolkingen: LoadAlerts hopper over
+    // duplikater, og g_isDuplicate er foerst kjent her. Foer traaden: foerste
+    // pris skal proeves mot varslene fra forrige kjoering.
+    LoadAlerts(&g_Ctx);
+#ifdef TICKER_PROBE
+    // Et varsel fra registret kan fyre paa FOERSTE pris, foer en probe rekker
+    // aa sende 101. Proben setter derfor variabelen i sitt eget miljoe, og
+    // testbygget arver den.
+    g_probeMute = GetEnvironmentVariableW(L"TICKER_PROBE_MUTE", NULL, 0) > 0;
+#endif
 
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manuell reset
