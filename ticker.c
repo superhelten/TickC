@@ -395,6 +395,10 @@ typedef struct {
     // fullt - ikke spor igjen for denne konfigen.
     BOOL      histPending;
     BOOL      histDone;
+    // Oppvaakning fra dvale (fase 24). UI-traaden ber om at forbindelsen
+    // slippes; hConnect eies av arbeidertraaden, saa den gjoer det selv
+    // foerst i neste syklus. I laasedomenet.
+    BOOL      dropConn;
 
     // --- Bufrede GDI-objekter ---
     // Faste farger lages en gang ved oppstart i stedet for 16 ganger
@@ -524,6 +528,8 @@ static BOOL g_probeMute = FALSE;
 static volatile LONG g_probeFetches = 0;
 static volatile LONG g_probeResumes = 0;
 static volatile LONG g_probeRejects = 0;
+// 113: forbindelser arbeidertraaden har sluppet etter en oppvaakning.
+static volatile LONG g_probeConnDrops = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -1331,22 +1337,69 @@ static BOOL HttpGet(AppContext* ctx, const wchar_t* path, char* buf, DWORD bufSi
     return ok;
 }
 
+// Sunnhetssjekk paa alt som kommer inn fra nettet (fase 24). Parserne stolte
+// paa atof: tekst ble 0.0, "1e999" ble inf, "nan" ble NaN - og alt gikk
+// videre til lastPrice og candles[]. En inf i et lys sprenger Y-skalaen (og
+// double -> int i koordinatene er udefinert), en NaN-pris tegner et blankt
+// ikon. Sammenlikningene under er usanne for NaN, saa den ryker uten isnan;
+// taket tar inf uten isfinite. Ingen av dem trekker inn noe fra CRT-en
+// (fallgruve 75).
+static BOOL PriceSane(double v) {
+    return v > 0.0 && v < 1e15;
+}
+
+static BOOL CandleSane(const Candle* c) {
+    return c->openTime > 0 &&
+           PriceSane(c->open) && PriceSane(c->high) &&
+           PriceSane(c->low)  && PriceSane(c->close) &&
+           c->high >= c->low  &&
+           c->high >= c->open && c->high >= c->close &&
+           c->low  <= c->open && c->low  <= c->close &&
+           c->volume >= 0.0   && c->volume < 1e18;
+}
+
+// p staar paa det aapnende hermetegnet i "123.45". Returnerer pekeren forbi
+// det lukkende, eller NULL hvis det mellom hermetegnene ikke er ETT helt
+// tall: tomt, tekst, soeppel etter tallet, eller et svar kuttet midt i.
+static const char* ParseQuotedNumber(const char* p, double* out) {
+    char* end;
+    double v = strtod(p + 1, &end);
+    if (end == p + 1 || *end != '"') return NULL;
+    *out = v;
+    return end + 1;
+}
+
+// outPrice roeres bare naar svaret holdt en sunn pris.
 static BOOL FastParsePrice(const char* json, double* outPrice) {
-    const char* key = "\"price\":\"";
+    const char* key = "\"price\":";
     const char* pos = strstr(json, key);
+    double v;
     if (!pos) return FALSE;
 
     pos += strlen(key);
-    *outPrice = atof(pos);
+    if (*pos != '"' || !ParseQuotedNumber(pos, &v) || !PriceSane(v)) {
+#ifdef TICKER_PROBE
+        InterlockedIncrement(&g_probeRejects);
+#endif
+        return FALSE;
+    }
+    *outPrice = v;
     return TRUE;
 }
 
 // Binance klines: [[openTime,"o","h","l","c","v",closeTime,...], ...]
-// Vi trenger felt 1-4 (open/high/low/close) fra hver indre array.
-static int ParseKlines(const char* json, Candle* out, int maxCount) {
+// Vi trenger felt 1-5 (open/high/low/close/volum) fra hver indre array.
+//
+// Et lys som ikke er sunt (CandleSane), som ikke har fem siterte tall, eller
+// hvis tid ikke er STRENGT stoerre enn forrige godtatte, HOPPES OVER - resten
+// av svaret beholdes. *rejected teller dem: null lys med forkastede er et
+// oedelagt svar, null lys uten er "historikken er slutt" (WorkerFetchHistory).
+// Stigende tid er det PrependCandles og MergeCandles bygger paa.
+static int ParseKlines(const char* json, Candle* out, int maxCount, int* rejected) {
     int count = 0;
     const char* p = json;
 
+    *rejected = 0;
     while (*p && *p != '[') p++;
     if (!*p) return 0;
     p++; // forbi ytre '['
@@ -1357,43 +1410,44 @@ static int ParseKlines(const char* json, Candle* out, int maxCount) {
         p++;                  // forbi indre '['
 
         // Felt 0 = openTime (Unix-ms, tall uten hermetegn)
+        Candle c;
         while (*p == ' ') p++;
-        long long openTime = _atoi64(p);
-        while (*p && *p != ',') p++;
-        if (!*p) break;
-        p++;
+        c.openTime = _atoi64(p);
 
         // Felt 1-5: open, high, low, close, volum - alle siterte strenger.
+        // Letingen etter hermetegnet stopper ved klammene: foer laante et lys
+        // med usiterte felt tallene fra NESTE lys.
         double v[5];
         int ok = 1;
         for (int f = 0; f < 5; ++f) {
-            while (*p && *p != '"') p++;
-            if (!*p) { ok = 0; break; }
-            p++;                 // forbi aapnende hermetegn
-            v[f] = atof(p);
-            while (*p && *p != '"') p++;
-            if (!*p) { ok = 0; break; }
-            p++;                 // forbi lukkende hermetegn
-            while (*p && *p != ',' && *p != ']') p++;
-            if (*p == ',') p++;
+            while (*p && *p != '"' && *p != '[' && *p != ']') p++;
+            const char* q = (*p == '"') ? ParseQuotedNumber(p, &v[f]) : NULL;
+            if (!q) { ok = 0; break; }
+            p = q;
         }
-        if (!ok) break;
 
-        out[count].openTime = openTime;
-        out[count].open  = v[0];
-        out[count].high  = v[1];
-        out[count].low   = v[2];
-        out[count].close = v[3];
-        out[count].volume = v[4];   // fase 21
-        count++;
-
-        // Hopp til slutten av denne indre arrayen
-        int depth = 1;
-        while (*p && depth > 0) {
-            if (*p == '[') depth++;
-            else if (*p == ']') depth--;
-            p++;
+        if (ok) {
+            c.open  = v[0];
+            c.high  = v[1];
+            c.low   = v[2];
+            c.close = v[3];
+            c.volume = v[4];   // fase 21
+            ok = CandleSane(&c) &&
+                 (count == 0 || c.openTime > out[count - 1].openTime);
         }
+        if (ok) {
+            out[count++] = c;
+        } else {
+            (*rejected)++;
+#ifdef TICKER_PROBE
+            InterlockedIncrement(&g_probeRejects);
+#endif
+        }
+
+        // Hopp til slutten av denne indre arrayen. Staar p paa et hermetegn
+        // som ikke lot seg lese, er det fortsatt inne i arrayen.
+        while (*p && *p != ']') p++;
+        if (*p) p++;
     }
 
     return count;
@@ -1430,7 +1484,8 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     // millisekunder, og UI-traden skal kunne tegne hele tiden.
     if (!HttpGet(ctx, path, s_httpBuf, (DWORD)sizeof(s_httpBuf))) return FALSE;
 
-    int n = ParseKlines(s_httpBuf, s_incoming, SEED_COUNT);
+    int rejected;
+    int n = ParseKlines(s_httpBuf, s_incoming, SEED_COUNT, &rejected);
     if (n <= 0) return FALSE;
 
     EnterCriticalSection(&ctx->lock);
@@ -1500,8 +1555,12 @@ static BOOL WorkerFetchHistory(AppContext* ctx) {
     swprintf_s(path, 192, L"/api/v3/klines?symbol=%s&interval=%s&endTime=%lld&limit=%d",
                SYMBOLS[si].api, INTERVALS[ii].api, endTime, SEED_COUNT);
 
+    int  rejected = 0;
     BOOL got = HttpGet(ctx, path, s_httpBuf, (DWORD)sizeof(s_httpBuf));
-    int  n   = got ? ParseKlines(s_httpBuf, s_incoming, SEED_COUNT) : 0;
+    int  n   = got ? ParseKlines(s_httpBuf, s_incoming, SEED_COUNT, &rejected) : 0;
+    // 2xx, men bare usunne lys (fase 24): et oedelagt svar, ikke slutten paa
+    // historikken. Uten dette ble histDone satt for godt paa soeppel.
+    if (n <= 0 && rejected > 0) got = FALSE;
 
     EnterCriticalSection(&ctx->lock);
     if (ctx->configGen == gen) {
@@ -1549,7 +1608,22 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
         EnterCriticalSection(&ctx->lock);
         HWND hp   = ctx->hPopup;
         BOOL hist = ctx->histPending;
+        BOOL drop = ctx->dropConn;
+        ctx->dropConn = FALSE;
         LeaveCriticalSection(&ctx->lock);
+
+        // Maskinen har sovet (fase 24). Forbindelsen fra foer dvalen er doed,
+        // men WinHTTP vet det ikke foer et kall har gaatt i tidsavbrudd, og
+        // NET_RECONNECT_AT slipper den foerst etter tre feil paa rad. Slippes
+        // her, saa foerste forsoek etter oppvaakning slaar opp DNS og
+        // forhandler TLS paa nytt.
+        if (drop && ctx->hConnect) {
+            WinHttpCloseHandle(ctx->hConnect);
+            ctx->hConnect = NULL;
+#ifdef TICKER_PROBE
+            InterlockedIncrement(&g_probeConnDrops);
+#endif
+        }
 
         // Star grafen apen trenger vi lys; ellers holder det med prisen.
         // Vil UI ha eldre lys (fase 18), hentes de foerst, og lysene like
@@ -5118,8 +5192,36 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (wParam == 110) return (LRESULT)g_probeFetches;
             if (wParam == 111) return (LRESULT)g_probeResumes;
             if (wParam == 112) return (LRESULT)g_probeRejects;
+            if (wParam == 113) return (LRESULT)g_probeConnDrops;
             return 0;
 #endif
+
+        // Oppvaakning fra dvale (fase 24). Uten dette kunne foerste forsoek
+        // ligge et helt backoff-tak (60 s) unna, mot en forbindelse som doede
+        // mens maskinen sov. hWakeEvent nullstiller backoffen og gir et
+        // forsoek med en gang, som naar panelet aapnes; dropConn faar
+        // traaden til aa slippe hConnect foerst. Bare AUTOMATIC: den kommer
+        // ved HVER oppvaakning, RESUMESUSPEND bare i tillegg naar en bruker
+        // staar bak, og to vekkinger er en henting for mye. Nettet er ofte
+        // ikke oppe enda - da feiler forsoeket, og backoffen tar det derfra
+        // med 3 s, 6 s, ... i stedet for aa staa der den sto foer dvalen.
+        // SetEvent utenfor laasen, som ellers i fila.
+        //
+        // hWakeEvent-sjekken er et vern, ikke pynt: vinduet lages FOER
+        // InitializeCriticalSection i WinMain, og en sendt melding kan
+        // leveres i det vinduet. hWakeEvent settes etter laasen, saa er den
+        // satt, finnes laasen.
+        case WM_POWERBROADCAST:
+            if (wParam == PBT_APMRESUMEAUTOMATIC && g_Ctx.hWakeEvent) {
+                EnterCriticalSection(&g_Ctx.lock);
+                g_Ctx.dropConn = TRUE;
+                LeaveCriticalSection(&g_Ctx.lock);
+                SetEvent(g_Ctx.hWakeEvent);
+#ifdef TICKER_PROBE
+                InterlockedIncrement(&g_probeResumes);
+#endif
+            }
+            return TRUE;
 
         case WM_DESTROY:
             SaveConfig(&g_Ctx);
