@@ -1,6 +1,6 @@
 # BTC Ticker — arbeidslogg
 
-Status per 17.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
+Status per 18.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
 del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
 indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
@@ -28,7 +28,8 @@ registret. **Fase 13** legger «Start ved pålogging» i tray-menyen, med
 til kant: bare kurve, rutenett og vannmerke. **Fase 15** gir lysene 10 px luft
 mot prisaksen og lar den stiplede siste-pris-linja bygge bro over den.
 **Fase 16** setter ett skalert pris-stempel på skrivebordets høyre kant —
-flatens eneste tekst.
+flatens eneste tekst. **Fase 17** gir tray-menyen undermenyene «Symbol» og
+«Intervall», så skrivebordsmodus kan bytte uten å gå veien om panelet.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -41,12 +42,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-autostart.md` og
 `docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md` og
 `docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md` og
-`docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md`. Design:
+`docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md` og
+`docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~3790 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~3990 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -1917,6 +1919,49 @@ målt til 40 px i kolonnen `edge + 1`, og teksten innenfor `[3648, 3832)`.
 fargenøkkel. Med `LWA_COLORKEY` på `CLR_BG` ville sifrene blitt hull ut til
 tapetet.
 
+### Fase 17 — symbol og intervall fra tray-menyen
+
+Plan, målinger og avvik: `docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md`.
+Gren `tray-symbol-intervall`, flettet inn med `--no-ff`.
+
+**Endringen:** tray-menyen har fått to undermenyer øverst, «Symbol» og
+«Intervall», med skillelinje under. Ett punkt per rad i `SYMBOLS[]` /
+`INTERVALS[]`, etikett lik overlayets, radiohake på gjeldende indeks
+(`CheckMenuRadioItem`). Dermed kan skrivebordsmodus bytte uten å gå veien om
+panelet, og panelet kan bytte uten å åpne overlayet.
+
+- `ID_TRAY_SYMBOL_FIRST` (1100) og `ID_TRAY_INTERVAL_FIRST` (1200), begge
+  100 brede. Tre `C_ASSERT` under tabellene stopper bygget om en tabell
+  vokser forbi området sitt. `#if` går ikke: `SYMBOL_COUNT` er `sizeof`.
+- `WM_COMMAND` gjør områdesjekk først, som `ID_TRAY_RESET`: en postet ID
+  utenfor tabellene er en stille no-op. Innenfor oversettes den til samme
+  `hit`-koding som `OverlayHit`, og `ApplyConfigChoice` er felles for begge
+  veier.
+- **`ApplyConfigChoice` tar ikke lenger noe HWND.** Eneste bruk var
+  `InvalidateRect(hwnd)` til slutt. Fra menyen er riktig vindu `hPopup`, som
+  er NULL når panelet er lukket, og `InvalidateRect(NULL, …)` tegner hele
+  skrivebordet på nytt. Funksjonen leser `hPopup` selv og hopper over
+  invalideringen uten vindu. Alt annet i den var allerede vindussikkert.
+- Undermenyene henges på med `MF_POPUP` og eies av hovedmenyen; `DestroyMenu`
+  i `WM_TRAYICON` river ned alle tre.
+- **Duplikater får undermenyene.** Overlayet lar dem alt bytte sin egen
+  visning, og `SaveConfig` hopper over duplikater selv.
+
+**Verifisert** i testbygg mot `Software\TickerTest`, **40/40 i to kjøringer**:
+menyinnhold, IDer og radiohaker; valg med panelet lukket (registret skrives,
+ingen popup, ingen krasj, panelet åpner med riktig par); bytte tømmer
+bufferet synkront og fyller det igjen; samme valg rører ingenting; IDer
+utenfor området rører ingenting; skrivebordsmodus tegnes på nytt med nytt
+symbol, og bildet med tomt buffer har **null** piksler over luminans 120;
+duplikat bytter lokalt uten å røre registret. **GDI/USER 33/14** etter
+oppvarming og etter hver av tre runder med 50 menyer og 40 valg.
+
+**I produksjonsbygget**, som kjører i skrivebordsmodus og bare ble lest, ikke
+klikket: menyen har 9 punkter i riktig rekkefølge, undermenyene 4 og 6, og
+radiohakene står på BTC/USDT og 1m, lik `SymbolIndex` 0 og `IntervalIndex` 0
+i `Software\Ticker`. Undermenyenes egne punkter har ID −1 (`MF_POPUP`), som
+`WM_COMMAND` aldri ser.
+
 ---
 
 ## Kjente begrensninger
@@ -1977,9 +2022,6 @@ tapetet.
   annen prosess får Windows til å koble trådenes input (implisitt
   `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
   Nettverket går på egen tråd, så UI-tråden gjør bare opptegning.
-- **Skrivebordsmodus kan ikke bytte symbol eller intervall.** Overlayet nås
-  ikke. Det som står i registret fra vanlig modus, brukes. Bytt til panel fra
-  tray-menyen, velg, og bytt tilbake (fase 12).
 - **Modusbytte tar 18–28 ms (median)**, ikke < 16 ms. Se fase 12.
 - **Et maksimert panel kommer tilbake gjenopprettet** etter en tur innom
   skrivebordsmodus. Geometrien som lagres, er den gjenopprettede.
@@ -2296,12 +2338,12 @@ tapetet.
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak11` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 16, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak10` er slettet: de dekket fase 1 til 15, og den
+**Bare `ticker.c.bak12` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 17, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak11` er slettet: de dekket fase 1 til 16, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
-(fase 14), `.bak10` (fase 15) og `.bak11` (fase 16). Filene er ignorert av git;
-mønsteret er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de
-tosifrede gjennom.
+(fase 14), `.bak10` (fase 15), `.bak11` (fase 16) og `.bak12` (fase 17). Filene
+er ignorert av git; mønsteret er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]`
+alene slapp de tosifrede gjennom.
