@@ -33,6 +33,9 @@ flatens eneste tekst. **Fase 17** gir tray-menyen undermenyene «Symbol» og
 **Fase 18** henter eldre lys når brukeren panorerer inn i veggen: bufferet
 fylles bakover til historikkens start eller til 6000 lys, uten at bildet
 flytter seg.
+**Fase 19** gir kontrollknappene tastatursnarveier — `Ctrl`+`N` for `[ + ]`,
+`Ctrl`+`M`, `F11` og `Ctrl`+`W` — gjennom samme sti som klikkene, og
+nullstiller `staleSecsShown` når forbindelsen er tilbake.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -47,12 +50,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md` og
 `docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md` og
 `docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md` og
-`docs/superpowers/plans/2026-09-18-ticker-historikk.md`. Design:
+`docs/superpowers/plans/2026-09-18-ticker-historikk.md` og
+`docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~4190 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~4220 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -2008,6 +2012,40 @@ landing, ikke hopp; hjulspam under henting; SOL/USDT 1d uttømmes på 8 runder
 til **11.08.2020**, noteringsdagen; BTC/USDT 1m fyller 6000 på 19 runder;
 `R` gir siste 300; **GDI/USER 30/14** flatt.
 
+### Fase 19 — tastatursnarveier for kontrollknappene
+
+Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md`.
+Gren `tastatursnarveier`, flettet inn med `--no-ff`. Valgt av agenten blant
+fire kandidater; begrunnelsen og det som ble lagt bort (DPI-skalering av
+stempelet, maskinen står på 100 %) står i planen.
+
+**Endringen:** `WM_KEYDOWN` i `PopupProc` kjenner `Ctrl`+`N` (`[ + ]`),
+`Ctrl`+`M` (minimer), `F11` (maksimer/gjenopprett) og `Ctrl`+`W` (lukk).
+Alle fire går gjennom `OnButtonClick`, så tast og klikk deler samme sti —
+geometrien lagres før maksimering, en gjenopprettet rekt utenfor alt synlig
+fanges, og et duplikat avsluttes av lukking. `Alt`+`F4` virket fra før:
+`DefWindowProc` sender `SC_CLOSE` også uten `WS_SYSMENU`, målt.
+
+- **Sperret** midt i en panorering (`panning`): en minimering under drag
+  ville hoppet over `WM_LBUTTONUP`, som slipper capture og setter pekeren
+  tilbake. Sperret i skrivebordsmodus, som aldri får tastaturfokus uansett.
+- **`staleSecsShown`** nullstilles i `WM_APP_DATA` når linja er oppe.
+  Telleren starter på 9, så 0 er aldri et ekte sekundtall.
+- Snarveiene arver `ESC`-forbeholdet: de krever tastaturfokus i panelet.
+
+**Verifisert** ende til ende, **23/23 i to kjøringer**, i testbygg mot
+`Software\TickerTest`. Tastene sendes som ekte tastetrykk med `SendInput`
+etter at proben har bekreftet forgrunn og fokus på panelet; en kontroll med
+`Ctrl`+`0` (900×500 → 1280×720) beviser først at injeksjonen og
+`Ctrl`-tilstanden når fram. Rød kjøring mot urørt kode: 14 OK, 6 FAIL, med
+kontrollen grønn. `F11` → maksimert og tilbake til 1280×720; `Ctrl`+`M` →
+minimert; `Ctrl`+`N` → én ny prosess med panel på +30/+30, avsluttet av
+`WM_CLOSE`; `Alt`+`F4` og `Ctrl`+`W` → skjult, åpner igjen; 20 runder
+`F11`/`F11`/`Ctrl`+`M`/gjenopprett; **GDI/USER 30/14** før og etter.
+
+**Ikke testet:** `staleSecsShown`-grenen (krever kuttet nett, fallgruve 9)
+og panoreringssperren (krever tast midt i et ekte drag). Begge er lest.
+
 ---
 
 ## Kjente begrensninger
@@ -2033,21 +2071,18 @@ til **11.08.2020**, noteringsdagen; BTC/USDT 1m fyller 6000 på 19 runder;
 - **Et duplikat som skjules fra sitt eget tray-ikon blir liggende skjult**
   (tray-klikk på et aktivt panel skjuler det, som for hovedinstansen). Det
   avsluttes med krysset, `ESC` eller tray-menyen.
-- **`[ + ]` har ingen tastatursnarvei.**
 - **Hover-opptegningen uteblir av og til i opptil ~2 s** i en probe som flytter
   den ekte pekeren og leser med `PrintWindow`. Sett i gammelt og nytt bygg
   (fase 8). Ikke sett for hånd, og årsaken er ikke undersøkt.
-- **Kontrollknappene har ingen tastatursnarvei** ut over `Ctrl`+`0`, `ESC`
-  og `Win`+piltast. Det finnes ingen systemmeny (`Alt`+mellomrom), fordi
-  vinduet ikke har `WS_SYSMENU`.
-- **`ESC` krever tastaturfokus.** Har du klikket i et annet vindu, må panelet
-  klikkes først. Lukkeknappen virker uansett.
+- **Det finnes ingen systemmeny** (`Alt`+mellomrom), fordi vinduet ikke har
+  `WS_SYSMENU`. Kontrollknappene nås fra tastaturet med `Ctrl`+`N`,
+  `Ctrl`+`M`, `F11`, `Ctrl`+`W` og `Alt`+`F4` (fase 19), i tillegg til
+  `Ctrl`+`0`, `ESC` og `Win`+piltast.
+- **`ESC` og snarveiene krever tastaturfokus.** Har du klikket i et annet
+  vindu, må panelet klikkes først. Knappene virker uansett.
 - **Tray-ikonets skala er implisitt.** SOL på $150 og BTC på $150 000 tegnes
   begge som `150`. Fonten har ingen `k`-glyf — fase 1 valgte bevisst `75.8`
   framfor `75k` — og verktøytipset bærer det eksakte tallet.
-- **`staleSecsShown` nullstilles ikke ved gjenopprettet forbindelse.** En ny
-  frakobling kan hoppe over én opptegning dersom sekundtallet tilfeldigvis er
-  det samme. Kosmetisk, ett bilde. Ryddes når del C uansett rører `WM_TIMER`.
 - **Animasjonsklokka går i korte støt når panelet står åpent.** Er panelet
   lukket går det ingen timer i det hele tatt. Med panelet åpent starter hver
   datahenting klokka på nytt, fordi det levende lyset kan flytte Y-målet:
@@ -2382,17 +2417,26 @@ til **11.08.2020**, noteringsdagen; BTC/USDT 1m fyller 6000 på 19 runder;
     `[int]((800 * 3 + 3) / 4) * 4` ga 2404 i stedet for 2400, og bildet ble
     skjevt og fargeforvridd. Bruk `[Math]::Floor` der C ville brukt
     heltallsdivisjon.
+63. **En postet `WM_KEYDOWN` kan ikke teste `Ctrl`-kombinasjoner.**
+    `GetKeyState(VK_CONTROL)` leser trådens virkelige tastetilstand, som en
+    postet melding ikke rører. Bruk `SendInput` med panelet i forgrunnen — og
+    bekreft forgrunn *og* `GetGUIThreadInfo`-fokus før hvert trykk, ellers
+    havner `Ctrl`+`W` i det vinduet som tilfeldigvis står foran. Legg en
+    **kontroll med en snarvei som finnes fra før** (`Ctrl`+`0`) først i
+    proben: uten den kan en rød kjøring ikke skille «funksjonen mangler» fra
+    «proben leverer ikke taster».
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak13` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 18, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak12` er slettet: de dekket fase 1 til 17, og den
+**Bare `ticker.c.bak14` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 19, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak13` er slettet: de dekket fase 1 til 18, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
-(fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17) og
-`.bak13` (fase 18). Filene er ignorert av git; mønsteret er `*.bak[0-9]*`, med
-stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede gjennom.
+(fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
+`.bak13` (fase 18) og `.bak14` (fase 19). Filene er ignorert av git; mønsteret
+er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
+gjennom.
