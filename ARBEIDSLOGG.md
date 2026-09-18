@@ -2512,6 +2512,20 @@ stempelet).
   Flaten dekker hele skjermen, men tekst og marger får samme pikselstørrelse
   som ved 100 %, altså mindre på skjermen. Det følger av at hele layouten er
   i rå piksler (se *Avviste forslag*, DPI-manifest).
+- **Skjermkonfigurasjon som endres mens appen kjører, håndteres ikke**
+  (`WM_DISPLAYCHANGE` / `WM_DPICHANGED`). Skrivebordsflaten får størrelsen
+  sin når den lages, og bygges bare på nytt når WorkerW rives ned eller
+  modus byttes. Ny oppløsning eller skalering uten at Explorer starter på
+  nytt er ikke målt — maskinen har én skjerm, og den ekte hendelsen kan ikke
+  drives fra en probe. Lagt bort i fase 23-planen. En tur innom panelmodus
+  og tilbake fra tray-menyen bygger flaten på nytt.
+- **Oppvåkning fra dvale gir ingen umiddelbar henting**
+  (`WM_POWERBROADCAST` håndteres ikke). Tråden kommer seg selv: den seeder
+  på nytt når siste lys er eldre enn 5 intervaller og slipper `hConnect`
+  etter tre feil, men første forsøk kan ligge opptil 60 s unna (backoffens
+  tak), og `frakoblet Ns` viser dvalens lengde imens. Anbefalt som neste
+  fase i fase 23-planen. Prisvarslene tåler dvale: et passert nivå fyrer på
+  første pris etterpå.
 - **Skrivebordsmodus kobler input-køene sammen.** Et barn av et vindu i en
   annen prosess får Windows til å koble trådenes input (implisitt
   `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
