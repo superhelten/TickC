@@ -791,9 +791,11 @@ Nettverkskallet var 130× dyrere enn hele opptegningen. Tråden var hele gevinst
 | Etter GDI-cache | **1,255 ms** (−30 %) |
 | Fase 21, før volumstolper (1280×720, 300 lys, median 172 bilder) | 1,44 ms |
 | Fase 21, med volumstolper (`PolyPolygon` i bolker) | **1,56 ms** (+0,12 ms; `FillRect` per lys ga 1,84) |
+| Fase 22, før verktøylinja (rød kjøring, median 177 bilder) | 1,48 ms |
+| Fase 22, med verktøylinja (to kjøringer, 171 og 168 bilder) | **1,61 / 1,52 ms** (p90 1,75 / 1,70 mot 1,62) |
 
 Zoomet helt ut er *raskere* (1,5 ms) fordi lysene da er 1 px brede.
-Tallene fra fase 21 er målt med QPC rundt den trege stien i `PaintPopup`
+Tallene fra fase 21 og 22 er målt med QPC rundt den trege stien i `PaintPopup`
 i testbygget (probe-felt 15), ikke med `PrintWindow` i flukt (fallgruve 37).
 
 ### Enhetstester på ekte kode
@@ -2711,11 +2713,16 @@ nye plass.
     med `WIN32_LEAN_AND_MEAN`. Resultatet er `C4005`, ikke en feil — bygget
     lykkes med *deres* verdi om rekkefølgen er en annen. Fase 22 bruker
     `TBAR_*`. Hold deg unna `TB_`, `LV_`, `TV_`, `SB_`, `WM_`, `CB_`, `LB_`.
-68. **Python `read_text`/`write_text` normaliserer linjeskift.**
-    `ARBEIDSLOGG.md` er CRLF i arbeidskopien; et redigeringsskript som leser
-    og skriver uten videre, gjør den til LF. Git skjuler det (autocrlf), men
-    fila på disk er en annen. Skriv loggen med `newline="\r\n"`; `ticker.c`
-    er LF og skal skrives med `newline="\n"`.
+68. **Python `read_text`/`write_text` normaliserer linjeskift.** Repoet har
+    `core.autocrlf=true`: alle tekstfiler er LF i indeksen og **CRLF i
+    arbeidskopien** (`git ls-files --eol`), `ticker.c` inkludert. Et
+    redigeringsskript som leser med `read_text` og skriver med
+    `newline="\n"`, gjør fila til LF på disk. Git skjuler det (diffen er
+    ren, bare advarselen «LF will be replaced by CRLF» røper det), `cl`
+    bryr seg ikke, og neste `checkout`/`merge` skriver CRLF tilbake — men en
+    sikkerhetskopi tatt imellom har feil linjeskift. Fase 22 tok `bak17`
+    slik og måtte ta den på nytt. Skriv med `newline="\r\n"`, og ta
+    `.bakN` etter flettingen.
 69. **En probe som tar «GDI før» må varme opp det *røde* bygget med noe det
     har.** Overlayet åpnes med postet `WM_RBUTTONUP` i grafen og lukkes med
     postet `ESC` — begge finnes i alle bygg siden fase 2 — så «før» er
