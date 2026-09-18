@@ -2238,8 +2238,18 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // polygonfyllet utelater hoeyre og nedre kant som Rectangle, saa hjoernene
     // [x0, x1) x [bottom + 1 - h, bottom + 1) fyller noeyaktig de samme
     // pikslene som FillRect ville gjort.
+    //
+    // WINDING, ikke ALTERNATE: med flere lys enn piksler (vc > cw) er slot
+    // under 1, bodyW klemmes til 1, og nabolys lander paa samme cx. To like
+    // rektangler i samme bolk NULLER hverandre under ALTERNATE (partall/
+    // oddetall), saa stolpen forsvinner. FillRect overtegnet; polygonfyll
+    // teller kanter. Med WINDING og samme omloepsretning paa alle
+    // rektanglene summeres de, og unionen - den hoeyeste - staar igjen.
+    // Maalt i proben: to like rektangler gir 0 piksler under ALTERNATE og
+    // w x h under WINDING.
     if (ctx->dispVolMax > 0.0) {
         int bandH = (int)((double)ch * VOL_FRAC);
+        int oldFill = SetPolyFillMode(hdc, WINDING);
         HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
         for (int pass = 0; pass < 2; ++pass) {          // 0 = opp, 1 = ned
             SelectObject(hdc, pass == 0 ? ctx->brVolUp : ctx->brVolDown);
@@ -2264,6 +2274,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             if (k > 0) PolyPolygon(hdc, s_volPts, s_volCnt, k);
         }
         SelectObject(hdc, oldPenV);
+        SetPolyFillMode(hdc, oldFill);
     }
 
     // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
