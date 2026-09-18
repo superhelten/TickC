@@ -2715,6 +2715,52 @@ static BOOL ViewIsDefault(AppContext* ctx) {
     return def;
 }
 
+// Panorering og zoom av MAALUTSNITTET (fase 20). Trukket ut av
+// WM_MOUSEWHEEL, saa hjul og tastatur deler ett regnestykke, slik knappene
+// og snarveiene deler OnButtonClick. Begge kalles under laas, begge
+// klemmer med ClampView og setter followLive, og begge svarer om utsnittet
+// staar i veggen etterpaa (viewStart == 0) - da vil kalleren be om
+// historikk (fase 18). Visningen (disp*) roeres ikke her: den eases mot
+// maalet i WM_TIMER som foer.
+//
+// PanView: delta lys, positivt = framover i tid.
+static BOOL PanView(AppContext* ctx, int delta) {
+    int vs, vc;
+    GetView(ctx, &vs, &vc);
+    ctx->viewStart = vs + delta;
+    ctx->viewCount = vc;
+    ClampView(ctx);
+    ctx->followLive = (ctx->viewStart + ctx->viewCount >= ctx->candleCount);
+    return (ctx->viewStart == 0);
+}
+
+// ZoomView: notches > 0 zoomer inn, < 0 ut, ZOOM_STEP per hakk, om et anker
+// gitt som broekdel [0, 1] av utsnittet - pekerens plass for hjulet, midten
+// for tastene.
+static BOOL ZoomView(AppContext* ctx, double frac, int notches) {
+    int n = ctx->candleCount;
+    int vs, vc;
+    GetView(ctx, &vs, &vc);
+    if (frac < 0.0) frac = 0.0;
+    if (frac > 1.0) frac = 1.0;
+
+    double anchor = (double)vs + frac * (double)vc;
+
+    double f = 1.0;
+    for (int k = 0; k < notches; ++k)  f *= ZOOM_STEP;
+    for (int k = 0; k > notches; --k)  f /= ZOOM_STEP;
+
+    int newCount = (int)((double)vc / f + 0.5);
+    if (newCount < MIN_VIEW) newCount = MIN_VIEW;
+    if (newCount > n)        newCount = n;
+
+    ctx->viewStart = (int)(anchor - frac * (double)newCount + 0.5);
+    ctx->viewCount = newCount;
+    ClampView(ctx);
+    ctx->followLive = (ctx->viewStart + ctx->viewCount >= ctx->candleCount);
+    return (ctx->viewStart == 0);
+}
+
 // Skjuler panelet til systemstatusfeltet - eller, i et duplikat, avslutter
 // prosessen. Et duplikat har ingen hovedinstans-rolle aa vende tilbake til,
 // og en hale av skjulte tray-ikoner er ingen funksjon. Avslutningen gaar
@@ -3135,41 +3181,20 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
             BOOL atWall = FALSE;
             EnterCriticalSection(&g_Ctx.lock);
-            int n = g_Ctx.candleCount;
-            if (n > 0) {
-                int vs, vc;
-                GetView(&g_Ctx, &vs, &vc);
-
+            if (g_Ctx.candleCount > 0) {
                 if (!ctrl) {
                     // Uten Ctrl: panorer i tid. Hjul opp = bakover.
+                    int vs, vc;
+                    GetView(&g_Ctx, &vs, &vc);
                     int step = vc / 8;
                     if (step < 1) step = 1;
-                    g_Ctx.viewStart = vs - notches * step;
-                    g_Ctx.viewCount = vc;
+                    atWall = PanView(&g_Ctx, -notches * step);
                 } else {
                     // Med Ctrl: zoom om punktet under pekeren
                     double frac = (double)(pt.x - g.left) / (double)g.cw;
-                    if (frac < 0.0) frac = 0.0;
-                    if (frac > 1.0) frac = 1.0;
-
-                    double anchor = (double)vs + frac * (double)vc;
-
-                    double f = 1.0;
-                    for (int k = 0; k < notches; ++k)  f *= ZOOM_STEP;
-                    for (int k = 0; k > notches; --k)  f /= ZOOM_STEP;
-
-                    int newCount = (int)((double)vc / f + 0.5);
-                    if (newCount < MIN_VIEW) newCount = MIN_VIEW;
-                    if (newCount > n)        newCount = n;
-
-                    g_Ctx.viewStart = (int)(anchor - frac * (double)newCount + 0.5);
-                    g_Ctx.viewCount = newCount;
+                    atWall = ZoomView(&g_Ctx, frac, notches);
                 }
-
-                ClampView(&g_Ctx);
-                g_Ctx.followLive = (g_Ctx.viewStart + g_Ctx.viewCount >= g_Ctx.candleCount);
-                g_Ctx.hoverIdx   = HitCandle(&g_Ctx, &g, pt.x, pt.y);
-                atWall = (g_Ctx.viewStart == 0);
+                g_Ctx.hoverIdx = HitCandle(&g_Ctx, &g, pt.x, pt.y);
             }
             LeaveCriticalSection(&g_Ctx.lock);
 
@@ -3218,6 +3243,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 9:  r = g_Ctx.netFailures; break;
                 case 10: r = g_Ctx.followLive; break;
                 case 11: r = g_Ctx.hoverIdx; break;
+                case 12: r = g_Ctx.panning; break;   // fase 20
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
