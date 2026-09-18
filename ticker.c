@@ -517,6 +517,13 @@ static LONGLONG g_probePaintUs = 0;
 // Settes med WM_APP_PROBE 101 til hovedvinduet. En kjoering fyrer ett varsel
 // udempet og leser svaret fra Shell_NotifyIconW (felt 29).
 static BOOL g_probeMute = FALSE;
+// Bare testbygg (fase 24): tellere som leses fra hovedvinduet med
+// WM_APP_PROBE 110-112. Hentesykluser i arbeidertraaden (Interlocked: den
+// skrives der og leses paa UI-traaden), oppvaakninger sett i
+// WM_POWERBROADCAST, og priser/lys parserne har forkastet som usunne.
+static volatile LONG g_probeFetches = 0;
+static volatile LONG g_probeResumes = 0;
+static volatile LONG g_probeRejects = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -1554,6 +1561,9 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
         } else {
             ok = WorkerFetchPrice(ctx);
         }
+#ifdef TICKER_PROBE
+        InterlockedIncrement(&g_probeFetches);
+#endif
 
         ULONGLONG now = GetTickCount64();
         DWORD wait;
@@ -5102,6 +5112,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 AlertsClear(&g_Ctx);
                 return 1;
             }
+            //   110-112  LESENDE (fase 24), her og ikke paa panelet fordi
+            //        oppvaakning og prisgrenen skal kunne proeves med panelet
+            //        lukket: hentesykluser, oppvaakninger, forkastede verdier.
+            if (wParam == 110) return (LRESULT)g_probeFetches;
+            if (wParam == 111) return (LRESULT)g_probeResumes;
+            if (wParam == 112) return (LRESULT)g_probeRejects;
             return 0;
 #endif
 
