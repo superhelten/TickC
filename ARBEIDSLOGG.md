@@ -2102,8 +2102,9 @@ panorering kan måles). Tilstand leses med `WM_APP_PROBE`.
 - Overlayet åpent → `←` gjør ingenting; `ESC` → virker igjen. Hover med
   ekte peker → `←` → `hoverIdx = −1`.
 - **Capture:** ekte drag med `SendInput` (`pan=1`, `cap=1`). `Alt`+`Tab`
-  tok capture i to av fire kjøringer og ikke i de to andre — forgrunnen
-  byttet hver gang. Den deterministiske tyven er **tray-menyen**:
+  tok capture i to av fem kjøringer med ekte drag og lot panelet beholde
+  den i tre — forgrunnen byttet hver gang. Den deterministiske tyven er
+  **tray-menyen**:
   `TrackPopupMenu` i samme tråd tar capture hver gang, `panning` slippes,
   og `Ctrl`+`M` minimerer etterpå. `ESC` lukker menyen *før* museknappen
   slippes (fallgruve 56).
@@ -2114,6 +2115,9 @@ panorering kan måles). Tilstand leses med `WM_APP_PROBE`.
 
 **Ikke testet:** capture tatt av et vindu i en annen prosess
 (`SetCapture` på tvers), og `Win`-tasten. Begge går gjennom samme melding.
+Hjulet *uten* `Ctrl` — panorering gjennom `PanView` — er heller ikke målt
+etter refaktoreringen; kontrollen brukte bare `Ctrl`+hjul (`ZoomView`, som
+ga `vs` 68 / `vc` 173 før og etter i hver kjøring). Stien er lest.
 
 ---
 
@@ -2153,8 +2157,8 @@ panorering kan måles). Tilstand leses med `WM_APP_PROBE`.
   virker uansett.
 - **Et tastetrykk i grafen fjerner trådkorset** til neste musebevegelse
   (fase 20). Det er valgt framfor å la krysset gli med lyset under easingen.
-- **`Alt`+`Tab` midt i et drag slipper ikke alltid capture.** Målt: to av
-  fire kjøringer tok oppgavebytteren capture, to ganger beholdt panelet
+- **`Alt`+`Tab` midt i et drag slipper ikke alltid capture.** Målt: i to
+  av fem kjøringer tok oppgavebytteren capture, tre ganger beholdt panelet
   den, og draget fortsetter da til knappen slippes. `WM_CAPTURECHANGED`
   (fase 20) dekker tilfellene der capture faktisk tas — tray-menyen gjør
   det hver gang.
@@ -2503,9 +2507,9 @@ panorering kan måles). Tilstand leses med `WM_APP_PROBE`.
     **kontroll med en snarvei som finnes fra før** (`Ctrl`+`0`) først i
     proben: uten den kan en rød kjøring ikke skille «funksjonen mangler» fra
     «proben leverer ikke taster».
-64. **`Alt`+`Tab` er ingen pålitelig capture-tyv.** I fire kjøringer tok
+64. **`Alt`+`Tab` er ingen pålitelig capture-tyv.** I fem kjøringer tok
     oppgavebytteren capture fra et panel midt i et drag to ganger og lot det
-    være to ganger, mens forgrunnen byttet hver gang. En test av
+    være tre ganger, mens forgrunnen byttet hver gang. En test av
     `WM_CAPTURECHANGED` som henger på `Alt`+`Tab` er derfor rød eller grønn
     etter vær. Bruk noe som tar capture *hver* gang: appens egen
     `TrackPopupMenu` (tray-menyen) i samme tråd. Og les capture-tilstanden
