@@ -231,6 +231,11 @@ C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 
+// Prisvarsler (fase 23): faste plasser per symbol, ingen malloc. Aatte er
+// flere enn prisaksen rommer uten at merkene dekker hverandre ved 250 px
+// hoyde (16 px per merke), og 4 x 8 doubler er 256 byte.
+#define ALERT_MAX          8
+
 // Verktoylinja (fase 22): symbolpille, en pille per intervall og VOL, i
 // headerens rad 2 - der symbollinja sto som ren tekst. Faste bredder, ikke
 // maalt tekst: WM_NCHITTEST maa kunne regne ut pillene uten en DC, og
@@ -403,6 +408,27 @@ typedef struct {
     int    tbHot;
     BOOL   showVol;
     double dispVolF;
+    // Prisvarsler (fase 23). Alt er UI-eid: varslene settes fra musa og
+    // proeves i WM_APP_DATA, begge paa UI-traaden, saa traadkontrakten er
+    // uroert. Per symbol - et nivaa i dollar er meningsloest paa tvers av
+    // symboler (fallgruve 16). Fortegnet baerer SIDEN: +nivaa fyrer naar
+    // prisen er >= nivaaet (varselet ble satt over prisen), -nivaa naar den
+    // er <= (satt under). Siden lagres, i stedet for aa sammenlikne forrige
+    // og neste pris, saa et nivaa som ble krysset mens appen sto av eller
+    // maskinen sov fyrer ved foerste pris etterpaa, og et symbolbytte ikke
+    // kan sammenlikne SOL mot BTC.
+    // alertHot og axisHotY er hover-tilstand i priskolonnen, samme regel som
+    // btnHot: logisk tilstand, -1 for ingen. alertFlashF er etterglooden til
+    // et varsel som har fyrt, 1..0, og eases av klokka.
+    double alerts[SYMBOL_COUNT][ALERT_MAX];
+    int    alertCount[SYMBOL_COUNT];
+    int    alertHot;
+    int    axisHotY;
+    double alertFlashLevel;
+    double alertFlashF;
+    int    alertFired;       // antall varsler som har fyrt siden oppstart
+    double alertLastFired;   // nivaaet til det siste
+    BOOL   alertNotifyOk;    // svaret fra Shell_NotifyIconW paa siste ballong
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brBox, brBoxEdge;
     HBRUSH brVolUp, brVolDown;       // volumstolper (fase 21)
@@ -468,6 +494,11 @@ static INT   s_volCnt[VOL_BATCH];
 // WM_APP_PROBE 15, saa en probe kan maale median over mange bilder uten
 // aa ta skjermbilder samtidig (fallgruve 37).
 static LONGLONG g_probePaintUs = 0;
+// Bare testbygg (fase 23): demper ballong og lyd naar et varsel fyrer, saa en
+// probe kan fyre mange varsler uten aa plage den som sitter ved maskinen.
+// Settes med WM_APP_PROBE 101 til hovedvinduet. En kjoering fyrer ett varsel
+// udempet og leser svaret fra Shell_NotifyIconW (felt 29).
+static BOOL g_probeMute = FALSE;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -3609,6 +3640,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 19: r = g_Ctx.tbHot; break;
                 case 20: r = g_Ctx.overlayOpen; break;
                 case 21: r = (LRESULT)(g_Ctx.dispVolF * 1000.0); break;
+                // Fase 23: prisvarsler. Nivaaer og priser ganges med 100 av
+                // samme grunn som volumet; BTC x 100 er syv sifre. 23 baerer
+                // fortegnet (siden), lParam er plassen. De SKRIVENDE feltene
+                // (100 og oppover) ligger i WndProc, paa hovedvinduet, saa
+                // et varsel kan fyres med panelet skjult.
+                case 22: r = g_Ctx.alertCount[g_Ctx.symIdx]; break;
+                case 23: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.alertCount[g_Ctx.symIdx])
+                             ? (LRESULT)floor(g_Ctx.alerts[g_Ctx.symIdx][(int)lParam] * 100.0 + 0.5) : 0; break;
+                case 24: r = g_Ctx.alertFired; break;
+                case 25: r = (LRESULT)floor(g_Ctx.alertLastFired * 100.0 + 0.5); break;
+                case 26: r = g_Ctx.alertHot; break;
+                case 27: r = g_Ctx.axisHotY; break;
+                case 28: r = (LRESULT)(g_Ctx.alertFlashF * 1000.0); break;
+                case 29: r = g_Ctx.alertNotifyOk; break;
+                case 30: r = (LRESULT)floor(g_Ctx.lastPrice * 100.0 + 0.5); break;
+                case 31: r = (LRESULT)floor(g_Ctx.dispMin * 100.0 + 0.5); break;
+                case 32: r = (LRESULT)floor(g_Ctx.dispMax * 100.0 + 0.5); break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -4472,6 +4520,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             price  = g_Ctx.lastPrice;
             okTick = g_Ctx.lastOkTick;
             LeaveCriticalSection(&g_Ctx.lock);
+#ifdef TICKER_PROBE
+            // Injisert pris (fase 23): wParam 1 baerer prisen x 100 i lParam
+            // og gaar foran lastPrice. Arbeidertraaden kan skrive en ekte
+            // pris mellom probens skriving og denne lesingen; da ville
+            // injeksjonen blitt borte omtrent en gang per tusen, og en test
+            // av en utloeser som feiler av og til er verre enn ingen.
+            if (wParam == 1) price = (double)(LONG)lParam / 100.0;
+#endif
 
             // okTick == 0 betyr at vi aldri har lykkes enda. Da er vi ikke
             // "frakoblet" - vi har bare ikke kommet i gang.
@@ -4495,6 +4551,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
+
+#ifdef TICKER_PROBE
+        // Testbygg (fase 23): de SKRIVENDE probe-feltene. Til og med fase 22
+        // leste proben bare; en utloeser som henger paa at den levende prisen
+        // krysser en linje kan ikke framprovoseres slik. Feltene bor paa
+        // hovedvinduet, ikke paa panelet, saa et varsel kan fyres mens
+        // panelet er skjult eller ikke finnes. Produksjonsbygget har ikke
+        // meldingen, saa der er proben fortsatt bare lesende - den finnes ikke.
+        //   100  injiser pris: lParam = pris x 100. Skriver lastPrice og
+        //        kjoerer WM_APP_DATA SYNKRONT, saa utloeseren er proevd naar
+        //        SendMessage returnerer.
+        //   101  demp ballong og lyd: lParam 0/1.
+        case WM_APP_PROBE:
+            if (wParam == 100) {
+                EnterCriticalSection(&g_Ctx.lock);
+                g_Ctx.lastPrice = (double)(LONG)lParam / 100.0;
+                LeaveCriticalSection(&g_Ctx.lock);
+                SendMessageW(hwnd, WM_APP_DATA, 1, lParam);
+                return 1;
+            }
+            if (wParam == 101) {
+                g_probeMute = (lParam != 0);
+                return 1;
+            }
+            return 0;
+#endif
 
         case WM_DESTROY:
             SaveConfig(&g_Ctx);
@@ -4637,6 +4719,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
     g_Ctx.btnHot      = -1;
     g_Ctx.tbHot       = -1;
+    g_Ctx.alertHot    = -1;     // fase 23: 0 ville betydd "foerste varsel under pekeren"
+    g_Ctx.axisHotY    = -1;
     g_Ctx.showVol     = TRUE;   // fase 22; LoadConfig kan skru det av
     g_Ctx.dispVolF    = 1.0;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
