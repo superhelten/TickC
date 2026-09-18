@@ -3437,6 +3437,29 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 ResetToDefaultView(hwnd);
                 return 0;
             }
+            // Kontrollknappene fra tastaturet (fase 19): Ctrl+N = [ + ],
+            // Ctrl+M = minimer, F11 = maksimer/gjenopprett, Ctrl+W = lukk.
+            // Alt+F4 gaar allerede gjennom DefWindowProc til WM_CLOSE, ogsaa
+            // uten WS_SYSMENU - maalt. Alle fire gaar gjennom OnButtonClick,
+            // saa tast og klikk deler samme sti: geometrien lagres foer
+            // maksimering, en gjenopprettet rekt utenfor alt synlig fanges,
+            // og et duplikat avsluttes av lukking. Ikke midt i en panorering:
+            // en minimering under drag ville hoppet over WM_LBUTTONUP, som
+            // slipper capture og setter pekeren tilbake. Ikke i
+            // skrivebordsmodus: flaten er et barn av WorkerW og faar aldri
+            // tastaturfokus, men SW_MINIMIZE paa den skal ikke engang vaere
+            // mulig i teorien.
+            if (!g_desktopMode && !g_Ctx.panning) {
+                int bh = -1;
+                if (ctrl && wParam == 'N')      bh = BTN_NEW;
+                else if (ctrl && wParam == 'M') bh = BTN_MIN;
+                else if (ctrl && wParam == 'W') bh = BTN_CLOSE;
+                else if (!ctrl && wParam == VK_F11) bh = BTN_MAX;
+                if (bh >= 0) {
+                    OnButtonClick(hwnd, bh);
+                    return 0;
+                }
+            }
             // ESC er lagvis, innerst forst: lukk overlayet, nullstill
             // utsnittet, skjul panelet. Ingen av lagene forsvinner for et
             // annet - den som vil skjule et zoomet panel trykker to ganger.
@@ -3932,6 +3955,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // "frakoblet" - vi har bare ikke kommet i gang.
             BOOL stale = (okTick != 0) &&
                          (GetTickCount64() - okTick > STALE_AFTER);
+
+            // Gjenopprettet forbindelse nullstiller telleren (fase 19). Uten
+            // dette sto forrige frakoblings siste sekundtall igjen, og en ny
+            // frakobling hoppet over en opptegning naar tallet tilfeldigvis
+            // var det samme. Telleren starter paa STALE_AFTER / 1000 = 9, saa
+            // 0 er aldri et ekte sekundtall.
+            if (!stale) g_Ctx.staleSecsShown = 0;
 
             UpdateIcon(&g_Ctx, price, stale);
             if (g_Ctx.hPopup && IsWindowVisible(g_Ctx.hPopup)) {
