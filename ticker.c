@@ -252,6 +252,7 @@ typedef struct {
     double high;
     double low;
     double close;
+    double volume;      // basisvolum i lyset (fase 21). 48 byte per lys.
 } Candle;
 
 // Chart-flaten regnes ut to steder (tegning og muse-treff) - de MA
@@ -417,6 +418,13 @@ static BOOL g_desktopMode = FALSE;
 static UINT g_msgTaskbarCreated = 0;   // Explorer startet paa nytt
 static char s_httpBuf[98304];    // 300 lys gir ~50 KB svar
 static Candle s_incoming[SEED_COUNT];
+#ifdef TICKER_PROBE
+// Bare testbygg (fase 21): varigheten av siste fulle opptegning i
+// mikrosekunder, QPC rundt den trege stien i PaintPopup. Leses med
+// WM_APP_PROBE 15, saa en probe kan maale median over mange bilder uten
+// aa ta skjermbilder samtidig (fallgruve 37).
+static LONGLONG g_probePaintUs = 0;
+#endif
 
 // Holder utsnittet innenfor dataene.
 static void ClampView(AppContext* ctx) {
@@ -2599,6 +2607,11 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
         return;
     }
 
+#ifdef TICKER_PROBE
+    LARGE_INTEGER qpc0;
+    QueryPerformanceCounter(&qpc0);
+#endif
+
     // Traden kan flette inn nye lys naar som helst; laasen holder
     // bufferet stabilt gjennom hele opptegningen (~1,8 ms).
     EnterCriticalSection(&ctx->lock);
@@ -2626,6 +2639,15 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
 
     BitBlt(hdcDst, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
     ctx->bbValid = TRUE;
+
+#ifdef TICKER_PROBE
+    {
+        LARGE_INTEGER qpc1, qpf;
+        QueryPerformanceCounter(&qpc1);
+        QueryPerformanceFrequency(&qpf);
+        g_probePaintUs = (qpc1.QuadPart - qpc0.QuadPart) * 1000000LL / qpf.QuadPart;
+    }
+#endif
 
     EndPaint(hwnd, &ps);
 }
@@ -3245,6 +3267,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 11: r = g_Ctx.hoverIdx; break;
                 case 12: r = g_Ctx.panning; break;   // fase 20
                 case 13: r = (GetCapture() == hwnd); break;   // fase 20, egen traad
+                // Fase 21. lParam er lysindeksen. Volumet ganges med 100:
+                // LRESULT er 32 bit paa x86, og proben kjoerer BTC (1m-volum
+                // i tierklassen), saa to desimaler faar plass med god margin.
+                case 14: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
+                             ? (LRESULT)(g_Ctx.candles[(int)lParam].volume * 100.0) : -1; break;
+                case 15: r = (LRESULT)g_probePaintUs; break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
