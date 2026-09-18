@@ -36,6 +36,9 @@ flytter seg.
 **Fase 19** gir kontrollknappene tastatursnarveier — `Ctrl`+`N` for `[ + ]`,
 `Ctrl`+`M`, `F11` og `Ctrl`+`W` — gjennom samme sti som klikkene, og
 nullstiller `staleSecsShown` når forbindelsen er tilbake.
+**Fase 20** gjør grafen tastaturstyrt — piltaster, `PgUp`/`PgDn`,
+`Home`/`End` og `+`/`-` gjennom samme `PanView`/`ZoomView` som hjulet — og
+slipper panoreringen når et annet vindu tar capture (`WM_CAPTURECHANGED`).
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -51,12 +54,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md` og
 `docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md` og
 `docs/superpowers/plans/2026-09-18-ticker-historikk.md` og
-`docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md`. Design:
+`docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md` og
+`docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~4220 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~4320 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -310,6 +314,11 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `Win` + `↑` / `↓` / `←` | maksimer / gjenopprett / snap — virker uten `WS_SYSMENU` |
 | `Ctrl` + `N` / `M` / `W`, `F11` | `[ + ]` / minimer / lukk / maksimer–gjenopprett — samme sti som knappene, sperret under panorering (fase 19) |
 | `Alt` + `F4` | lukk (skjul) via `DefWindowProc` → `WM_CLOSE` — virker uten `WS_SYSMENU`, målt |
+| `←` / `→` | ett hjulhakk bakover / framover (`vc / 8` lys), eases (fase 20) |
+| `PgUp` / `PgDn` | et helt utsnitt bakover / framover (fase 20) |
+| `Home` / `End` | eldste lys — veggen ber om historikk som et drag — / den levende kanten med `followLive` (fase 20) |
+| `+` / `-` (også numerisk, også med `Ctrl`) | ett zoomtrinn inn / ut om **midten** av utsnittet (fase 20) |
+| Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
 
 **Standardvisningen er DPI-skalert:** `MulDiv(1280, GetDpiForWindow(hwnd), 96)`,
 klemt til arbeidsområdet. Prosessen er fortsatt **DPI-uvitende**, så dette gir
@@ -2050,6 +2059,64 @@ og panoreringssperren (krever tast midt i et ekte drag). Begge er lest.
 
 ---
 
+### Fase 20 — tastaturnavigasjon i grafen og tapt capture
+
+Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md`.
+Gren `tastaturnavigasjon`, flettet inn med `--no-ff`. Valgt av agenten blant
+fem kandidater; det som ble lagt bort (volum, hvilemodus, oppløsningsbytte,
+DPI-stempelet) står i planen med begrunnelse.
+
+**Endringen, i to commits.** Først `PanView` og `ZoomView`, trukket ut av
+`WM_MOUSEWHEEL` uten atferdsendring, pluss probe-felt 12 (`panning`) — det
+er bygget rød-kjøringen gikk mot. Så tastene i `WM_KEYDOWN`, etter fase
+19-blokka og før `ESC`-lagene: `←`/`→` ett hjulhakk, `PgUp`/`PgDn` et helt
+utsnitt, `Home` til veggen (som ber om historikk, fase 18), `End` til den
+levende kanten, `+`/`-` ett zoomtrinn om midten — `VK_OEM_PLUS`/`VK_ADD` og
+`VK_OEM_MINUS`/`VK_SUBTRACT`, `Ctrl` tillatt på disse to og ikke på de
+andre. Samme sperrer som hjulet: ikke med overlayet åpent, ikke i
+skrivebordsmodus, ikke under panorering. Hover nullstilles som `R` gjør —
+å regne lyset under pekeren på nytt ville latt trådkorset gli med lyset
+under easingen og bli stående forskjøvet fra pekeren.
+
+**`WM_CAPTURECHANGED`:** står `panning` og `lParam` er et annet vindu enn
+oss, slippes panoreringen og pekeren settes tilbake. Vår egen
+`ReleaseCapture` sender også meldingen, men da er `panning` alt `FALSE`.
+Probe-felt 13 leser `GetCapture() == hwnd` fra appens tråd.
+
+**Verifisert** ende til ende, **52/52 og 51/51 i to kjøringer** (den andre
+uten `Alt`+`Tab`-grenen, se under), i testbygg mot `Software\TickerTest`.
+Tastene sendes med `SendInput` etter forgrunns- og fokuskontroll som i fase
+19; kontrollen først er `Ctrl`+hjul via `SendMessage` (300 seedede lys og
+`DEFAULT_VIEW` 300 gir veggen fra start, så utsnittet må smalnes før
+panorering kan måles). Tilstand leses med `WM_APP_PROBE`.
+
+- **Rød kjøring** mot del 1: kontrollen grønn, alle tastene røde
+  (16 OK, 23 FAIL). Rød kjøring av capture-stien mot et bygg med handleren
+  koblet ut: menyen tok capture, `panning` ble stående, `Ctrl`+`M` sperret.
+- `←` → `vs − vc/8`, `followLive` av, 46 000–51 000 ulike piksler i
+  grafbåndet (`PrintWindow` før/etter); `→` tilbake; `PgUp` → veggen, 300
+  lys kom, `PgDn` → kanten; `Home` → utsnittet starter på det eldste lyset
+  før *og* etter bakfyllingen (samme `openTime`, `vs` = antall nye lys);
+  `End` → `followLive`; `+` → `vc / 1,2` om midten, `-` tilbake, numerisk og
+  `Ctrl`+`+` likeså. Layoutets `+` er `VK_OEM_PLUS` (`VkKeyScan` 0xBB).
+- Overlayet åpent → `←` gjør ingenting; `ESC` → virker igjen. Hover med
+  ekte peker → `←` → `hoverIdx = −1`.
+- **Capture:** ekte drag med `SendInput` (`pan=1`, `cap=1`). `Alt`+`Tab`
+  tok capture i to av fire kjøringer og ikke i de to andre — forgrunnen
+  byttet hver gang. Den deterministiske tyven er **tray-menyen**:
+  `TrackPopupMenu` i samme tråd tar capture hver gang, `panning` slippes,
+  og `Ctrl`+`M` minimerer etterpå. `ESC` lukker menyen *før* museknappen
+  slippes (fallgruve 56).
+- **GDI/USER 30/14** i hvile ved start; **32/14** etter første overlay og
+  **35/14** etter første tray-meny, begge uendret over tre sykluser til og
+  gjennom 30 runder `←`/`→`/`+`/`-`. Hoppene er engangs (fallgruve 65),
+  ikke lekkasjer, og de samme i bygget uten fase 20.
+
+**Ikke testet:** capture tatt av et vindu i en annen prosess
+(`SetCapture` på tvers), og `Win`-tasten. Begge går gjennom samme melding.
+
+---
+
 ## Kjente begrensninger
 
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
@@ -2078,15 +2145,19 @@ og panoreringssperren (krever tast midt i et ekte drag). Begge er lest.
   (fase 8). Ikke sett for hånd, og årsaken er ikke undersøkt.
 - **Det finnes ingen systemmeny** (`Alt`+mellomrom), fordi vinduet ikke har
   `WS_SYSMENU`. Kontrollknappene nås fra tastaturet med `Ctrl`+`N`,
-  `Ctrl`+`M`, `F11`, `Ctrl`+`W` og `Alt`+`F4` (fase 19), i tillegg til
-  `Ctrl`+`0`, `ESC` og `Win`+piltast.
-- **`ESC` og snarveiene krever tastaturfokus.** Har du klikket i et annet
-  vindu, må panelet klikkes først. Knappene virker uansett.
-- **Et drag som mister capture lar `panning` stå.** Det finnes ingen
-  `WM_CAPTURECHANGED`-handler, så `Alt`+`Tab` eller `Win`-tasten midt i et
-  drag etterlater `panning` `TRUE` til neste klikk i grafen. Fra fase 19 er
-  de fire snarveiene sperret så lenge flagget står. Ikke sett for hånd;
-  handleren er en egen jobb.
+  `Ctrl`+`M`, `F11`, `Ctrl`+`W` og `Alt`+`F4` (fase 19), grafen med
+  piltaster, `PgUp`/`PgDn`, `Home`/`End` og `+`/`-` (fase 20), i tillegg
+  til `Ctrl`+`0`, `R`, `ESC` og `Win`+piltast.
+- **`ESC`, snarveiene og navigasjonstastene krever tastaturfokus.** Har du
+  klikket i et annet vindu, må panelet klikkes først. Knappene og hjulet
+  virker uansett.
+- **Et tastetrykk i grafen fjerner trådkorset** til neste musebevegelse
+  (fase 20). Det er valgt framfor å la krysset gli med lyset under easingen.
+- **`Alt`+`Tab` midt i et drag slipper ikke alltid capture.** Målt: to av
+  fire kjøringer tok oppgavebytteren capture, to ganger beholdt panelet
+  den, og draget fortsetter da til knappen slippes. `WM_CAPTURECHANGED`
+  (fase 20) dekker tilfellene der capture faktisk tas — tray-menyen gjør
+  det hver gang.
 - **Tray-ikonets skala er implisitt.** SOL på $150 og BTC på $150 000 tegnes
   begge som `150`. Fonten har ingen `k`-glyf — fase 1 valgte bevisst `75.8`
   framfor `75k` — og verktøytipset bærer det eksakte tallet.
@@ -2432,18 +2503,47 @@ og panoreringssperren (krever tast midt i et ekte drag). Begge er lest.
     **kontroll med en snarvei som finnes fra før** (`Ctrl`+`0`) først i
     proben: uten den kan en rød kjøring ikke skille «funksjonen mangler» fra
     «proben leverer ikke taster».
+64. **`Alt`+`Tab` er ingen pålitelig capture-tyv.** I fire kjøringer tok
+    oppgavebytteren capture fra et panel midt i et drag to ganger og lot det
+    være to ganger, mens forgrunnen byttet hver gang. En test av
+    `WM_CAPTURECHANGED` som henger på `Alt`+`Tab` er derfor rød eller grønn
+    etter vær. Bruk noe som tar capture *hver* gang: appens egen
+    `TrackPopupMenu` (tray-menyen) i samme tråd. Og les capture-tilstanden
+    fra appens tråd (`GetCapture` er per tråd), ikke fra proben. Husk at
+    menyen åpner ved pekeren med museknappen nede: `ESC` før slipp, ellers
+    kan slippet velge «Avslutt Ticker» (fallgruve 56).
+65. **GDI-tallet hopper én gang ved første overlay og første meny.** +2
+    etter første overlay (to pensler lages og slettes per bilde; GDI holder
+    slettede pensler i en liten cache per prosess) og +3 etter første
+    tray-meny (USER tegner den i vår prosess). Begge er uendret over tre
+    sykluser til og gjennom 30 runder tastetrykk, og like i bygget uten
+    endringen. En «før/etter»-sjekk som tar «før» før første overlay og
+    «etter» etter første meny, ser en lekkasje som ikke finnes. Ta «før»
+    etter at hver mekanisme har vært brukt én gang, og legg til en
+    syklus-test (åpne/lukke ×3) som skiller engangshopp fra vekst. Les
+    dessuten minimum over flere sekunder, ikke ett sample: midt i en
+    opptegning ligger tallet to høyere (fallgruve 27).
+66. **Proben må vente på at maskinen er inaktiv, og fokuskontrollen må ha
+    en reservesti.** En kjøring gikk rød på 18 sjekker fordi et Chrome-vindu
+    tok forgrunnen etter kontrollen; proben nektet korrekt å sende taster,
+    men `SetForegroundWindow` fra proben virket ikke lenger. Reserven som
+    virker er appens egen `ForceForeground` via et postet tray-klikk (bare
+    når panelet *ikke* er forgrunn, ellers skjuler klikket det). Og
+    `GetLastInputInfo` før start: 25 s uten inndata, ellers vent. Proben
+    lager selv inndata med `SendInput`, så målingen gjelder bare før den
+    begynner.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak14` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 19, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak13` er slettet: de dekket fase 1 til 18, og den
+**Bare `ticker.c.bak15` ligger igjen** (18.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 20, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak14` er slettet: de dekket fase 1 til 19, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
-`.bak13` (fase 18) og `.bak14` (fase 19). Filene er ignorert av git; mønsteret
+`.bak13` (fase 18), `.bak14` (fase 19) og `.bak15` (fase 20). Filene er ignorert av git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
