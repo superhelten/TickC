@@ -308,6 +308,8 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `ESC` | lagvis: lukk overlayet → nullstill utsnittet → skjul til systemstatusfeltet (duplikat: avslutt) |
 | Dobbeltklikk i ledig headerflate | maksimerer / gjenoppretter |
 | `Win` + `↑` / `↓` / `←` | maksimer / gjenopprett / snap — virker uten `WS_SYSMENU` |
+| `Ctrl` + `N` / `M` / `W`, `F11` | `[ + ]` / minimer / lukk / maksimer–gjenopprett — samme sti som knappene, sperret under panorering (fase 19) |
+| `Alt` + `F4` | lukk (skjul) via `DefWindowProc` → `WM_CLOSE` — virker uten `WS_SYSMENU`, målt |
 
 **Standardvisningen er DPI-skalert:** `MulDiv(1280, GetDpiForWindow(hwnd), 96)`,
 klemt til arbeidsområdet. Prosessen er fortsatt **DPI-uvitende**, så dette gir
@@ -2080,6 +2082,11 @@ og panoreringssperren (krever tast midt i et ekte drag). Begge er lest.
   `Ctrl`+`0`, `ESC` og `Win`+piltast.
 - **`ESC` og snarveiene krever tastaturfokus.** Har du klikket i et annet
   vindu, må panelet klikkes først. Knappene virker uansett.
+- **Et drag som mister capture lar `panning` stå.** Det finnes ingen
+  `WM_CAPTURECHANGED`-handler, så `Alt`+`Tab` eller `Win`-tasten midt i et
+  drag etterlater `panning` `TRUE` til neste klikk i grafen. Fra fase 19 er
+  de fire snarveiene sperret så lenge flagget står. Ikke sett for hånd;
+  handleren er en egen jobb.
 - **Tray-ikonets skala er implisitt.** SOL på $150 og BTC på $150 000 tegnes
   begge som `150`. Fonten har ingen `k`-glyf — fase 1 valgte bevisst `75.8`
   framfor `75k` — og verktøytipset bærer det eksakte tallet.
