@@ -29,6 +29,7 @@
 #define ID_TRAY_RESET    1002
 #define ID_TRAY_DESKTOP  1003   // skrivebordsmodus av/paa (fase 12)
 #define IDM_TOGGLE_AUTOSTART 1004   // start ved paalogging av/paa (fase 13)
+#define ID_TRAY_VOLUME   1005   // volumstolper av/paa (fase 22)
 // Symbol og intervall fra tray-menyen (fase 17). Punkt i faar FIRST + i.
 // Omraadene er 100 brede; #error under tabellene sikrer at de aldri overlapper.
 #define ID_TRAY_SYMBOL_FIRST   1100
@@ -230,6 +231,24 @@ C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 
+// Verktoylinja (fase 22): symbolpille, en pille per intervall og VOL, i
+// headerens rad 2 - der symbollinja sto som ren tekst. Faste bredder, ikke
+// maalt tekst: WM_NCHITTEST maa kunne regne ut pillene uten en DC, og
+// tegning og treff skal lese samme tall (fallgruve 14). 15 px hoye, fra
+// y = 28: prisens sifre i rad 1 slutter paa grunnlinja ved y ~ 27, saa en
+// opplyst pille aldri dekker dem, og y = 43 er siste rad over grafflaten.
+#define TBAR_TOP           28
+#define TBAR_H             15
+#define TBAR_SYM_W         74    // "BNB/USDT" + pil
+#define TBAR_IV_W          28    // "15m"
+#define TBAR_VOL_W         32
+#define TBAR_GAP           2     // mellom intervallpillene
+#define TBAR_GROUP_GAP     8     // mellom symbol, intervaller og VOL
+#define TBAR_SYM           0
+#define TBAR_IV_FIRST      1
+#define TBAR_VOL           (TBAR_IV_FIRST + INTERVAL_COUNT)
+#define TBAR_COUNT         (TBAR_VOL + 1)
+
 // 4x9 piksel-font. En rad per byte, bit 3 = venstre kolonne, bit 0 = hoyre.
 // Ett linje med 9px hoye sifre er nesten dobbelt saa lesbart som to linjer
 // med 5px sifre, og "75.8" fyller noyaktig 16px naar punktumet er 1px bredt.
@@ -376,6 +395,14 @@ typedef struct {
     // arbeidertraden. Treffdeteksjonen henger paa DENNE, ikke paa noe
     // fade-niva - knappene har ingen fade, de skifter farge momentant.
     int    btnHot;
+    // Verktoylinja i headerens rad 2 (fase 22). tbHot er pillen musa staar
+    // paa, -1 for ingen - samme regel som btnHot: logisk tilstand, ingen
+    // fade. showVol er brukerens valg og lagres i registret; dispVolF er
+    // VISNINGEN av det, 0..1, og eases i WM_TIMER saa stolpene synker ned i
+    // stedet for aa blinke bort. Alle tre er UI-eid.
+    int    tbHot;
+    BOOL   showVol;
+    double dispVolF;
     HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
     HBRUSH brBg, brBox, brBoxEdge;
     HBRUSH brVolUp, brVolDown;       // volumstolper (fase 21)
@@ -582,6 +609,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->symIdx     = 0;
     ctx->ivIdx      = 0;
     ctx->intervalMs = INTERVALS[0].ms;
+    ctx->showVol    = TRUE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
 
@@ -596,7 +624,9 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD hasPos = RegReadDword(k, L"PanelHasPos", 0);
     DWORD px = RegReadDword(k, L"PanelX", 0);
     DWORD py = RegReadDword(k, L"PanelY", 0);
+    DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // fase 22, paa som standard
     RegCloseKey(k);
+    ctx->showVol = (sv != 0);
 
     // Bundet sjekk. Et register redigert for hand, eller etterlatt av en
     // nyere versjon med flere symboler, skal ikke kunne indeksere utenfor
@@ -705,6 +735,8 @@ static void SaveConfig(const AppContext* ctx) {
     DWORD sy = (DWORD)ctx->symIdx, iv = (DWORD)ctx->ivIdx;
     RegSetValueExW(k, L"SymbolIndex",   0, REG_DWORD, (const BYTE*)&sy, sizeof(sy));
     RegSetValueExW(k, L"IntervalIndex", 0, REG_DWORD, (const BYTE*)&iv, sizeof(iv));
+    DWORD sv = ctx->showVol ? 1 : 0;
+    RegSetValueExW(k, L"ShowVolume",    0, REG_DWORD, (const BYTE*)&sv, sizeof(sv));
     RegCloseKey(k);
 }
 
@@ -1519,6 +1551,72 @@ static BOOL HeaderFits(int rightBound, int leftBound) {
     return rightBound < leftBound - HDR_GAP;
 }
 
+// Hoyre grense for headerens rad 2: prisaksens overste etikett staar paa
+// y = top +- 8 fra x = edge + AXIS_LBL_GAP, og raden skal holde HDR_GAP
+// luft mot den. Verktoylinja og frakoblet-teksten leser begge denne.
+static int HeaderRow2Limit(int W) {
+    return W - PAD_R + AXIS_LBL_GAP - HDR_GAP;
+}
+
+// Hele verktoylinja skal faa plass paa minstebredden. Vokser en tabell
+// eller en pillebredde forbi det, stopper bygget her - og regelen i
+// ToolbarLayout, som skjuler piller fra hoyre, blir aldri det brukeren
+// ser paa et panel i lovlig storrelse.
+C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + INTERVAL_COUNT * TBAR_IV_W +
+         (INTERVAL_COUNT - 1) * TBAR_GAP + TBAR_GROUP_GAP + TBAR_VOL_W
+         <= POPUP_MIN_W - PAD_R + AXIS_LBL_GAP - HDR_GAP);
+
+// Verktoylinjas piller. Ren funksjon av bredden, som ButtonLayout, og av
+// samme grunn: tegning, WM_NCHITTEST, hover og klikk leser alle denne.
+// Returnerer antall synlige piller; resten er tomme rektangler som ingen
+// treffer. En pille som ikke faar plass foer HeaderRow2Limit skjules helt,
+// og alle etter den - aldri en halv pille, og aldri VOL uten intervallene
+// foran. Registret godtar en lagret bredde ned til 240 px, saa grenen kan
+// naas selv om C_ASSERT over holder den unna 400.
+static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
+    int limit = HeaderRow2Limit(W);
+    int x = PAD_L, n = 0;
+    BOOL cut = FALSE;
+    for (int i = 0; i < TBAR_COUNT; ++i) {
+        int w = (i == TBAR_SYM) ? TBAR_SYM_W : (i == TBAR_VOL) ? TBAR_VOL_W : TBAR_IV_W;
+        if (i == TBAR_IV_FIRST || i == TBAR_VOL) x += TBAR_GROUP_GAP;
+        else if (i > 0)                          x += TBAR_GAP;
+        if (!cut && x + w > limit) cut = TRUE;
+        if (cut) {
+            out[i].left = out[i].top = out[i].right = out[i].bottom = 0;
+            continue;
+        }
+        out[i].left   = x;
+        out[i].right  = x + w;
+        out[i].top    = TBAR_TOP;
+        out[i].bottom = TBAR_TOP + TBAR_H;
+        x += w;
+        n = i + 1;
+    }
+    return n;
+}
+
+// Hvilken pille peker musa paa? -1 utenfor alle.
+static int ToolbarHit(const RECT* tb, int x, int y) {
+    for (int i = 0; i < TBAR_COUNT; ++i) {
+        if (PtInRect2(&tb[i], x, y)) return i;
+    }
+    return -1;
+}
+
+// Verktoylinjas samlede rektangel, avledet av ToolbarLayout (se
+// ButtonStrip). Tomt naar ingen pille faar plass.
+static void ToolbarStrip(int W, RECT* out) {
+    RECT tb[TBAR_COUNT];
+    int n = ToolbarLayout(W, tb);
+    out->left = out->top = out->right = out->bottom = 0;
+    if (n <= 0) return;
+    out->left   = tb[0].left;
+    out->top    = tb[0].top;
+    out->right  = tb[n - 1].right;
+    out->bottom = tb[0].bottom;
+}
+
 // Felles geometri for tegning og muse-treff.
 // Skrivebordsmodus: header og tidsbaand fantes bare for tekst som ikke lenger
 // tegnes (fase 14), saa topp, bunn og venstre gaar kant til kant. Hoyre side
@@ -2134,24 +2232,28 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
         }
 
-        // Rad 2: symbollinja. Den kortes med ellipse mot prisaksens etikett;
-        // her er det en merkelapp, ikke et tall, saa en ellipse loyer ikke.
-        SetTextColor(hdc, CLR_DIM);
+        // Rad 2: verktoylinja (fase 22) staar der symbollinja sto, og baerer
+        // symbol og intervall selv. Den tegnes fra PaintPopup - ogsaa naar
+        // bufferet er tomt. Igjen her er bare frakoblet-teksten, som leser
+        // helsefeltene under laasen: til hoyre for siste pille, og bare
+        // naar HELE teksten faar plass foer prisaksens etikett. Samme regel
+        // som prosenten: et avkuttet sekundtall er et feil tall. Dempet
+        // pris, tray-tipset og ikonet baerer tilstanden uansett bredde.
         if (stale) {
-            swprintf_s(buf, 64, L"%s  -  %s  -  frakoblet %ds",
-                       SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label, staleSecs);
-        } else {
-            swprintf_s(buf, 64, L"%s  -  %s",
-                       SYMBOLS[ctx->symIdx].label, INTERVALS[ctx->ivIdx].label);
+            RECT tb[TBAR_COUNT];
+            int tbN = ToolbarLayout(W, tb);
+            int subLeft  = (tbN > 0) ? tb[tbN - 1].right + HDR_GAP : PAD_L;
+            int subLimit = HeaderRow2Limit(W);
+            swprintf_s(buf, 64, L"frakoblet %ds", staleSecs);
+            int lenSub = (int)wcslen(buf);
+            SIZE szSub = { 0, 0 };
+            GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
+            if (subLeft + szSub.cx <= subLimit) {
+                SetTextColor(hdc, CLR_DIM);
+                RECT rcSub = { subLeft, TBAR_TOP, subLimit, TBAR_TOP + TBAR_H };
+                DrawTextW(hdc, buf, lenSub, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            }
         }
-        int lenSub = (int)wcslen(buf);
-        SIZE szSub = { 0, 0 };
-        GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
-        int subLimit = (g.edge + AXIS_LBL_GAP) - HDR_GAP;   // X_left_bound for aksetiketten
-        RECT rcSub = { PAD_L, 28, subLimit, 42 };
-        UINT subFlags = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
-        if (!HeaderFits(PAD_L + szSub.cx, subLimit + HDR_GAP)) subFlags |= DT_END_ELLIPSIS;
-        DrawTextW(hdc, buf, lenSub, &rcSub, subFlags);
     }
 
     // --- Chart-geometri ---
@@ -2247,7 +2349,11 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // rektanglene summeres de, og unionen - den hoeyeste - staar igjen.
     // Maalt i proben: to like rektangler gir 0 piksler under ALTERNATE og
     // w x h under WINDING.
-    if (ctx->dispVolMax > 0.0) {
+    //
+    // dispVolF (fase 22) er VOL-bryterens visning, 0..1: stolpene synker ned
+    // i bunnen naar de skrus av, og reiser seg igjen. Ved 1,0 er faktoren
+    // eksakt, saa pikslene er de samme som foer bryteren fantes.
+    if (ctx->dispVolMax > 0.0 && ctx->dispVolF > 0.0) {
         int bandH = (int)((double)ch * VOL_FRAC);
         int oldFill = SetPolyFillMode(hdc, WINDING);
         HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
@@ -2257,7 +2363,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             for (int i = i0; i < i1; ++i) {
                 const Candle* c = &ctx->candles[i];
                 if ((c->close >= c->open) != (pass == 0)) continue;
-                int h = (int)(c->volume / ctx->dispVolMax * (double)bandH + 0.5);
+                int h = (int)(c->volume / ctx->dispVolMax * (double)bandH * ctx->dispVolF + 0.5);
                 if (h <= 0) continue;
                 if (h > bandH) h = bandH;   // midt i easingen kan et lys ligge over skalaen
                 int cx = left + (int)(((double)i - dStart + 0.5) * slot);
@@ -2657,6 +2763,63 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
     SelectObject(hdc, oldBr);
 }
 
+// Verktoylinja. Flat som kontrollknappene: ingen fade, fargen skifter
+// momentant, og treffet henger paa tbHot. Tre tilstander: hvile (dempet
+// tekst, ingen flate), hover (CLR_BOX-flate) og aktiv (CLR_BOX-flate med
+// CLR_BOXEDGE-ramme) - aktiv er gjeldende intervall, VOL naar stolpene
+// vises, og symbolpillen mens overlayet den aapner staar aapent. Paletten
+// er hover-boksens og overlayets. Ingen nye GDI-objekter: penslene finnes,
+// og pila tegnes med DC_PEN/DC_BRUSH.
+//
+// Kalles fra PaintPopup, ikke fra DrawChart, av samme grunn som knappene:
+// rett etter et intervallbytte er bufferet tomt, og det er nettopp da
+// brukeren ser etter hvilken pille som ble aktiv. Alt den leser er UI-eid
+// eller skrives bare av UI-traaden (symIdx, ivIdx).
+static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
+    RECT tb[TBAR_COUNT];
+    int n = ToolbarLayout(W, tb);
+    if (n <= 0) return;
+
+    HGDIOBJ oldFont = SelectObject(hdc, ctx->hFontSmall);
+    SetBkMode(hdc, TRANSPARENT);
+
+    for (int i = 0; i < n; ++i) {
+        RECT* r = &tb[i];
+        BOOL hot = (ctx->tbHot == i);
+        BOOL on;
+        const wchar_t* lbl;
+        if (i == TBAR_SYM)      { on = ctx->overlayOpen; lbl = SYMBOLS[ctx->symIdx].label; }
+        else if (i == TBAR_VOL) { on = ctx->showVol;     lbl = L"VOL"; }
+        else { on = (i - TBAR_IV_FIRST == ctx->ivIdx);   lbl = INTERVALS[i - TBAR_IV_FIRST].label; }
+
+        if (hot || on) FillRect(hdc, r, ctx->brBox);
+        if (on)        FrameRect(hdc, r, ctx->brBoxEdge);
+
+        COLORREF fg = (hot || on || i == TBAR_SYM) ? CLR_TEXT : CLR_DIM;
+        SetTextColor(hdc, fg);
+        if (i == TBAR_SYM) {
+            // Venstrestilt tekst og en pil ned i hoyre ende: pillen aapner
+            // en liste, den bytter ikke selv. Pila er et fylt triangel,
+            // 7 px bredt og 4 hoyt - vektor, som knappeglyfene.
+            RECT t = *r;
+            t.left += 6; t.right -= 14;
+            DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            int ax = r->right - 9, ay = (r->top + r->bottom) / 2 - 1;
+            POINT tri[3] = { { ax - 3, ay }, { ax + 3, ay }, { ax, ay + 3 } };
+            HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(DC_PEN));
+            HGDIOBJ oldBr  = SelectObject(hdc, GetStockObject(DC_BRUSH));
+            SetDCPenColor(hdc, CLR_DIM);
+            SetDCBrushColor(hdc, CLR_DIM);
+            Polygon(hdc, tri, 3);
+            SelectObject(hdc, oldPen);
+            SelectObject(hdc, oldBr);
+        } else {
+            DrawTextW(hdc, lbl, -1, r, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        }
+    }
+    SelectObject(hdc, oldFont);
+}
+
 static void PaintPopup(AppContext* ctx, HWND hwnd) {
     PAINTSTRUCT ps;
     HDC hdcDst = BeginPaint(hwnd, &ps);
@@ -2726,6 +2889,9 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     // ikke kan trykkes skal ikke vises. Hurtigstien over naas heller aldri
     // der - uten musemeldinger blir knapperaden aldri invalidert alene.
     if (!g_desktopMode) DrawButtons(ctx, hdcMem, W, IsZoomed(hwnd));
+    // Verktoylinja (fase 22): samme sted, samme grunn, samme unntak. Foer
+    // overlayet, som skal ligge over alt.
+    if (!g_desktopMode) DrawToolbar(ctx, hdcMem, W);
 
     // Overlayet tegnes UTENFOR laasen: alt det leser (overlayF, overlayHot,
     // symIdx, ivIdx) er UI-eid. Og det maa staa her, ikke i DrawChart, som
@@ -2802,6 +2968,46 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     SetEvent(ctx->hWakeEvent);
     SaveConfig(ctx);
     if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
+}
+
+// VOL-bryteren (fase 22). Ikke gjennom ApplyConfigChoice: den tommer
+// bufferet og teller opp configGen, og volumet ligger allerede i lysene -
+// dette er et rent tegnevalg. Kalles fra pillen, V-tasten og tray-menyen,
+// saa skrivebordsmodus kan bytte uten panel (som fase 17). Er flaten synlig,
+// eases dispVolF av klokka; ellers snapper den, saa et panel som aapnes
+// senere ikke spiller av en animasjon ingen ba om.
+static void SetShowVolume(AppContext* ctx, BOOL on) {
+    if (ctx->showVol == on) return;
+    ctx->showVol = on;
+    SaveConfig(ctx);
+    if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
+        StartAnim(ctx->hPopup);
+        InvalidateRect(ctx->hPopup, NULL, FALSE);
+    } else {
+        ctx->dispVolF = on ? 1.0 : 0.0;
+    }
+}
+
+// Klikk paa en pille i verktoylinja. Egen funksjon av samme grunn som
+// OnButtonClick: WM_LBUTTONDOWN og WM_LBUTTONDBLCLK naar begge hit, saa to
+// raske klikk paa VOL er to vekslinger og ikke en (fallgruve 38).
+// Intervallene gaar gjennom ApplyConfigChoice, saa register, vannmerke,
+// configGen og traaden behandles noyaktig som fra overlayet og tray-menyen;
+// et klikk paa det aktive intervallet er en no-op der. Symbolpillen aapner
+// overlayet som finnes fra foer - ingen ny meny, ingen ny treffkode.
+static void OnToolbarClick(HWND hwnd, int th) {
+    if (th == TBAR_SYM) {
+        g_Ctx.overlayOpen = TRUE;
+        g_Ctx.overlayHot  = -1;
+        g_Ctx.hoverIdx    = -1;
+        g_Ctx.tbHot       = -1;   // ingen pille lyser mens overlayet eier musa
+        StartAnim(hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+    } else if (th == TBAR_VOL) {
+        SetShowVolume(&g_Ctx, !g_Ctx.showVol);
+    } else if (th >= TBAR_IV_FIRST && th < TBAR_VOL) {
+        ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (th - TBAR_IV_FIRST));
+    }
 }
 
 // Zoom og panorering tilbake til standardutsnittet: de siste DEFAULT_VIEW
@@ -2886,6 +3092,7 @@ static BOOL ZoomView(AppContext* ctx, double frac, int notches) {
 static void HidePanel(HWND hwnd) {
     g_Ctx.hoverIdx = -1;
     g_Ctx.btnHot   = -1;
+    g_Ctx.tbHot    = -1;
     if (g_isDuplicate) {
         ShowWindow(hwnd, SW_HIDE);
         SendMessageW(g_Ctx.hWnd, WM_COMMAND, ID_TRAY_EXIT, 0);
@@ -3094,6 +3301,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 RECT btns[BTN_COUNT];
                 ButtonLayout(w, btns);
                 if (ButtonHit(btns, x, y) >= 0) return HTCLIENT;
+                // Pillene i verktoylinja (fase 22) er knapper av samme
+                // slag, med samme krav: HTCLIENT, ellers er de tegnet og
+                // doede, og et klikk paa 5m flytter vinduet (fallgruve 21).
+                // Mellomrommene mellom pillene er fortsatt HTCAPTION.
+                RECT tb[TBAR_COUNT];
+                ToolbarLayout(w, tb);
+                if (ToolbarHit(tb, x, y) >= 0) return HTCLIENT;
                 return HTCAPTION;
             }
             return HTCLIENT;
@@ -3207,6 +3421,24 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     RECT strip;
                     ButtonStrip(rc.right, &strip);
                     InvalidateRect(hwnd, &strip, FALSE);
+                }
+            }
+
+            // Pille-hover (fase 22). Samme plass og samme sperrer som
+            // knappene. Bare verktoylinjas stripe er skitten; den gaar
+            // gjennom den trege stien (hurtigstien gjelder knapperaden),
+            // men blitten klippes til stripa, og et hover-skifte skjer
+            // hoyst en gang per pille pekeren passerer.
+            {
+                RECT tb[TBAR_COUNT];
+                ToolbarLayout(rc.right, tb);
+                int th = (g_Ctx.overlayOpen || g_Ctx.panning)
+                         ? -1 : ToolbarHit(tb, mx, my);
+                if (th != g_Ctx.tbHot) {
+                    g_Ctx.tbHot = th;
+                    RECT tstrip;
+                    ToolbarStrip(rc.right, &tstrip);
+                    InvalidateRect(hwnd, &tstrip, FALSE);
                 }
             }
 
@@ -3332,6 +3564,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // ledig headerflate (HTCAPTION): den forlater klientomraadet uten
             // aa forlate vinduet. Uten dette blir knappen staaende opplyst.
             g_Ctx.btnHot        = -1;
+            g_Ctx.tbHot         = -1;
             StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -3369,6 +3602,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 14: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[(int)lParam].volume * 100.0) : -1; break;
                 case 15: r = (LRESULT)g_probePaintUs; break;
+                // Fase 22: verktoylinja.
+                case 16: r = g_Ctx.ivIdx; break;
+                case 17: r = g_Ctx.symIdx; break;
+                case 18: r = g_Ctx.showVol; break;
+                case 19: r = g_Ctx.tbHot; break;
+                case 20: r = g_Ctx.overlayOpen; break;
+                case 21: r = (LRESULT)(g_Ctx.dispVolF * 1000.0); break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -3418,6 +3658,22 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         tVol = VolumeMax(&g_Ctx, tvs, tvc);   // fase 21
                     }
                     LeaveCriticalSection(&g_Ctx.lock);
+
+                    // VOL-bryteren (fase 22): dispVolF eases mot 0 eller 1,
+                    // uavhengig av om det finnes lys - et bytte rett foer et
+                    // intervallbytte skal ogsaa sette seg. Snapp er en kvart
+                    // piksel av baandhoeyden, som for de andre.
+                    {
+                        double vfT = g_Ctx.showVol ? 1.0 : 0.0;
+                        if (g_Ctx.dispVolF != vfT) {
+                            double bandPx = (double)gE.ch * VOL_FRAC;
+                            double snapF  = (bandPx > 1.0) ? SNAP_PX / bandPx : 1.0;
+                            g_Ctx.dispVolF = AnimStep(g_Ctx.dispVolF, vfT, dt,
+                                                      ANIM_TAU_VIEW, snapF);
+                            redraw = TRUE;
+                            if (g_Ctx.dispVolF != vfT) settled = FALSE;
+                        }
+                    }
 
                     if (tn > 0 && tvc > 0 && g_Ctx.dispValid &&
                         gE.cw > 0 && gE.ch > 0) {
@@ -3543,6 +3799,16 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     return 0;
                 }
             }
+            // Verktoylinja (fase 22), samme plass i rekkefolgen.
+            {
+                RECT tb[TBAR_COUNT];
+                ToolbarLayout(rc.right, tb);
+                int th = ToolbarHit(tb, dx, dy);
+                if (th >= 0) {
+                    OnToolbarClick(hwnd, th);
+                    return 0;
+                }
+            }
 
             ChartRect gg = ChartGeometry(rc.right, rc.bottom);
             if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= gg.bottom) {
@@ -3656,6 +3922,18 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // traadkorset gli med lyset under easingen og bli staaende
             // forskjoevet fra pekeren til neste musebevegelse.
             if (!g_desktopMode && !g_Ctx.panning && !g_Ctx.overlayOpen) {
+                // Verktoylinja fra tastaturet (fase 22): V er VOL-pillen,
+                // 1..6 intervallpillene i rekkefolge. Samme sti som klikket.
+                // Uten Ctrl - Ctrl+0 er standardvisningen, og Ctrl+siffer
+                // staar ledig.
+                if (!ctrl && wParam == 'V') {
+                    OnToolbarClick(hwnd, TBAR_VOL);
+                    return 0;
+                }
+                if (!ctrl && wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
+                    OnToolbarClick(hwnd, TBAR_IV_FIRST + (int)(wParam - '1'));
+                    return 0;
+                }
                 int  pan = 0, zoom = 0, navKey = 1;
                 switch (wParam) {
                     case VK_LEFT:       pan = -1; break;    // hakk
@@ -3874,6 +4152,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ctx->overlayF    = 0.0;
             ctx->overlayHot  = -1;
             ctx->btnHot      = -1;
+            ctx->tbHot       = -1;
             SaveWindowPlacement(ctx->hPopup);
             ShowWindow(ctx->hPopup, SW_HIDE);
             return;
@@ -4094,6 +4373,9 @@ static HMENU BuildTrayMenu(void) {
         HMENU hIv  = BuildIntervalMenu();
         if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
         if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Intervall");
+        // VOL-bryteren (fase 22) - skrivebordsmodus har ingen verktoylinje.
+        AppendMenuW(hMenu, MF_STRING | (g_Ctx.showVol ? MF_CHECKED : MF_UNCHECKED),
+                    ID_TRAY_VOLUME, L"Volumstolper	V");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     }
     if (!g_isDuplicate) {
@@ -4143,6 +4425,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (LOWORD(wParam) == IDM_TOGGLE_AUTOSTART) {
                 ToggleAutostart();
+                return 0;
+            }
+            if (LOWORD(wParam) == ID_TRAY_VOLUME) {
+                SetShowVolume(&g_Ctx, !g_Ctx.showVol);
                 return 0;
             }
             {
@@ -4350,6 +4636,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.curArrow    = LoadCursorW(NULL, IDC_ARROW);
     g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
     g_Ctx.btnHot      = -1;
+    g_Ctx.tbHot       = -1;
+    g_Ctx.showVol     = TRUE;   // fase 22; LoadConfig kan skru det av
+    g_Ctx.dispVolF    = 1.0;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
     // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
@@ -4366,6 +4655,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // vannmerket skal vaere korrekt fra forste bilde.
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
+    g_Ctx.dispVolF = g_Ctx.showVol ? 1.0 : 0.0;   // fase 22: ingen animasjon ved oppstart
 
     // Duplikat: "--dup x y w h sym iv", skrevet av SpawnInstance. Overstyrer
     // det LoadConfig leste, med samme grenser - en haandskrevet kommandolinje
