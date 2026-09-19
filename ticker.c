@@ -423,6 +423,13 @@ typedef struct {
     int    tbHot;
     BOOL   showVol;
     double dispVolF;
+    // Glidende snitt (fase 25): SMA 20 og EMA 50 over lysene. Samme par som
+    // showVol/dispVolF: showInd er valget og lagres i registret, dispIndF
+    // er visningen, 0..1, og eases av klokka - her som FARGE mot bakgrunnen,
+    // ikke som geometri. UI-eid. Selve snittene lagres ikke: de regnes ut
+    // av candles[] i hver opptegning (se IndStep).
+    BOOL   showInd;
+    double dispIndF;
     // Prisvarsler (fase 23). Alt er UI-eid: varslene settes fra musa og
     // proeves i WM_APP_DATA, begge paa UI-traaden, saa traadkontrakten er
     // uroert. Per symbol - et nivaa i dollar er meningsloest paa tvers av
@@ -707,6 +714,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->ivIdx      = 0;
     ctx->intervalMs = INTERVALS[0].ms;
     ctx->showVol    = TRUE;
+    ctx->showInd    = TRUE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
 
@@ -722,8 +730,10 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD px = RegReadDword(k, L"PanelX", 0);
     DWORD py = RegReadDword(k, L"PanelY", 0);
     DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // fase 22, paa som standard
+    DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // fase 25, paa som standard
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
+    ctx->showInd = (si != 0);
 
     // Bundet sjekk. Et register redigert for hand, eller etterlatt av en
     // nyere versjon med flere symboler, skal ikke kunne indeksere utenfor
@@ -834,6 +844,8 @@ static void SaveConfig(const AppContext* ctx) {
     RegSetValueExW(k, L"IntervalIndex", 0, REG_DWORD, (const BYTE*)&iv, sizeof(iv));
     DWORD sv = ctx->showVol ? 1 : 0;
     RegSetValueExW(k, L"ShowVolume",    0, REG_DWORD, (const BYTE*)&sv, sizeof(sv));
+    DWORD si = ctx->showInd ? 1 : 0;
+    RegSetValueExW(k, L"ShowIndicators", 0, REG_DWORD, (const BYTE*)&si, sizeof(si));
     RegCloseKey(k);
 }
 
@@ -4191,6 +4203,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 31: r = (LRESULT)floor(g_Ctx.dispMin * 100.0 + 0.5); break;
                 case 32: r = (LRESULT)floor(g_Ctx.dispMax * 100.0 + 0.5); break;
                 case 33: r = (LRESULT)floor(g_Ctx.alertFresh * 100.0 + 0.5); break;
+                // Fase 25: glidende snitt. 36/37 er SMA/EMA paa lysindeksen
+                // i lParam, x100, -1 naar snittet ikke er definert der. 38
+                // er lukkekursen x100, saa proben kan regne snittene selv.
+                case 34: r = g_Ctx.showInd; break;
+                case 35: r = (LRESULT)(g_Ctx.dispIndF * 1000.0); break;
+                case 36: r = -1; break;
+                case 37: r = -1; break;
+                case 38: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
+                             ? (LRESULT)floor(g_Ctx.candles[(int)lParam].close * 100.0 + 0.5) : -1; break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -5369,6 +5390,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.axisHotY    = -1;
     g_Ctx.showVol     = TRUE;   // fase 22; LoadConfig kan skru det av
     g_Ctx.dispVolF    = 1.0;
+    g_Ctx.showInd     = TRUE;   // fase 25; LoadConfig kan skru det av
+    g_Ctx.dispIndF    = 1.0;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
     // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
@@ -5386,6 +5409,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
     g_Ctx.dispVolF = g_Ctx.showVol ? 1.0 : 0.0;   // fase 22: ingen animasjon ved oppstart
+    g_Ctx.dispIndF = g_Ctx.showInd ? 1.0 : 0.0;   // fase 25, samme grunn
 
     // Duplikat: "--dup x y w h sym iv", skrevet av SpawnInstance. Overstyrer
     // det LoadConfig leste, med samme grenser - en haandskrevet kommandolinje
