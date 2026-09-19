@@ -53,6 +53,9 @@ lys) og vekker tråden etter dvale.
 **Fase 25** legger glidende snitt over lysene — SMA 20 og EMA 50, regnet av
 en stegmaskin uten egen tabell — med forklaring i grafens hjørne og en
 `MA`-bryter i verktøylinja, på `M` og i tray-menyen.
+**Fase 26** gir skrivebordsflaten egne overleggsvalg — volum og snitt er av
+der som standard, etter tilbakemelding fra bruk — og legger flaten på nytt
+ved `WM_DISPLAYCHANGE`.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -74,12 +77,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md` og
 `docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md` og
 `docs/superpowers/plans/2026-09-18-ticker-robuste-inndata.md` og
-`docs/superpowers/plans/2026-09-19-ticker-indikatorer.md`. Design:
+`docs/superpowers/plans/2026-09-19-ticker-indikatorer.md` og
+`docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~5780 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~5870 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -433,8 +437,8 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `+` / `-` (også numerisk, også med `Ctrl`) | ett zoomtrinn inn / ut om **midten** av utsnittet (fase 20) |
 | `V` | VOL-pillen: volumstolpene av/på, eased (fase 22) |
 | `1` … `6` | intervallpillene i rekkefølge, 1m … 1d (fase 22) |
-| «Volumstolper» i tray-menyen | samme bryter — virker også i skrivebordsmodus (fase 22) |
-| `M` / `MA`-pillen / «Glidende snitt» i tray-menyen | SMA 20 og EMA 50 av/på, tonet (fase 25). `Ctrl`+`M` er fortsatt minimer |
+| «Volumstolper» i tray-menyen | bytter valget for **modusen prosessen står i**: panelets i panelmodus, skrivebordets i skrivebordsmodus (fase 22, per modus fra fase 26) |
+| `M` / `MA`-pillen / «Glidende snitt» i tray-menyen | SMA 20 og EMA 50 av/på, tonet (fase 25). `Ctrl`+`M` er fortsatt minimer. Tray-punktet er per modus, som «Volumstolper» (fase 26) |
 | Klikk i priskolonnen / `A` | setter eller fjerner et prisvarsel — se *Prisvarsler* over (fase 23) |
 | «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises (fase 23) |
 | Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
@@ -625,7 +629,9 @@ Bygges i `EnsureWatermark`, som per definisjon bare kjører når
 `HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
 `PanelWidth`, `PanelHeight`, `PanelX`, `PanelY`, `PanelHasPos`,
 `DesktopMode` (fase 12), `ShowVolume` (fase 22) og `ShowIndicators` (fase 25)
-— de to siste standard 1, skrevet av `SaveConfig` sammen med indeksene. Leses i `WinMain` **før `CreateThread`**, slik at
+— de to siste standard 1 og **panelets** — og `ShowVolumeDesktop` og
+`ShowIndicatorsDesktop` (fase 26), standard 0 og **skrivebordsflatens**. Alle
+fire skrives av `SaveConfig` sammen med indeksene. Leses i `WinMain` **før `CreateThread`**, slik at
 første henting går mot riktig par. Indeksene er bundet sjekket. Enhver feilsti
 lander på BTC/USDT 1m.
 
@@ -2620,6 +2626,67 @@ lys. Fase 23- og fase 24-probene er ikke kjørt på nytt; `WM_APP_DATA`-stien,
 parserne og varslene er urørt, men **`SEED_COUNT` er endret** og eldre prober
 som forventer 300 lys etter første henting, vil feile på det tallet.
 
+### Fase 26 — skrivebordsflaten: egne overleggsvalg og skjermbytte
+
+Plan og målinger: `docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md`.
+Gren `skrivebordsflate`, flettet inn med `--no-ff`.
+
+**Tilbakemelding fra bruk: «nå vises volum og MA i bakgrunnsbildet».** Lest
+som at det ikke hører hjemme der, og det stemmer med fase 14s egen regel:
+flaten leses perifert bak ikonene, og alt som må dekodes ble fjernet.
+Volumstolpene har likevel stått på skrivebordet siden fase 21 uten noen
+modussjekk, og fase 25 la snittlinjene oppå med begrunnelsen «en kurve er
+ikke tekst». Den begrunnelsen var feil — stolper og snitt er måleverktøy,
+ikke tapet (fallgruve 85). Brukeren sto i panelmodus under fase 25 og så
+begge på skrivebordet først etterpå.
+
+**Ett valg per modus, ikke hardkodet bort.** Fase 22 la «Volumstolper» i
+tray-menyen nettopp for at skrivebordsmodus skulle kunne bytte. `showVol` /
+`showInd` er panelets (standard på, uendret); `showVolDesk` / `showIndDesk`
+er skrivebordets (`ShowVolumeDesktop` / `ShowIndicatorsDesktop`, **standard
+av**). `ShowVolNow()` / `ShowIndNow()` gir valget for modusen prosessen står
+i — alt som tegner, easer, haker av i tray-menyen eller svarer en probe
+(felt 18/34) leser dem, og `SetShowVolume` / `SetShowIndicators` skriver
+modusens felt. `dispVolF` / `dispIndF` snapper ved modusbytte, og
+oppstartssnappen er flyttet til etter at modusen er kjent (den sto rett
+etter `LoadConfig`, før `--desktop-mode` og `DesktopMode` var lest). To
+klikk i tray-menyen gir overleggene tilbake på skrivebordet.
+
+**Skjermbytte.** Flaten er et `WS_CHILD` av WorkerW og får aldri
+`WM_DISPLAYCHANGE`; det skjulte hovedvinduet er toppnivå og får den.
+`PlaceDesktopSurface` er skilt ut av `AttachToDesktop`.
+`RefitDesktopSurface` kjører i en per-monitor-v2-brakett som `TogglePopup`
+(`GetSystemMetrics` følger trådens kontekst, og hovedtråden er uvitende):
+sitter flaten ikke i dagens WorkerW, rives den og `WM_NCDESTROY` starter
+gjenoppbyggingen (stien fra fase 9); ellers legges den på nytt. Uendret
+geometri er en no-op; ny størrelse gir `WM_SIZE`, som kaster vannmerket,
+og dobbeltbufferet og stempelfonten (H/40) er nøklet på størrelsen.
+`TIMER_REFIT_ID` gjør det samme en gang til etter 1 s, fordi Explorer legger
+sin egen WorkerW på nytt etter samme melding og origo regnes i dens
+koordinater. `lParam` leses ikke (virtualisert). **`WM_DPICHANGED` håndteres
+ikke, med vilje:** hovedvinduet får den aldri, og flaten regner i fysiske
+piksler, så en ren skaleringsendring endrer ingenting for den.
+
+**Verifisert** (`probe_desk.c`, per-monitor-bevisst som flaten, venter på
+inaktiv maskin): **45/45 i to kjøringer**, rød kjøring **26 FAIL**. Rent
+skrivebord: 0 stolpe- og 0 linjepiksler i en fangst på 3840×1600 med ~42 700
+lyspiksler (rød: 35 112 / 4 144 / 3 725). Tray-kommandoene skriver
+skrivebordets registerverdier og lar panelets stå; pikslene følger. Proben
+krymper flaten til 1920×800 (stempelfont 38 → 19 px) og sender
+`WM_DISPLAYCHANGE`: samme vindu tilbake på 0,0 3840×1600, fonten 38 igjen,
+fullt bilde. Krympet uten melding: ettersjekken retter det innen 1,6 s.
+Revet ut av WorkerW med `SetParent`: rives, bygges på nytt, valgene
+overlever. I panelmodus rører meldingen ingenting. GDI/USER **30/6 før og
+etter** sju skjermbytter. Modusbytte og omstart gir hver modus sitt valg fra
+første bilde, uten animasjon. Fase 25-proben kjørt på nytt: **54/54**.
+**Exe 199 168 → 199 680 byte (+512).**
+
+**Ikke testet:** et ekte oppløsnings- eller skjermbytte — proben sender
+meldingen og etterlikner virkningen (fallgruve 47). Om Explorer river
+WorkerW ved et ekte bytte, om en skaleringsendring sender
+`WM_DISPLAYCHANGE`, flere skjermer og bytte av primærskjerm er lest, ikke
+kjørt; maskinen har én skjerm.
+
 ---
 
 ## Kjente begrensninger
@@ -2680,7 +2747,8 @@ som forventer 300 lys etter første henting, vil feile på det tallet.
 - **Snittene er udefinert på de første 19 / 49 lysene i bufferet**, og
   linja begynner der. Standardutsnittet skjuler det (`SEED_COUNT` 360);
   panorert helt til historikkens start synes det.
-- **Linjene er 1 px også på skrivebordet** (fase 25). Stempelet skalerer
+- **Linjene er 1 px også på skrivebordet** når de er skrudd på der (fase 25;
+  av som standard fra fase 26). Stempelet skalerer
   med H/40; linjene gjør ikke det (`DC_PEN` er alltid 1 px), og ved
   3840×1600 er de tynne. Rutenettet har samme egenskap.
 - **Trådkorset tegnes over forklaringen** når pekeren står under den.
@@ -2737,13 +2805,16 @@ som forventer 300 lys etter første henting, vil feile på det tallet.
   Flaten dekker hele skjermen, men tekst og marger får samme pikselstørrelse
   som ved 100 %, altså mindre på skjermen. Det følger av at hele layouten er
   i rå piksler (se *Avviste forslag*, DPI-manifest).
-- **Skjermkonfigurasjon som endres mens appen kjører, håndteres ikke**
-  (`WM_DISPLAYCHANGE` / `WM_DPICHANGED`). Skrivebordsflaten får størrelsen
-  sin når den lages, og bygges bare på nytt når WorkerW rives ned eller
-  modus byttes. Ny oppløsning eller skalering uten at Explorer starter på
-  nytt er ikke målt — maskinen har én skjerm, og den ekte hendelsen kan ikke
-  drives fra en probe. Lagt bort i fase 23-planen. En tur innom panelmodus
-  og tilbake fra tray-menyen bygger flaten på nytt.
+- **Skjermbytte er bare prøvd med en sendt melding** (fase 26).
+  `WM_DISPLAYCHANGE` legger skrivebordsflaten på nytt over primærskjermen,
+  med en ettersjekk etter 1 s, men den ekte hendelsen kan ikke drives fra en
+  probe og maskinen har én skjerm. `WM_DPICHANGED` håndteres ikke: flaten
+  regner i fysiske piksler. Skulle flaten likevel stå feil, bygger en tur
+  innom panelmodus og tilbake den på nytt.
+- **Volum og glidende snitt er av på skrivebordet som standard** (fase 26)
+  og skrus på fra tray-menyen *mens prosessen står i skrivebordsmodus*.
+  Panelet har sine egne valg. Den som hadde dem på skrivebordet før fase
+  26, må skru dem på igjen én gang.
 - **Oppvåkning fra dvale er bare prøvd med en sendt melding** (fase 24).
   `PBT_APMRESUMEAUTOMATIC` vekker tråden og slipper forbindelsen, men ekte
   dvale kan ikke drives fra en probe. Er nettet ikke oppe ved første forsøk,
@@ -3229,20 +3300,30 @@ som forventer 300 lys etter første henting, vil feile på det tallet.
     *unngå* den). «Ingen `SendInput`» betyr ikke «trenger ikke inaktiv
     maskin». Og en fangst skal sjekke størrelsen den fikk før den indekserer
     med størrelsen den ventet: et minimert panel er 0×0.
+85. **Prøv en ny ting mot regelen, ikke mot en formulering av den.** Fase 25
+    tegnet snittlinjene på skrivebordet fordi «en kurve er ikke tekst» —
+    sant, men fase 14s regel er at flaten leses *perifert*, og et snitt er
+    noe man leser av. Brukeren sa fra dagen etter. Og volumstolpene hadde
+    stått der siden fase 21 fordi ingen spurte i det hele tatt. Ny tegning
+    i `DrawChart`: avgjør for skrivebordet uttrykkelig, og se på flaten.
+86. **Oppstartstilstand som avhenger av modus, må settes etter at modusen
+    er kjent.** `dispVolF` ble snappet rett etter `LoadConfig`, men
+    `g_desktopMode` leses 35 linjer lenger ned (`--desktop-mode`, så
+    `DesktopMode`). Usynlig så lenge valget var felles for begge modi.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak20` ligger igjen** (19.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 25, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak19` er slettet: de dekket fase 1 til 24, og den
+**Bare `ticker.c.bak21` ligger igjen** (19.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 26, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak20` er slettet: de dekket fase 1 til 25, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24) og `.bak20` (fase 25). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25) og `.bak21` (fase 26). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
