@@ -434,6 +434,7 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `V` | VOL-pillen: volumstolpene av/på, eased (fase 22) |
 | `1` … `6` | intervallpillene i rekkefølge, 1m … 1d (fase 22) |
 | «Volumstolper» i tray-menyen | samme bryter — virker også i skrivebordsmodus (fase 22) |
+| `M` / `MA`-pillen / «Glidende snitt» i tray-menyen | SMA 20 og EMA 50 av/på, tonet (fase 25). `Ctrl`+`M` er fortsatt minimer |
 | Klikk i priskolonnen / `A` | setter eller fjerner et prisvarsel — se *Prisvarsler* over (fase 23) |
 | «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises (fase 23) |
 | Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
