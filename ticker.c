@@ -569,6 +569,9 @@ static volatile LONG g_probeResumes = 0;
 static volatile LONG g_probeRejects = 0;
 // 113: forbindelser arbeidertraaden har sluppet etter en oppvaakning.
 static volatile LONG g_probeConnDrops = 0;
+// Bare testbygg (fase 26): WM_DISPLAYCHANGE sett paa hovedvinduet. Leses med
+// WM_APP_PROBE 114 der.
+static volatile LONG g_probeDisplayChanges = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -4475,6 +4478,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     break;
                 }
                 case 39: r = (LRESULT)g_probeIndUs; break;
+                // Fase 26: hoyden stempelfonten er bygget for (skrivebordsmodus).
+                case 40: r = g_Ctx.pillFontH; break;
                 case 38: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)floor(g_Ctx.candles[(int)lParam].close * 100.0 + 0.5) : -1; break;
                 default: break;
@@ -5505,6 +5510,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (wParam == 111) return (LRESULT)g_probeResumes;
             if (wParam == 112) return (LRESULT)g_probeRejects;
             if (wParam == 113) return (LRESULT)g_probeConnDrops;
+            if (wParam == 114) return (LRESULT)g_probeDisplayChanges;   // fase 26
             return 0;
 #endif
 
@@ -5523,6 +5529,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         // InitializeCriticalSection i WinMain, og en sendt melding kan
         // leveres i det vinduet. hWakeEvent settes etter laasen, saa er den
         // satt, finnes laasen.
+#ifdef TICKER_PROBE
+        case WM_DISPLAYCHANGE:
+            InterlockedIncrement(&g_probeDisplayChanges);
+            break;
+#endif
+
         case WM_POWERBROADCAST:
             if (wParam == PBT_APMRESUMEAUTOMATIC && g_Ctx.hWakeEvent) {
                 EnterCriticalSection(&g_Ctx.lock);
