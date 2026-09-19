@@ -2754,6 +2754,7 @@ Skrivebordsproben (utvidet) 47/47: **0 px VWAP og 0 px høy/lav som
 standard** på 3840×1600, 3860 / 1824 px når de skrus på. Fase 25-proben
 54/54 etter at den lærte å vente på bakfyllingen. En fangst ved 560×300
 viste dagens høy tvers gjennom forklaringens sifre; rettet i commit 3.
+Byttet: bakgrunnen visker da også ut veker og snittpiksler under teksten.
 **Exe 199 680 → 203 776 byte (+4 096)**, `/TP` byte-identisk.
 
 **Ikke testet:** et ekte døgnskifte med panelet åpent, og bakfylling under
