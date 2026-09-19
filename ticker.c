@@ -622,6 +622,12 @@ static LONGLONG g_probeSessUs = 0;
 // Bare testbygg (fase 28): tiden gaarsdagsblokka tok i siste fulle
 // opptegning, i mikrosekunder. WM_APP_PROBE 56.
 static LONGLONG g_probePrevUs = 0;
+// Bare testbygg (fase 29). 57: bitmaske over nivaaene (bit q i LVL-rangen)
+// som fikk merkelapp i siste opptegning. 58: ble traadkorsets aksemerke
+// tegnet. 59: tiden merkelappblokka tok (us).
+static int      g_probeLblMask  = 0;
+static int      g_probeCrossTag = 0;
+static LONGLONG g_probeLblUs    = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -4974,6 +4980,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                              SessionsNeedHistory(g_Ctx.candles, g_Ctx.candleCount,
                                                  g_Ctx.intervalMs, g_Ctx.histDone); break;
                 case 56: r = (LRESULT)g_probePrevUs; break;
+                case 57: r = g_probeLblMask; break;
+                case 58: r = g_probeCrossTag; break;
+                case 59: r = (LRESULT)g_probeLblUs; break;
                 case 47: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[(int)lParam].openTime / 1000) : -1; break;
                 case 48: {
