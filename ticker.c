@@ -606,6 +606,9 @@ static volatile LONG g_probeDisplayChanges = 0;
 // tok i siste fulle opptegning, i mikrosekunder. WM_APP_PROBE 45. Maalt for
 // seg av samme grunn som g_probeIndUs.
 static LONGLONG g_probeSessUs = 0;
+// Bare testbygg (fase 28): tiden gaarsdagsblokka tok i siste fulle
+// opptegning, i mikrosekunder. WM_APP_PROBE 56.
+static LONGLONG g_probePrevUs = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -913,6 +916,47 @@ static BOOL VwapValueAt(const Candle* c, int n, long long intervalMs,
     for (int i = s; i <= idx; ++i) ok = VwapStep(&v, &c[i]);
     if (ok) *out = v.val;
     return ok;
+}
+#endif
+
+#ifdef TICKER_PROBE
+// Gaarsdagen (fase 28): forrige UTC-doegns hoy, lav og sluttkurs som
+// referansenivaaer. Rene funksjoner av candles[] som resten av sessionkoden.
+//
+// PrevSession gir gaarsdagens foerste lys, og i *outEnd dagens foerste (lyset
+// ETTER gaarsdagens siste) - sessionen er [retur, *outEnd). -1 naar den ikke
+// finnes: ingen session i dag (tomt buffer, 1d-lys), dagens foerste lys
+// ligger forrest i bufferet, eller lyset foran det ligger ikke i doegnet foer
+// (et hull paa et doegn eller mer - da finnes ingen gaarsdag aa vise).
+// *complete som i SessionStartAt: en "gaarsdagens hoy" regnet av de siste ti
+// timene av gaarsdagen er et feil tall, og tegnes ikke.
+static int PrevSession(const Candle* c, int n, long long intervalMs, BOOL histDone,
+                       int* outEnd, BOOL* complete) {
+    *complete = FALSE;
+    *outEnd = -1;
+    BOOL full = FALSE;
+    int s1 = SessionStart(c, n, intervalMs, histDone, &full);
+    if (s1 <= 0) return -1;
+    if (c[s1 - 1].openTime / DAY_MS != c[s1].openTime / DAY_MS - 1) return -1;
+    *outEnd = s1;
+    return SessionStartAt(c, n, s1 - 1, intervalMs, histDone, complete);
+}
+
+// Maa bufferet fylles bakover for at dagens OG gaarsdagens session skal
+// vaere hele? Fase 27 stoppet paa dagens doegnskifte; gaarsdagen trenger ett
+// doegn til (ved 1m hoeyst 2880 lys, aatte hentinger). FALSE naar historikken
+// er slutt, naar det ikke finnes sessioner (1d), og naar gaarsdagen ikke
+// finnes (hull) - da er det ingenting aa hente seg fram til.
+static BOOL SessionsNeedHistory(const Candle* c, int n, long long intervalMs, BOOL histDone) {
+    if (histDone) return FALSE;
+    BOOL full = FALSE;
+    int s1 = SessionStart(c, n, intervalMs, histDone, &full);
+    if (s1 < 0) return FALSE;
+    if (!full || s1 == 0) return TRUE;   // s1 == 0: dagen er dekket, gaarsdagen ligger foran bufferet
+    int end = -1;
+    BOOL prevFull = FALSE;
+    int s0 = PrevSession(c, n, intervalMs, histDone, &end, &prevFull);
+    return (s0 >= 0 && !prevFull);
 }
 #endif
 
@@ -4857,6 +4901,33 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     break;
                 }
                 case 45: r = (LRESULT)g_probeSessUs; break;
+                // Fase 28: gaarsdagen. 51/52/53 er forrige UTC-doegns hoy,
+                // lav og sluttkurs x100, -1 naar doegnet ikke er helt i
+                // bufferet. 55 er gaarsdagens foerste lys (-1 = finnes ikke).
+                // 54 er det WM_APP_DATA avgjoer: vil appen ha eldre lys for
+                // aa gjoere sessionene hele? Prober venter paa 54 == 0 og
+                // felt 5 == 0 foer de leser indekser. 56 er tiden
+                // gaarsdagsblokka tok i siste opptegning (us).
+                case 51: case 52: case 53: case 55: {
+                    int pe = -1;
+                    BOOL pfull = FALSE;
+                    int ps = PrevSession(g_Ctx.candles, g_Ctx.candleCount,
+                                         g_Ctx.intervalMs, g_Ctx.histDone, &pe, &pfull);
+                    if (wParam == 55) { r = ps; break; }
+                    if (ps < 0 || !pfull) break;
+                    if (wParam == 53) {
+                        r = (LRESULT)floor(g_Ctx.candles[pe - 1].close * 100.0 + 0.5);
+                    } else {
+                        double phi, plo;
+                        SessionHiLo(g_Ctx.candles, ps, pe, &phi, &plo);
+                        r = (LRESULT)floor((wParam == 51 ? phi : plo) * 100.0 + 0.5);
+                    }
+                    break;
+                }
+                case 54: r = ShowIndNow(&g_Ctx) &&
+                             SessionsNeedHistory(g_Ctx.candles, g_Ctx.candleCount,
+                                                 g_Ctx.intervalMs, g_Ctx.histDone); break;
+                case 56: r = (LRESULT)g_probePrevUs; break;
                 case 47: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[(int)lParam].openTime / 1000) : -1; break;
                 case 48: {
