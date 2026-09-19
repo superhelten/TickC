@@ -208,6 +208,19 @@
 #define CLR_SMA          RGB(0x3D, 0x8F, 0xBF)
 #define CLR_EMA          RGB(0xA0, 0x72, 0xD0)
 #define IND_TAU_FADE     ANIM_TAU_FADE   // MA-bryteren toner linjene, som overlayet
+// Dagens session (fase 27). VWAP er gull og en KURVE; varslene er rav og
+// vannrette (CLR_ALERT FFB020, linja 86601B) - gulere og lysere her, saa de
+// to ikke leses som det samme. Dagens hoy/lav er noeytral graa og stiplet:
+// heltrukket rav er et varsel, stiplet groenn/roed er siste pris, prikket
+// graa er traadkorset. Graafargen ligger med vilje IKKE paa blandingslinja
+// mellom CLR_BG og CLR_AXIS (8A93A0 gjoer det): kantutjevnede aksetall ville
+// da inneholdt eksakt samme farge, og en pikselprobe kunne ikke skille linja
+// fra teksten. Moensteret er 6 paa / 6 av, forankret i flatens
+// venstre kant, saa strekene ikke kryper under panorering.
+#define CLR_VWAP         RGB(0xF2, 0xD1, 0x4B)
+#define CLR_SESSION      RGB(0x90, 0x93, 0x9E)
+#define SESS_DASH_ON     6
+#define SESS_DASH_PERIOD 12
 // Begge snitt skal vaere definert paa foerste synlige lys naar panelet
 // aapner paa standardutsnittet (se SEED_COUNT).
 C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_EMA_PERIOD);
@@ -589,6 +602,10 @@ static volatile LONG g_probeConnDrops = 0;
 // Bare testbygg (fase 26): WM_DISPLAYCHANGE sett paa hovedvinduet. Leses med
 // WM_APP_PROBE 114 der.
 static volatile LONG g_probeDisplayChanges = 0;
+// Bare testbygg (fase 27): tiden sessionblokkene (dagens hoy/lav og VWAP)
+// tok i siste fulle opptegning, i mikrosekunder. WM_APP_PROBE 45. Maalt for
+// seg av samme grunn som g_probeIndUs.
+static LONGLONG g_probeSessUs = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -804,6 +821,97 @@ static BOOL IndValueAt(const Candle* c, int n, int period, BOOL ema, int idx, do
     BOOL ok = FALSE;
     for (int i = IndFeedStart(idx, period, ema); i <= idx; ++i) ok = IndStep(&s, c, i);
     if (ok) *out = s.val;
+    return ok;
+}
+#endif
+
+// Dagens session, VWAP og dagens hoy/lav (fase 27). Rene funksjoner av
+// candles[], som snittene over: ingenting lagres, alt regnes ut under
+// opptegningen.
+//
+// Sessionen er UTC-DOEGNET - Binance sine dagslys og 24-timerstall bryter
+// ved 00:00 UTC, og det samme gjoer VWAP hos Bloomberg og TradingView. Ikke
+// det synlige utsnittet: PriceRange legger 8 % luft rundt utsnittets hoy og
+// lav, saa to linjer paa utsnittets ekstremer ville staatt paa noeyaktig
+// samme sted i hvert eneste bilde, og en VWAP forankret i foerste synlige
+// lys ville hoppet for hvert lys under panorering (samme avgjoerelse som
+// tidsaksen: forankret i tiden, ikke i indeksen).
+//
+// SessionStartAt gir indeksen til foerste lys i doegnet lys idx hoerer til,
+// -1 naar sessionen ikke finnes: tomt buffer, eller lys paa et doegn eller
+// mer (da ER lyset sessionen, og hoy/lav staar alt i hover-boksen).
+// Binaersoek - openTime er sortert, og et lineaert soek bakover ville vaert
+// 1440 64-bits sammenlikninger per bilde sent paa doegnet ved 1m.
+// *complete: bufferet rekker tilbake til doegnets start. Det gjoer det naar
+// det ligger et eldre lys foran, naar foerste lys aapner paa doegnskiftet,
+// eller naar historikken er slutt. Er sessionen ufullstendig, tegnes
+// ingenting: en "dagens hoy" regnet av de siste seks timene er et feil tall.
+#define DAY_MS 86400000LL
+
+static int SessionStartAt(const Candle* c, int n, int idx, long long intervalMs,
+                          BOOL histDone, BOOL* complete) {
+    *complete = FALSE;
+    if (n <= 0 || idx < 0 || idx >= n) return -1;
+    if (intervalMs <= 0 || intervalMs >= DAY_MS) return -1;
+    long long dayStart = (c[idx].openTime / DAY_MS) * DAY_MS;
+    int lo = 0, hi = idx;                 // foerste i med openTime >= dayStart
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (c[mid].openTime >= dayStart) hi = mid; else lo = mid + 1;
+    }
+    *complete = (lo > 0) || histDone || (c[lo].openTime == dayStart);
+    return lo;
+}
+
+// Dagens session: doegnet til det siste lyset.
+static int SessionStart(const Candle* c, int n, long long intervalMs,
+                        BOOL histDone, BOOL* complete) {
+    return SessionStartAt(c, n, n - 1, intervalMs, histDone, complete);
+}
+
+// Hoyeste high og laveste low over [s, n).
+static void SessionHiLo(const Candle* c, int s, int n, double* outHi, double* outLo) {
+    double hi = c[s].high, lo = c[s].low;
+    for (int i = s + 1; i < n; ++i) {
+        if (c[i].high > hi) hi = c[i].high;
+        if (c[i].low  < lo) lo = c[i].low;
+    }
+    *outHi = hi;
+    *outLo = lo;
+}
+
+// VWAP: sum(typisk pris x volum) / sum(volum) fra doegnets start, med typisk
+// pris (H + L + C) / 3 - den vanlige definisjonen paa lys. Stegmaskin som
+// IndState: mates fra sessionens foerste lys, og verdien faller ut per lys.
+// FALSE til det finnes volum aa dele paa. Den som mater, nullstiller ved
+// hvert doegnskifte (se DrawVwap): hvert doegn har sin egen VWAP, saa linja
+// og hover-verdien er definert ogsaa naar utsnittet staar i gaarsdagen.
+typedef struct { double pv; double v; double val; } VwapState;
+
+static void VwapInit(VwapState* s) { s->pv = 0.0; s->v = 0.0; s->val = 0.0; }
+
+static BOOL VwapStep(VwapState* s, const Candle* c) {
+    s->pv += (c->high + c->low + c->close) / 3.0 * c->volume;
+    s->v  += c->volume;
+    if (s->v <= 0.0) return FALSE;
+    s->val = s->pv / s->v;
+    return TRUE;
+}
+
+#ifdef TICKER_PROBE
+// Bare testbygg: VWAP paa ett lys i lysets eget doegn, FALSE naar doegnet
+// ikke er helt i bufferet eller er uten volum. Probe-felt 41 og
+// enhetstestene leser denne.
+static BOOL VwapValueAt(const Candle* c, int n, long long intervalMs,
+                        BOOL histDone, int idx, double* out) {
+    BOOL full = FALSE;
+    int s = SessionStartAt(c, n, idx, intervalMs, histDone, &full);
+    if (s < 0 || !full) return FALSE;
+    VwapState v;
+    VwapInit(&v);
+    BOOL ok = FALSE;
+    for (int i = s; i <= idx; ++i) ok = VwapStep(&v, &c[i]);
+    if (ok) *out = v.val;
     return ok;
 }
 #endif
@@ -2593,6 +2701,83 @@ static BOOL DrawIndicator(HDC hdc, const AppContext* ctx, const ChartRect* g,
     return haveLegend;
 }
 
+// VWAP-linja (fase 27) over utsnittet [i0, i1). Samme kontrakt, samme x og y
+// og samme bolker som DrawIndicator. Forskjellen er forankringen: maskinen
+// mates fra starten av doegnet det foerste tegnede lyset hoerer til, og
+// nullstilles ved hvert doegnskifte. Der brytes ogsaa linja - VWAP for i dag
+// har ingenting med gaarsdagens siste verdi aa gjoere, og en strek mellom de
+// to ville vaert et tall som ikke finnes. Er det eldste doegnet ikke helt i
+// bufferet, tegnes ingenting foer neste doegnskifte.
+static BOOL DrawVwap(HDC hdc, const AppContext* ctx, const ChartRect* g, COLORREF clr,
+                     double dStart, double slot, int i0, int i1,
+                     double maxP, double range,
+                     int legendIdx, double* legendVal) {
+    int n = ctx->candleCount;
+    const Candle* c = ctx->candles;
+    int first = (i0 > 0) ? i0 - 1 : 0;
+    int last  = (i1 < n) ? i1 : n - 1;
+    double yLo = -16.0 * (double)g->ch, yHi = 17.0 * (double)g->ch;
+
+    BOOL live = FALSE;
+    int s = SessionStartAt(c, n, first, ctx->intervalMs, ctx->histDone, &live);
+    if (s < 0) return FALSE;
+    long long nextDay = (c[s].openTime / DAY_MS + 1) * DAY_MS;
+
+    VwapState v;
+    VwapInit(&v);
+    BOOL haveLegend = FALSE;
+    int k = 0;
+    SetDCPenColor(hdc, clr);
+    for (int i = s; i <= last; ++i) {
+        if (c[i].openTime >= nextDay) {
+            if (k >= 2) Polyline(hdc, s_volPts, k);
+            k = 0;
+            VwapInit(&v);
+            live = TRUE;
+            nextDay = (c[i].openTime / DAY_MS + 1) * DAY_MS;
+        }
+        if (!VwapStep(&v, &c[i]) || !live) continue;
+        if (i == legendIdx) { *legendVal = v.val; haveLegend = TRUE; }
+        if (i < first) continue;
+        double yy = ((maxP - v.val) / range) * (double)g->ch;
+        if (yy < yLo) yy = yLo;
+        if (yy > yHi) yy = yHi;
+        s_volPts[k].x = g->left + (int)floor(((double)i - dStart + 0.5) * slot);
+        s_volPts[k].y = g->top + (int)yy;
+        if (++k == IND_BATCH) {
+            Polyline(hdc, s_volPts, k);
+            s_volPts[0] = s_volPts[k - 1];
+            k = 1;
+        }
+    }
+    if (k >= 2) Polyline(hdc, s_volPts, k);
+    return haveLegend;
+}
+
+// En stiplet vannrett linje over [x0, x1) paa rad y (fase 27: dagens hoy og
+// lav). Ikke en PS_DASH-penn: linja tones med dispIndF, og en penn kan ikke
+// skifte farge per bilde uten aa lages paa nytt. Strekene gaar til
+// PolyPolyline i bolker, med DC_PEN - ingen nye GDI-objekter. Moensteret er
+// forankret i anchor (flatens venstre kant), ikke i x0, saa strekene staar
+// stille naar sessionens start glir under panorering. GDI tegner ikke
+// sluttpunktet, saa [a, b) er noeyaktig SESS_DASH_ON piksler.
+static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor) {
+    if (x0 < anchor) x0 = anchor;
+    int x = anchor + ((x0 - anchor) / SESS_DASH_PERIOD) * SESS_DASH_PERIOD;
+    int k = 0;
+    for (; x < x1; x += SESS_DASH_PERIOD) {
+        int a = (x < x0) ? x0 : x;
+        int b = x + SESS_DASH_ON;
+        if (b > x1) b = x1;
+        if (a >= b) continue;
+        s_volPts[k * 2].x     = a; s_volPts[k * 2].y     = y;
+        s_volPts[k * 2 + 1].x = b; s_volPts[k * 2 + 1].y = y;
+        s_volCnt[k++] = 2;
+        if (k == VOL_BATCH) { PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k); k = 0; }
+    }
+    if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
+}
+
 static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     RECT rcAll = { 0, 0, W, H };
     // Vannmerket ligger I bakgrunnen, for rutenett, lys og akser - grafen
@@ -2892,6 +3077,54 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         }
     }
 
+    // --- Dagens hoy og lav (fase 27) ---
+    // Bak lysene, som varsellinjene: en referanse, ikke det som leses. To
+    // stiplede, noeytrale linjer paa hoyeste high og laveste low i dagens
+    // UTC-doegn, fra doegnets foerste lys og inn til aksen - saa linja viser
+    // ogsaa HVOR dagen begynner. Staar utsnittet i gaarsdagen (x-en ligger
+    // til hoyre for flaten), tegnes ingenting, og det samme utenfor
+    // [top, bottom] - samme regel som siste pris og varslene.
+    //
+    // Hoerer til indikatorbryteren (M, MA-pillen, "Indikatorer" i
+    // tray-menyen) og toner med den. Dermed er de AV paa skrivebordet som
+    // standard (fase 26), uten en ny noekkel i registret, og verktoylinja -
+    // som alt er full paa minstebredden - trenger ingen ny pille.
+    // yLine er radene som faktisk ble tegnet; aksemerkene under leser ySess.
+    int    indT = (int)(ctx->dispIndF * 255.0 + 0.5);
+    double sessP[2] = { 0.0, 0.0 };
+    int    ySess[2] = { INT_MIN, INT_MIN };   // aksemerkene; kollisjonsregelen kan stryke dem
+    int    yLine[2] = { INT_MIN, INT_MIN };   // linjene som ble tegnet
+#ifdef TICKER_PROBE
+    LARGE_INTEGER sessQ0, sessQ1, sessQf;
+    QueryPerformanceCounter(&sessQ0);
+#endif
+    if (indT > 0) {
+        BOOL sessFull = FALSE;
+        int  sessS = SessionStart(ctx->candles, n, ctx->intervalMs, ctx->histDone, &sessFull);
+        if (sessS >= 0 && sessFull) {
+            SessionHiLo(ctx->candles, sessS, n, &sessP[0], &sessP[1]);
+            int xs = left + (int)floor(((double)sessS - dStart) * slot);
+            if (xs < edge) {
+                SelectObject(hdc, GetStockObject(DC_PEN));
+                SetDCPenColor(hdc, Blend(CLR_BG, CLR_SESSION, indT));
+                for (int q = 0; q < 2; ++q) {
+                    double yy = ((maxP - sessP[q]) / range) * (double)ch;
+                    if (yy < 0.0 || yy > (double)ch) continue;
+                    int y = top + (int)yy;
+                    if (y < top || y > bottom) continue;
+                    DrawDashLine(hdc, xs, edge, y, left);
+                    ySess[q] = y;
+                    yLine[q] = y;
+                }
+            }
+        }
+    }
+#ifdef TICKER_PROBE
+    QueryPerformanceCounter(&sessQ1);
+    QueryPerformanceFrequency(&sessQf);
+    g_probeSessUs = (sessQ1.QuadPart - sessQ0.QuadPart) * 1000000LL / sessQf.QuadPart;
+#endif
+
     // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
     // stedet for fire egne penner og pensler. Det er fire GDI-objekter
     // mindre; det vedvarende bufferet tar to, saa tallet i hvile gaar ned med
@@ -2942,12 +3175,15 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     //
     // Forklaringen (under) viser verdien paa lyset under traadkorset, ellers
     // paa siste synlige lys. Samme vilkaar som traadkorset bruker.
-    double indVal[2] = { 0.0, 0.0 };
-    BOOL   indOk[2]  = { FALSE, FALSE };
-    int    indT = (int)(ctx->dispIndF * 255.0 + 0.5);
+    //
+    // VWAP (fase 27) er tredje linje i samme blokk, og oeverst: gull over
+    // blaatt og lilla. indVal[2] er verdien paa samme lys som de to andre.
+    double indVal[3] = { 0.0, 0.0, 0.0 };
+    BOOL   indOk[3]  = { FALSE, FALSE, FALSE };
 #ifdef TICKER_PROBE
     LARGE_INTEGER indQ0;
     QueryPerformanceCounter(&indQ0);
+    if (indT <= 0) g_probeIndUs = 0;
 #endif
     if (indT > 0) {
         int legendIdx = i1 - 1;
@@ -2962,15 +3198,22 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         indOk[1] = DrawIndicator(hdc, ctx, &g, IND_EMA_PERIOD, TRUE,
                                  Blend(CLR_BG, CLR_EMA, indT), dStart, slot, i0, i1,
                                  maxP, range, legendIdx, &indVal[1]);
-    }
 #ifdef TICKER_PROBE
-    {
-        LARGE_INTEGER indQ1, indQf;
-        QueryPerformanceCounter(&indQ1);
-        QueryPerformanceFrequency(&indQf);
-        g_probeIndUs = (indQ1.QuadPart - indQ0.QuadPart) * 1000000LL / indQf.QuadPart;
-    }
+        {
+            LARGE_INTEGER indQ1, indQf;
+            QueryPerformanceCounter(&indQ1);
+            QueryPerformanceFrequency(&indQf);
+            g_probeIndUs = (indQ1.QuadPart - indQ0.QuadPart) * 1000000LL / indQf.QuadPart;
+            QueryPerformanceCounter(&sessQ0);
+        }
 #endif
+        indOk[2] = DrawVwap(hdc, ctx, &g, Blend(CLR_BG, CLR_VWAP, indT),
+                            dStart, slot, i0, i1, maxP, range, legendIdx, &indVal[2]);
+#ifdef TICKER_PROBE
+        QueryPerformanceCounter(&sessQ1);
+        g_probeSessUs += (sessQ1.QuadPart - sessQ0.QuadPart) * 1000000LL / sessQf.QuadPart;
+#endif
+    }
 
     // Klippingen MAA vekk for aksetekstene - de ligger i margen til hoyre.
     SelectClipRgn(hdc, NULL);
@@ -3012,11 +3255,25 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                       (ctx->alertHot < 0 || ctx->alertHot >= nA));
         if (ghost) yTag[nTag++] = ctx->axisHotY;
 
+        // Merkene for dagens hoy og lav (fase 27) staar i samme kolonne og
+        // er lavest i rang: et merke under 16 px fra stempelet, et varsel,
+        // spoekelsesmerket eller det andre sessionmerket tegnes ikke (hoy
+        // vinner over lav). Rutenettetikettene viker for dem som for de
+        // andre. Avgjoeres HER, foer etikettene, og tegnes etter varslene.
+        for (int q = 0; q < 2; ++q) {
+            if (ySess[q] == INT_MIN) continue;
+            BOOL hide = (yPill != INT_MIN && abs(ySess[q] - yPill) < 16);
+            for (int t = 0; t < nTag && !hide; ++t) if (abs(ySess[q] - yTag[t]) < 16) hide = TRUE;
+            if (q == 1 && ySess[0] != INT_MIN && abs(ySess[1] - ySess[0]) < 16) hide = TRUE;
+            if (hide) ySess[q] = INT_MIN;
+        }
+
         for (int i = 0; i <= 4; ++i) {
             int y = top + (ch * i) / 4;
             if (yPill != INT_MIN && abs(y - yPill) < 16) continue;
             BOOL hidden = FALSE;
             for (int t = 0; t < nTag; ++t) if (abs(y - yTag[t]) < 16) hidden = TRUE;
+            for (int q = 0; q < 2; ++q) if (ySess[q] != INT_MIN && abs(y - ySess[q]) < 16) hidden = TRUE;
             if (hidden) continue;
             double p = maxP - (range * i) / 4.0;
             swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
@@ -3054,6 +3311,24 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             SetTextColor(hdc, hot ? CLR_BTNHOT : CLR_BG);
             RECT rcAT = { axL, y - 8, axR, y + 8 };
             DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+
+        // --- Merker for dagens hoy og lav (fase 27) ---
+        // Samme flate som de andre merkene, men dempet: boksfargen mot
+        // bakgrunnen og graa tekst, ingen ramme og ingen mettet flate - et
+        // merke man kan klikke paa er rav, og dette er ikke et. Flaten skiller
+        // tallet fra rutenettetikettene, som har samme font og nesten samme
+        // farge. Tones med linjene.
+        for (int q = 0; q < 2; ++q) {
+            if (ySess[q] == INT_MIN) continue;
+            int y = ySess[q];
+            RECT rcS = { edge + 1, y - 8, axR + 3, y + 8 };
+            SetDCBrushColor(hdc, Blend(CLR_BG, CLR_BOX, indT));
+            FillRect(hdc, &rcS, (HBRUSH)GetStockObject(DC_BRUSH));
+            FormatTagPrice(hdc, sessP[q], range, axR - axL, buf, 64);
+            SetTextColor(hdc, Blend(CLR_BG, CLR_SESSION, indT));
+            RECT rcST = { axL, y - 8, axR, y + 8 };
+            DrawTextW(hdc, buf, -1, &rcST, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
         // Spoekelsesmerket: pekeren staar i priskolonnen paa et tomt sted, og
@@ -3170,15 +3445,37 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         if (indOk[1]) swprintf_s(lg + len1, 96 - len1, L"EMA %d  %.2f", IND_EMA_PERIOD, indVal[1]);
         else          swprintf_s(lg + len1, 96 - len1, L"EMA %d  -", IND_EMA_PERIOD);
         lenAll = (int)wcslen(lg);
-        SIZE szAll = { 0, 0 }, sz1 = { 0, 0 };
+        // VWAP (fase 27) er tredje ledd. Faar ikke alle tre plass, faller
+        // VWAP-leddet ut og de to snittene staar som foer; faar ikke de
+        // heller plass, staar ingenting. Hvert ledd helt eller ikke.
+        int len2 = lenAll;
+        if (indOk[2]) swprintf_s(lg + len2, 96 - len2, L"    VWAP  %.2f", indVal[2]);
+        else          swprintf_s(lg + len2, 96 - len2, L"    VWAP  -");
+        int len3 = (int)wcslen(lg);
+        SIZE szAll = { 0, 0 }, sz1 = { 0, 0 }, sz3 = { 0, 0 };
         GetTextExtentPoint32W(hdc, lg, lenAll, &szAll);
         GetTextExtentPoint32W(hdc, lg, len1, &sz1);
+        GetTextExtentPoint32W(hdc, lg, len3, &sz3);
         int lx = left + 6, ly = top + 4;
         if (lx + szAll.cx <= right - 6 && ly + szAll.cy <= bottom) {
+            // Dagens hoy (fase 27) ligger 8 % under flatens topp naar dagens
+            // topp er utsnittets, og paa et lavt panel er det midt i denne
+            // raden: strekene gikk tvers gjennom sifrene (sett i en fangst
+            // ved 560x300). Da - og bare da - faar teksten ugjennomsiktig
+            // bakgrunn, saa tallene staar hele og linja fortsetter bak dem.
+            BOOL struck = FALSE;
+            for (int q = 0; q < 2; ++q)
+                if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
+            if (struck) { SetBkColor(hdc, CLR_BG); SetBkMode(hdc, OPAQUE); }
             SetTextColor(hdc, Blend(CLR_BG, CLR_SMA, indT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
             SetTextColor(hdc, Blend(CLR_BG, CLR_EMA, indT));
             ExtTextOutW(hdc, lx + sz1.cx, ly, 0, NULL, lg + len1, lenAll - len1, NULL);
+            if (lx + sz3.cx <= right - 6) {
+                SetTextColor(hdc, Blend(CLR_BG, CLR_VWAP, indT));
+                ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
+            }
+            if (struck) SetBkMode(hdc, TRANSPARENT);
         }
     }
 
@@ -3309,7 +3606,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     FormatCandleTime(hc->openTime, ctx->intervalMs, tbuf, 24);
 
     // BOX_H: 4 px topp + tidsrad + O/H/L/C/V (fase 21) = 4 + 6 * 13 + 5.
-    const int BOX_W = 104, BOX_H = 87, LINE_H = 13;
+    // Med indikatorene paa (fase 27) kommer tre rader til: SMA, EMA og VWAP
+    // paa lyset under traadkorset - de samme tallene som forklaringen viser,
+    // for legendIdx ER hoverIdx naar denne blokka kjoerer (samme vilkaar).
+    // Radene staar saa lenge linjene synes (indT > 0) og toner med dem, i
+    // linjenes egne farger; et snitt som ikke er definert paa lyset faar en
+    // strek, som i forklaringen.
+    const int indRows = (indT > 0) ? 3 : 0;
+    const int BOX_W = 104, BOX_H = 87 + indRows * 13, LINE_H = 13;
     int bx = hx + 12;
     if (bx + BOX_W > right) bx = hx - 12 - BOX_W;   // flipp til venstre ved kanten
     if (bx < left) bx = left;
@@ -3339,6 +3643,23 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         else        swprintf_s(buf, 64, L"%.2f", val[i]);
         SetTextColor(hdc, (i == 3) ? cclr : CLR_TEXT);
         DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+    }
+
+    // Indikatorradene (fase 27). Merkelappen i linjas farge, verdien i
+    // tekstfargen - begge tonet mot boksen, ikke mot CLR_BG.
+    if (indRows > 0) {
+        const wchar_t* ilbl[3] = { L"SMA", L"EMA", L"VWAP" };
+        const COLORREF iclr[3] = { CLR_SMA, CLR_EMA, CLR_VWAP };
+        for (int i = 0; i < 3; ++i) {
+            ty += LINE_H;
+            RECT rcRow = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
+            SetTextColor(hdc, Blend(CLR_BOX, iclr[i], indT));
+            DrawTextW(hdc, ilbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            if (indOk[i]) swprintf_s(buf, 64, L"%.2f", indVal[i]);
+            else          wcscpy_s(buf, 64, L"-");
+            SetTextColor(hdc, Blend(CLR_BOX, CLR_TEXT, indT));
+            DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+        }
     }
 }
 
@@ -4508,6 +4829,50 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 39: r = (LRESULT)g_probeIndUs; break;
                 // Fase 26: hoyden stempelfonten er bygget for (skrivebordsmodus).
                 case 40: r = g_Ctx.pillFontH; break;
+                // Fase 27: dagens session. 41 er VWAP paa lysindeksen i
+                // lParam, x100, -1 naar den ikke er definert der. 42/43 er
+                // dagens hoy/lav x100. 44 er sessionens foerste lys (-1 =
+                // ingen session), 46 om bufferet rekker tilbake til
+                // doegnskiftet. 45 er tiden sessionblokkene tok i siste
+                // opptegning (us). 47-50 er lyset i lParam, saa proben kan
+                // regne alt selv: aapningstid (sekunder), typisk pris
+                // (H + L + C) / 3, high og low, prisene x100.
+                case 41: case 42: case 43: case 44: case 46: {
+                    BOOL full = FALSE;
+                    int ss = SessionStart(g_Ctx.candles, g_Ctx.candleCount,
+                                          g_Ctx.intervalMs, g_Ctx.histDone, &full);
+                    if (wParam == 44) { r = ss; break; }
+                    if (wParam == 46) { r = full; break; }
+                    if (ss < 0) break;
+                    if (wParam == 41) {
+                        double vv = 0.0;
+                        if (VwapValueAt(g_Ctx.candles, g_Ctx.candleCount, g_Ctx.intervalMs,
+                                        g_Ctx.histDone, (int)lParam, &vv))
+                            r = (LRESULT)floor(vv * 100.0 + 0.5);
+                    } else {
+                        double shi, slo;
+                        SessionHiLo(g_Ctx.candles, ss, g_Ctx.candleCount, &shi, &slo);
+                        r = (LRESULT)floor((wParam == 42 ? shi : slo) * 100.0 + 0.5);
+                    }
+                    break;
+                }
+                case 45: r = (LRESULT)g_probeSessUs; break;
+                case 47: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
+                             ? (LRESULT)(g_Ctx.candles[(int)lParam].openTime / 1000) : -1; break;
+                case 48: {
+                    int ti = (int)lParam;
+                    if (ti >= 0 && ti < g_Ctx.candleCount) {
+                        const Candle* tc = &g_Ctx.candles[ti];
+                        r = (LRESULT)floor((tc->high + tc->low + tc->close) / 3.0 * 100.0 + 0.5);
+                    }
+                    break;
+                }
+                case 49: case 50:
+                    if ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount) {
+                        const Candle* tc = &g_Ctx.candles[(int)lParam];
+                        r = (LRESULT)floor((wParam == 49 ? tc->high : tc->low) * 100.0 + 0.5);
+                    }
+                    break;
                 case 38: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)floor(g_Ctx.candles[(int)lParam].close * 100.0 + 0.5) : -1; break;
                 default: break;
@@ -5384,9 +5749,10 @@ static HMENU BuildTrayMenu(void) {
         // VOL-bryteren (fase 22) - skrivebordsmodus har ingen verktoylinje.
         AppendMenuW(hMenu, MF_STRING | (ShowVolNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_VOLUME, L"Volumstolper	V");
-        // MA-bryteren (fase 25), samme grunn.
+        // MA-bryteren (fase 25), samme grunn. Fra fase 27 baerer den ogsaa
+        // VWAP og dagens hoy/lav, saa den heter det den er.
         AppendMenuW(hMenu, MF_STRING | (ShowIndNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_INDICATORS, L"Glidende snitt	M");
+                    ID_TRAY_INDICATORS, L"Indikatorer	M");
         // Prisvarslene (fase 23) settes i panelets priskolonne, men maa kunne
         // ryddes herfra: skrivebordsmodus tegner linjene og har ingen input.
         // Antallet gjelder symbolet som vises. Graatt, ikke borte, uten
@@ -5533,6 +5899,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // fyrer ingenting nytt: varselet er borte etter foerste gang.
             CheckAlerts(&g_Ctx, price);
             if (g_Ctx.hPopup && IsWindowVisible(g_Ctx.hPopup)) {
+                // Dagens session (fase 27): VWAP og dagens hoy/lav trenger
+                // lysene tilbake til 00:00 UTC, og de 360 fra foerste henting
+                // er seks timer ved 1m. Rekker bufferet ikke tilbake, ber vi
+                // om eldre lys - samme bakfylling som et drag i veggen (fase
+                // 18). Hoeyst fire hentinger (1440 lys ved 1m), og bare mens
+                // indikatorene er paa i modusen vi staar i: skrivebordet, der
+                // de er av som standard, henter ingenting ekstra.
+                // RequestHistory er idempotent og stopper paa histDone.
+                if (ShowIndNow(&g_Ctx)) {
+                    BOOL sessFull = FALSE;
+                    EnterCriticalSection(&g_Ctx.lock);
+                    int sessS = SessionStart(g_Ctx.candles, g_Ctx.candleCount,
+                                             g_Ctx.intervalMs, g_Ctx.histDone, &sessFull);
+                    LeaveCriticalSection(&g_Ctx.lock);
+                    if (sessS >= 0 && !sessFull) RequestHistory(&g_Ctx);
+                }
                 // Klokka maa ga mens vi er frakoblet, ellers fryser
                 // sekundtelleren i undertittelen.
                 // Nye lys kan flytte Y-maalet, og frakoblet maa telleren ga.
