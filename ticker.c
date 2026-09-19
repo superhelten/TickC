@@ -589,6 +589,10 @@ static volatile LONG g_probeConnDrops = 0;
 // Bare testbygg (fase 26): WM_DISPLAYCHANGE sett paa hovedvinduet. Leses med
 // WM_APP_PROBE 114 der.
 static volatile LONG g_probeDisplayChanges = 0;
+// Bare testbygg (fase 27): tiden sessionblokkene (dagens hoy/lav og VWAP)
+// tok i siste fulle opptegning, i mikrosekunder. WM_APP_PROBE 45. Maalt for
+// seg av samme grunn som g_probeIndUs.
+static LONGLONG g_probeSessUs = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -804,6 +808,86 @@ static BOOL IndValueAt(const Candle* c, int n, int period, BOOL ema, int idx, do
     BOOL ok = FALSE;
     for (int i = IndFeedStart(idx, period, ema); i <= idx; ++i) ok = IndStep(&s, c, i);
     if (ok) *out = s.val;
+    return ok;
+}
+#endif
+
+#ifdef TICKER_PROBE   // fase 27, del 1: bare probe-feltene leser disse enda
+// Dagens session, VWAP og dagens hoy/lav (fase 27). Rene funksjoner av
+// candles[], som snittene over: ingenting lagres, alt regnes ut under
+// opptegningen.
+//
+// Sessionen er UTC-DOEGNET til det siste lyset - Binance sine dagslys og
+// 24-timerstall bryter ved 00:00 UTC, og det samme gjoer VWAP hos Bloomberg
+// og TradingView. Ikke det synlige utsnittet: PriceRange legger 8 % luft
+// rundt utsnittets hoy og lav, saa to linjer paa utsnittets ekstremer ville
+// staatt paa noeyaktig samme sted i hvert eneste bilde, og en VWAP forankret
+// i foerste synlige lys ville hoppet for hvert lys under panorering (samme
+// avgjoerelse som tidsaksen: forankret i tiden, ikke i indeksen).
+//
+// SessionStart gir indeksen til doegnets foerste lys, -1 naar sessionen ikke
+// finnes: tomt buffer, eller lys paa et doegn eller mer (da ER lyset
+// sessionen, og hoy/lav staar alt i hover-boksen). Binaersoek - openTime er
+// sortert, og et lineaert soek bakover ville vaert 1440 64-bits
+// sammenlikninger per bilde sent paa doegnet ved 1m.
+// *complete: bufferet rekker tilbake til doegnets start. Det gjoer det naar
+// det ligger et eldre lys foran, naar foerste lys aapner paa doegnskiftet,
+// eller naar historikken er slutt. Er sessionen ufullstendig, tegnes
+// ingenting: en "dagens hoy" regnet av de siste seks timene er et feil tall.
+#define DAY_MS 86400000LL
+
+static int SessionStart(const Candle* c, int n, long long intervalMs,
+                        BOOL histDone, BOOL* complete) {
+    *complete = FALSE;
+    if (n <= 0 || intervalMs <= 0 || intervalMs >= DAY_MS) return -1;
+    long long dayStart = (c[n - 1].openTime / DAY_MS) * DAY_MS;
+    int lo = 0, hi = n - 1;               // foerste i med openTime >= dayStart
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (c[mid].openTime >= dayStart) hi = mid; else lo = mid + 1;
+    }
+    *complete = (lo > 0) || histDone || (c[lo].openTime == dayStart);
+    return lo;
+}
+
+// Hoyeste high og laveste low over [s, n).
+static void SessionHiLo(const Candle* c, int s, int n, double* outHi, double* outLo) {
+    double hi = c[s].high, lo = c[s].low;
+    for (int i = s + 1; i < n; ++i) {
+        if (c[i].high > hi) hi = c[i].high;
+        if (c[i].low  < lo) lo = c[i].low;
+    }
+    *outHi = hi;
+    *outLo = lo;
+}
+
+// VWAP: sum(typisk pris x volum) / sum(volum) fra sessionens start, med
+// typisk pris (H + L + C) / 3 - den vanlige definisjonen paa lys. Stegmaskin
+// som IndState: mates fra sessionens foerste lys, og verdien faller ut per
+// lys. FALSE til det finnes volum aa dele paa.
+typedef struct { double pv; double v; double val; } VwapState;
+
+static void VwapInit(VwapState* s) { s->pv = 0.0; s->v = 0.0; s->val = 0.0; }
+
+static BOOL VwapStep(VwapState* s, const Candle* c) {
+    s->pv += (c->high + c->low + c->close) / 3.0 * c->volume;
+    s->v  += c->volume;
+    if (s->v <= 0.0) return FALSE;
+    s->val = s->pv / s->v;
+    return TRUE;
+}
+#endif
+
+#ifdef TICKER_PROBE
+// Bare testbygg: VWAP paa ett lys, FALSE foer sessionens start eller uten
+// volum. Probe-felt 41 og enhetstestene leser denne.
+static BOOL VwapValueAt(const Candle* c, int n, int s, int idx, double* out) {
+    if (s < 0 || idx < s || idx >= n) return FALSE;
+    VwapState v;
+    VwapInit(&v);
+    BOOL ok = FALSE;
+    for (int i = s; i <= idx; ++i) ok = VwapStep(&v, &c[i]);
+    if (ok) *out = v.val;
     return ok;
 }
 #endif
@@ -4508,6 +4592,49 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 39: r = (LRESULT)g_probeIndUs; break;
                 // Fase 26: hoyden stempelfonten er bygget for (skrivebordsmodus).
                 case 40: r = g_Ctx.pillFontH; break;
+                // Fase 27: dagens session. 41 er VWAP paa lysindeksen i
+                // lParam, x100, -1 naar den ikke er definert der. 42/43 er
+                // dagens hoy/lav x100. 44 er sessionens foerste lys (-1 =
+                // ingen session), 46 om bufferet rekker tilbake til
+                // doegnskiftet. 45 er tiden sessionblokkene tok i siste
+                // opptegning (us). 47-50 er lyset i lParam, saa proben kan
+                // regne alt selv: aapningstid (sekunder), typisk pris
+                // (H + L + C) / 3, high og low, prisene x100.
+                case 41: case 42: case 43: case 44: case 46: {
+                    BOOL full = FALSE;
+                    int ss = SessionStart(g_Ctx.candles, g_Ctx.candleCount,
+                                          g_Ctx.intervalMs, g_Ctx.histDone, &full);
+                    if (wParam == 44) { r = ss; break; }
+                    if (wParam == 46) { r = full; break; }
+                    if (ss < 0) break;
+                    if (wParam == 41) {
+                        double vv = 0.0;
+                        if (VwapValueAt(g_Ctx.candles, g_Ctx.candleCount, ss, (int)lParam, &vv))
+                            r = (LRESULT)floor(vv * 100.0 + 0.5);
+                    } else {
+                        double shi, slo;
+                        SessionHiLo(g_Ctx.candles, ss, g_Ctx.candleCount, &shi, &slo);
+                        r = (LRESULT)floor((wParam == 42 ? shi : slo) * 100.0 + 0.5);
+                    }
+                    break;
+                }
+                case 45: r = (LRESULT)g_probeSessUs; break;
+                case 47: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
+                             ? (LRESULT)(g_Ctx.candles[(int)lParam].openTime / 1000) : -1; break;
+                case 48: {
+                    int ti = (int)lParam;
+                    if (ti >= 0 && ti < g_Ctx.candleCount) {
+                        const Candle* tc = &g_Ctx.candles[ti];
+                        r = (LRESULT)floor((tc->high + tc->low + tc->close) / 3.0 * 100.0 + 0.5);
+                    }
+                    break;
+                }
+                case 49: case 50:
+                    if ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount) {
+                        const Candle* tc = &g_Ctx.candles[(int)lParam];
+                        r = (LRESULT)floor((wParam == 49 ? tc->high : tc->low) * 100.0 + 0.5);
+                    }
+                    break;
                 case 38: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)floor(g_Ctx.candles[(int)lParam].close * 100.0 + 0.5) : -1; break;
                 default: break;
