@@ -3167,6 +3167,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     int    yLvl[LVL_COUNT];    // aksemerkene; kollisjonsregelen kan stryke dem
     int    yLine[LVL_COUNT];   // linjene som ble tegnet
     for (int q = 0; q < LVL_COUNT; ++q) { yLvl[q] = INT_MIN; yLine[q] = INT_MIN; }
+    int    lvlXs = left;       // der nivaalinjene begynner (merkelappene, fase 29)
 #ifdef TICKER_PROBE
     LARGE_INTEGER sessQ0, sessQ1, sessQf, prevQ0, prevQ1;
     QueryPerformanceCounter(&sessQ0);
@@ -3193,6 +3194,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 #ifdef TICKER_PROBE
             QueryPerformanceCounter(&prevQ1);
 #endif
+            lvlXs = (xs > left) ? xs : left;
             SelectObject(hdc, GetStockObject(DC_PEN));
             for (int q = 0; q < LVL_COUNT; ++q) {
                 if (!lvlOn[q]) continue;
@@ -3327,6 +3329,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // Fase 14: ingen maaleverdier paa skrivebordet. Kolonnen finnes ikke der
     // heller - axL ligger utenfor flaten naar geometrien gaar kant til kant.
     int yPill = INT_MIN;
+    int yCross = INT_MIN;   // traadkorsmerkets rad naar det skal tegnes (fase 29)
     if (!g_desktopMode) {
         {
             double lp = ctx->candles[n - 1].close;
@@ -3336,8 +3339,25 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         // Varselmerkene (fase 23) og spoekelsesmerket under pekeren ligger i
         // samme kolonne og er like hoye, saa de faar samme kollisjonsregel
         // som stempelet: en etikett under 16 px unna tegnes ikke.
-        int yTag[ALERT_MAX + 1], nTag = 0;
+        int yTag[ALERT_MAX + 2], nTag = 0;
         int sA = ctx->symIdx, nA = ctx->alertCount[sA];
+        // Traadkorsets aksemerke (fase 29) er det eneste merket som flytter
+        // seg med haanda, og det hadde ingen kollisjonsregel: sto pekeren
+        // 1-15 px fra en etikett, stakk en stripe av tallet fram under det.
+        // Rangen er stempelet, saa traadkorsmerket, saa resten. Samme
+        // synlighetsproeve og samme klemming som traadkorsblokka nederst;
+        // under 16 px fra stempelet tegnes ikke traadkorsmerket (siste pris
+        // er tallet som aldri skal kuttes), og da viker heller ingen for det.
+        if (ctx->hoverIdx >= 0 && ctx->hoverIdx < n) {
+            double hrelT = (double)ctx->hoverIdx - dStart;
+            if (hrelT >= 0.0 && hrelT < dCount) {
+                int hyT = ctx->hoverY;
+                if (hyT < top) hyT = top;
+                if (hyT > bottom) hyT = bottom;
+                if (yPill == INT_MIN || abs(hyT - yPill) >= 16) yCross = hyT;
+            }
+        }
+        if (yCross != INT_MIN) yTag[nTag++] = yCross;
         for (int a = 0; a < nA; ++a) {
             int y = AlertY(ctx, &g, fabs(ctx->alerts[sA][a]));
             if (y >= top && y <= bottom) yTag[nTag++] = y;
@@ -3396,7 +3416,8 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             // kuttet paa langs. Samme regel som etikettene: et avkuttet tall
             // er verre enn ikke noe tall (sett i PrintWindow: "81034.00"
             // halvveis under stempelet). Flaten tegnes, teksten ikke.
-            BOOL covered = (yPill != INT_MIN && abs(y - yPill) < 16);
+            BOOL covered = (yPill != INT_MIN && abs(y - yPill) < 16) ||
+                           (yCross != INT_MIN && abs(y - yCross) < 16);
             for (int b = a + 1; b < nA && !covered; ++b) {
                 int yb = AlertY(ctx, &g, fabs(ctx->alerts[sA][b]));
                 if (yb >= top && yb <= bottom && abs(y - yb) < 16) covered = TRUE;
@@ -3532,7 +3553,11 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // som vannmerket under dem. Ikke paa skrivebordet (fase 14: ingen
     // maaleverdier der), og bare naar HELE teksten faar plass i flaten -
     // samme regel som prosenten i headeren: et avkuttet tall er et feil tall.
+#ifdef TICKER_PROBE
+    if (!(indT > 0 && !g_desktopMode)) g_probeLblMask = 0;
+#endif
     if (indT > 0 && !g_desktopMode) {
+        RECT rcLegend = { 0, 0, 0, 0 };   // tom naar forklaringen ikke fikk plass
         wchar_t lg[96];
         int len1, lenAll;
         if (indOk[0]) swprintf_s(lg, 96, L"SMA %d  %.2f    ", IND_SMA_PERIOD, indVal[0]);
@@ -3572,7 +3597,59 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                 ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
             }
             if (struck) SetBkMode(hdc, TRANSPARENT);
+            rcLegend.left = lx; rcLegend.top = ly;
+            rcLegend.right = lx + sz3.cx; rcLegend.bottom = ly + szAll.cy;
         }
+
+        // --- Merkelapper paa nivaalinjene (fase 29) ---
+        // Fem vannrette linjer uten navn maatte leses av moensteret. Lappen
+        // staar ved linjas VENSTRE ende - ved aksen staar de nyeste lysene,
+        // og aksemerket baerer tallet der - rett over linja, under den naar
+        // det ikke er rom over. Handelssjargongen, som VWAP og O H L C ellers
+        // i panelet: high/low of day, previous day's close/high/low.
+        // HER og ikke i nivaablokka: den tegnes bak lysene, og tekst der
+        // ville blitt overmalt. Aksefonten (valgt over), linjas farge, tonet.
+        // Teksten roerer aldri linjas egen rad eller radene inntil den, saa
+        // strekmoensteret staar rent. I rang: en lapp som ville truffet
+        // forklaringen eller en lapp foran seg i rangen tegnes ikke - to
+        // nivaaer fire piksler fra hverandre faar en lapp, ikke to oppaa
+        // hverandre. Under 200 px flate faller alle ut.
+        static const wchar_t* const LVL_NAME[LVL_COUNT] = { L"HOD", L"LOD", L"PDC", L"PDH", L"PDL" };
+#ifdef TICKER_PROBE
+        LARGE_INTEGER lblQ0, lblQ1, lblQf;
+        QueryPerformanceCounter(&lblQ0);
+        g_probeLblMask = 0;
+#endif
+        if (right - left >= 200) {
+            RECT placed[LVL_COUNT + 1];
+            int  nPlaced = 0;
+            if (rcLegend.right > rcLegend.left) placed[nPlaced++] = rcLegend;
+            for (int q = 0; q < LVL_COUNT; ++q) {
+                if (yLine[q] == INT_MIN) continue;
+                SIZE szN = { 0, 0 };
+                GetTextExtentPoint32W(hdc, LVL_NAME[q], 3, &szN);
+                RECT rcN = { lvlXs + 4, yLine[q] - 2 - szN.cy, lvlXs + 4 + szN.cx, yLine[q] - 2 };
+                if (rcN.top < top) { rcN.top = yLine[q] + 3; rcN.bottom = rcN.top + szN.cy; }
+                if (rcN.bottom > bottom || rcN.right > right) continue;
+                BOOL hit = FALSE;
+                for (int t = 0; t < nPlaced && !hit; ++t) {
+                    RECT tmp;
+                    if (IntersectRect(&tmp, &rcN, &placed[t])) hit = TRUE;
+                }
+                if (hit) continue;
+                placed[nPlaced++] = rcN;
+                SetTextColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
+                ExtTextOutW(hdc, rcN.left, rcN.top, 0, NULL, LVL_NAME[q], 3, NULL);
+#ifdef TICKER_PROBE
+                g_probeLblMask |= (1 << q);
+#endif
+            }
+        }
+#ifdef TICKER_PROBE
+        QueryPerformanceCounter(&lblQ1);
+        QueryPerformanceFrequency(&lblQf);
+        g_probeLblUs = (lblQ1.QuadPart - lblQ0.QuadPart) * 1000000LL / lblQf.QuadPart;
+#endif
     }
 
     // --- Siste pris: stiplet linje + aksestempel ---
@@ -3668,6 +3745,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // --- Crosshair + hover-boks ---
     // Bundet mot den SYNLIGE flaten, ikke mot maalutsnittet - de faller fra
     // hverandre midt i en animasjon.
+#ifdef TICKER_PROBE
+    g_probeCrossTag = 0;
+#endif
     if (ctx->hoverIdx < 0 || ctx->hoverIdx >= n) return;
     double hrel = (double)ctx->hoverIdx - dStart;
     if (hrel < 0.0 || hrel >= dCount) return;
@@ -3685,15 +3765,21 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     MoveToEx(hdc, left, hy, NULL);     LineTo(hdc, edge, hy);
     SelectObject(hdc, hPrev);
 
-    // Prisetikett pa hoyreaksen der pekeren star
-    double hp = maxP - ((double)(hy - top) / (double)ch) * range;
-    swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
-    RECT rcTag = { edge + 1, hy - 8, axR + 3, hy + 8 };
-    FillRect(hdc, &rcTag, ctx->brBoxEdge);
-    SelectObject(hdc, ctx->hFontAxis);
-    SetTextColor(hdc, CLR_TEXT);
-    RECT rcTagTxt = { axL, hy - 8, axR, hy + 8 };
-    DrawTextW(hdc, buf, -1, &rcTagTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    // Prisetikett pa hoyreaksen der pekeren star. Ikke naar den ville dekket
+    // stempelet delvis (fase 29, se yCross over): linja tegnes, merket ikke.
+    if (yCross != INT_MIN) {
+        double hp = maxP - ((double)(hy - top) / (double)ch) * range;
+        swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
+        RECT rcTag = { edge + 1, hy - 8, axR + 3, hy + 8 };
+        FillRect(hdc, &rcTag, ctx->brBoxEdge);
+        SelectObject(hdc, ctx->hFontAxis);
+        SetTextColor(hdc, CLR_TEXT);
+        RECT rcTagTxt = { axL, hy - 8, axR, hy + 8 };
+        DrawTextW(hdc, buf, -1, &rcTagTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
+#ifdef TICKER_PROBE
+    g_probeCrossTag = (yCross != INT_MIN);
+#endif
 
     // Hover-boks med tid + OHLC. Tilbake til den vanlige lille fonten:
     // LINE_H = 13 er maalt paa den, og aksefonten er 15 px hoy.
