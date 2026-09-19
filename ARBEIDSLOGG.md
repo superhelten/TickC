@@ -64,6 +64,9 @@ skrivebordet er urørt. Bufferet bakfyller seg selv til døgnskiftet.
 **Fase 28** legger gårsdagens nivåer ved siden av: forrige UTC-døgns høy, lav
 og sluttkurs som tre kjøligere, stiplede linjer med dempede aksemerker, bak
 samme bryter — og bakfyllingen går nå til *forrige* døgnskifte.
+**Fase 29** gjør nivåene lesbare: merkelapper (HOD, LOD, PDC, PDH, PDL) ved
+linjenes venstre ende, og trådkorsets aksemerke får plass i kolonnens rang,
+så det ikke lenger kutter tallet under seg.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -88,12 +91,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-19-ticker-indikatorer.md` og
 `docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md` og
 `docs/superpowers/plans/2026-09-19-ticker-bloomberg-essentials.md` og
-`docs/superpowers/plans/2026-09-19-ticker-gaarsdagens-nivaaer.md`. Design:
+`docs/superpowers/plans/2026-09-19-ticker-gaarsdagens-nivaaer.md` og
+`docs/superpowers/plans/2026-09-19-ticker-lesbare-nivaaer.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~6410 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~6500 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -116,7 +120,8 @@ den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
 `[ + ]` — ellers feiler
 `LNK1104: cannot open file 'ticker.exe'`.
 
-Fotavtrykk: ~3,5 MB private bytes, 200 KB exe etter fase 28 (204 800 byte;
+Fotavtrykk: ~3,5 MB private bytes, 201 KB exe etter fase 29 (205 824 byte;
+204 800 etter fase 28,
 203 776 etter fase 27,
 199 680 etter fase 26, 199 168 etter fase 25, 195 584 etter fase 24;
 195 072 etter fase 23, 187 KB etter fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
@@ -2834,6 +2839,50 @@ etter 00:00 er gårsdagen «resten av bufferet, ufullstendig», og bakfyllingen
 starter på nytt), et hull i Binance' historikk (enhetstestet), og bakfylling
 under nettverksfeil.
 
+### Fase 29 — lesbare nivåer: merkelapper og et trådkorsmerke som ikke kutter tall
+
+Plan: `docs/superpowers/plans/2026-09-19-ticker-lesbare-nivaaer.md`. Gren
+`fase29-lesbare-nivaaer`, flettet inn med `--no-ff`. Mandatet var «ok kjør».
+To lesbarhetsfeil ble valgt foran nye indikatorer: fase 28 etterlot fem
+vannrette linjer uten navn, og trådkorsets aksemerke — det eneste merket som
+flytter seg med hånda — var det eneste uten kollisjonsregel.
+
+**Merkelappene.** HOD, LOD, PDC, PDH, PDL (handelssjargongen, som `VWAP` og
+`O H L C V` ellers) ved linjas *venstre* ende, `max(xs, left) + 4`, rett
+over linja og under den når det ikke er rom over. Ikke ved aksen: der står
+de nyeste lysene, og aksemerket bærer tallet. Tegnes i forklaringens blokk,
+ikke i nivåblokka — den ligger bak lysene, og tekst der ville blitt overmalt.
+Aksefonten, linjas farge, tonet med `dispIndF`; teksten slutter to rader over
+linja, så strekmønsteret og pikselprobene står rene. Kollisjon på
+**rektangler i rang**, ikke på y-avstand (aksefonten er høyere enn 12 px):
+en lapp som ville truffet forklaringen eller en lapp foran seg i rangen,
+tegnes ikke. Under 200 px flate faller alle ut. Ikke på skrivebordet.
+
+**Trådkorsmerket i rangen:** stempelet, så trådkorsmerket, så resten.
+`yCross` regnes ved siden av `yPill` med samme synlighetsprøve og klemming
+som trådkorsblokka, og går inn i `yTag[]`: rutenettetiketter og nivåmerker
+under 16 px unna tegnes ikke, et varselmerke beholder flaten og mister
+tallet. Under 16 px fra *stempelet* tegnes ikke trådkorsmerket selv — siste
+pris er tallet som aldri skal kuttes, og hover-boksen bærer lysets tall.
+Linja tegnes som før. Pekeren i aksekolonnen gir `hoverIdx = −1`
+(`HitCandle`), så spøkelsesmerket og trådkorsmerket finnes aldri samtidig.
+
+**Verifisert.** `probe_lbl.c` (1280×720, 15m, ekte peker for hover):
+**28/28 i to kjøringer**, rød mot commit 1: **5 FAIL** — blant dem **101
+tekstpiksler av en avkuttet etikett** i stripa over trådkorsmerket (pekeren
+11 px under etiketten) og 1139 px trådkorsmerke oppå stempelet. Grønn: 0
+piksler i stripa, merket står (1143 px), 40 px unna står etiketten hel (94
+px); 9 px fra stempelet: 0 px trådkorsmerke, felt 58 = 0. Felt 57 = 0x1B:
+HOD, LOD, PDH og PDL fikk lapp (64–93 tekstpiksler hver, 0 px på naboradene,
+lengste løp på linjas rad 6 og 2 som før), PDC vek for LOD 3 px unna.
+**Kostnad (felt 59): 1 µs per bilde.** GDI/USER **32/14 før og etter**.
+Regresjon: `probe_prev` 52/52, `probe_sess` 52/52, `probe_ind` 54/54,
+`probe_desk` 49/49. Sett på: 1280×720 og 560×300.
+**Exe 204 800 → 205 824 byte (+1 024)**, commit 1: 0, `/TP` byte-identisk.
+
+**Ikke testet:** trådkorsmerket mot et *varselmerke* og et nivåmerke er lest,
+ikke fanget (samme `yTag`-løkke som rutenettetikettene, som er fanget).
+
 ---
 
 ## Kjente begrensninger
@@ -2978,18 +3027,20 @@ under nettverksfeil.
 - **Gårsdagens nivåer synes sjelden i standardutsnittet ved 1m** (fase 28).
   300 minutter av i dag har et smalt prisområde, og et nivå utenfor det
   tegnes ikke — heller ikke som markør i kanten, samme regel som varslene og
-  dagens høy/lav. Zoom ut, eller bytt til 15m/1t. Linjene har ingen
-  merkelapp: høyest er høy, lavest er lav, og den lange streken er slutt.
+  dagens høy/lav. Zoom ut, eller bytt til 15m/1t.
 - **To nivåer få piksler fra hverandre tegnes begge** (fase 28; sett i
   fangsten: gårsdagens slutt 4 px over dagens lav). Det er to tall, og
-  avstanden er informasjon; aksemerket til det lavest rangerte viker.
+  avstanden er informasjon; aksemerket og merkelappen (fase 29) til det
+  lavest rangerte viker, så den linja står uten navn til nivåene skilles.
+- **Merkelappene er gjennomsiktig tekst over lysene** (fase 29). Ved dagens
+  første lys kan en veke gå gjennom en bokstav (sett: «PDH» ved 15m). En
+  ugjennomsiktig flate ville visket ut lysene under; teksten er tre store
+  bokstaver og tåler det.
+- **Trådkorsmerket vises ikke under 16 px fra siste-pris-stempelet** (fase
+  29). Trådkorslinja og hover-boksen står; tallet på aksen er da stempelets.
 - **Åpnet sent i døgnet ved 1m hentes opptil 2880 lys** (fase 28, åtte
   hentinger på 3–4 s) når indikatorene er på. EMA-såpunktet flytter seg
   tilsvarende bakover (se EMA-punktet over); private bytes er uendret.
-- **Trådkorsets aksemerke skjuler ikke rutenettetiketten under seg** (sett i
-  fangsten i fase 27, eldre enn fasen): står pekeren 8–15 px fra en etikett,
-  stikker en stripe av tallet fram under merket. Stempelet, varslene og
-  sessionmerkene har kollisjonsregelen; trådkorset har den ikke.
 - **Oppvåkning fra dvale er bare prøvd med en sendt melding** (fase 24).
   `PBT_APMRESUMEAUTOMATIC` vekker tråden og slipper forbindelsen, men ekte
   dvale kan ikke drives fra en probe. Er nettet ikke oppe ved første forsøk,
@@ -3525,20 +3576,33 @@ under nettverksfeil.
 93. **`\t` i en Python-heredoc er en tabulator.** `"$s\ticker_test.exe"`
     skrevet fra en bash-heredoc ble `$s<TAB>icker_test.exe`. Samme klasse som
     41/55: skript med omvendt skråstrek skrives med Write-verktøyet.
+94. **Tekst som skal ligge over lysene, kan ikke tegnes i blokka som ligger
+    bak dem.** Nivålinjene (fase 27/28) tegnes før lysløkka; merkelappene
+    (fase 29) måtte bære `yLine[]` og `lvlXs` ned til forklaringens blokk.
+    Spør «hva tegnes etter dette?» før ny tekst får en plass i `DrawChart`.
+95. **Kollisjon mellom tekster avgjøres på rektangler, ikke på y-avstand.**
+    Første utkast til merkelappene sa «under 12 px unna» — aksefonten er
+    15–16 px høy, og en lapp kan stå over eller under linja si. Aksemerkene
+    kan bruke `abs(dy) < 16` fordi de alle er 16 px høye og står i én kolonne.
+96. **`CountNear` (±48 per kanal) skiller ikke `CLR_AXIS` fra `CLR_TEXT`
+    eller `CLR_SESSION`.** En stripe som skal være tom for etikett-tekst må
+    ligge *helt* utenfor trådkorsmerkets flate, og etiketten som prøves må
+    velges fra en fangst (den kan ha veket for stempelet), minst 40 px fra
+    stempelet og nivåene.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak23` ligger igjen** (19.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 28, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak22` er slettet: de dekket fase 1 til 27, og den
+**Bare `ticker.c.bak24` ligger igjen** (19.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 29, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak23` er slettet: de dekket fase 1 til 28, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27) og `.bak23` (fase 28). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27), `.bak23` (fase 28) og `.bak24` (fase 29). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
