@@ -4874,7 +4874,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // LRESULT er 32 bit paa x86, og proben kjoerer BTC (1m-volum
                 // i tierklassen), saa to desimaler faar plass med god margin.
                 case 14: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
-                             ? (LRESULT)(g_Ctx.candles[(int)lParam].volume * 100.0) : -1; break;
+                             ? (LRESULT)floor(g_Ctx.candles[(int)lParam].volume * 100.0 + 0.5) : -1; break;   // avrundet, ikke trunkert (fallgruve 91)
                 case 15: r = (LRESULT)g_probePaintUs; break;
                 // Fase 22: verktoylinja.
                 case 16: r = g_Ctx.ivIdx; break;

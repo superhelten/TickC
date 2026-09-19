@@ -2815,16 +2815,19 @@ sessionblokka 26 µs (21 før), snittene 48 µs med 2880 lys i bufferet.
 GDI/USER **32/14 før og etter**. Enhetstester `unit_prev` 27/27 (rød mot
 master: bygger ikke). Regresjon: `probe_ind` 54/54, `probe_desk` 49/49 (**0
 px `CLR_PREV` og ingen bakfylling på skrivebordet som standard**; 545 px og
-2881 lys når indikatorene skrus på der), `probe_sess` 52/52 etter toleranserettelsen under (to sjekker om en
+2881 lys når indikatorene skrus på der), `probe_sess` 52/52 etter rettelsen av felt 14 under (to sjekker om en
 ufullstendig gårsdag faller bort nå som den alltid hentes). Sett på:
 fangst ved 1280×720 og 560×300 (15m).
 **Exe 203 776 → 204 800 byte (+1 024)**, commit 1: 0, `/TP` byte-identisk.
 
 **Funnet underveis:** `probe_sess` (fase 27) feilet på «VWAP innen 5 cent»
-med 5,7 cent. VWAP-koden er urørt; proben regner av felt avrundet til
-hundredeler, og feilen vokser med sessionens lengde — fase 27 kjørte kl. 06
-UTC med ~360 lys i sessionen, denne kl. 19 med 1152. Toleransen er nå 15
-cent (fallgruve 91).
+med 5,7 cent. VWAP-koden er urørt. Avvikene var ensidige (0, +4,0, +2,6,
++5,7 cent), altså systematiske: probe-felt 14 **trunkerte** volumet til
+hundredeler i stedet for å avrunde, så hver vekt i probens sum var litt for
+liten, og skjevheten vokser med antall lys — fase 27 kjørte kl. 06 UTC med
+~360 lys i sessionen, denne kl. 19 med 1152. Felt 14 avrunder nå (bare
+testbygget; prod-exe uendret), og avviket er under 0,5 cent på alle fire lys
+med toleransen tilbake på 5 cent (fallgruve 91).
 
 **Ikke testet:** et ekte døgnskifte med panelet åpent (enhetstestet: rett
 etter 00:00 er gårsdagen «resten av bufferet, ufullstendig», og bakfyllingen
@@ -3503,11 +3506,16 @@ under nettverksfeil.
     lys hopper for hvert lys under panorering, og høy/lav for utsnittet står
     alltid 8 % fra kantene (`PriceRange`). Les hva koden gjør med utsnittet
     før et tall forankres i det.
-91. **En probe som regner av avrundede felt, har en toleranse som vokser
-    med antall ledd.** `probe_sess` summerer typisk pris × volum av felt i
-    hundredeler; 5 cent holdt med 360 lys i sessionen (fase 27, kl. 06 UTC)
-    og røk med 1152 (fase 28, kl. 19: 5,7 cent). Koden var urørt. Kjør en
-    klokkeavhengig probe sent i døgnet også, ikke bare «etter 06:00» (89).
+91. **Et probe-felt skal avrunde, ikke trunkere — og ensidige avvik er
+    aldri avrundingsstøy.** Felt 14 var `(LRESULT)(volume * 100.0)`. Probens
+    VWAP holdt 5 cent med 360 lys i sessionen (fase 27, kl. 06 UTC) og røk
+    med 1152 (fase 28, kl. 19: 0, +4,0, +2,6, +5,7 cent — alle samme vei).
+    Første forklaring var «avrundingsfeil som vokser med N», og toleransen
+    ble løftet til 15 cent; men avrunding av prisen til cent kan aldri gi mer
+    enn 0,5 cent i et vektet snitt, uansett N. Trunkerte *vekter* kan.
+    `floor(x * 100 + 0.5)` i feltet: under 0,5 cent. Løft ikke en toleranse
+    før fortegnet på avvikene er sett på, og kjør klokkeavhengige prober
+    sent i døgnet også (89).
 92. **Når en venteregel i appen utvides, må probene som venter på den gamle
     regelen utvides samtidig.** Fase 27-probene ventet på felt 46 (dagens
     døgn dekket) og leste så indekser; fra fase 28 går bakfyllingen videre,
