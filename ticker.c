@@ -3089,10 +3089,11 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     // tray-menyen) og toner med den. Dermed er de AV paa skrivebordet som
     // standard (fase 26), uten en ny noekkel i registret, og verktoylinja -
     // som alt er full paa minstebredden - trenger ingen ny pille.
-    // ySess er radene som faktisk ble tegnet; aksemerkene under leser dem.
+    // yLine er radene som faktisk ble tegnet; aksemerkene under leser ySess.
     int    indT = (int)(ctx->dispIndF * 255.0 + 0.5);
     double sessP[2] = { 0.0, 0.0 };
-    int    ySess[2] = { INT_MIN, INT_MIN };
+    int    ySess[2] = { INT_MIN, INT_MIN };   // aksemerkene; kollisjonsregelen kan stryke dem
+    int    yLine[2] = { INT_MIN, INT_MIN };   // linjene som ble tegnet
 #ifdef TICKER_PROBE
     LARGE_INTEGER sessQ0, sessQ1, sessQf;
     QueryPerformanceCounter(&sessQ0);
@@ -3113,6 +3114,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                     if (y < top || y > bottom) continue;
                     DrawDashLine(hdc, xs, edge, y, left);
                     ySess[q] = y;
+                    yLine[q] = y;
                 }
             }
         }
@@ -3456,6 +3458,15 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         GetTextExtentPoint32W(hdc, lg, len3, &sz3);
         int lx = left + 6, ly = top + 4;
         if (lx + szAll.cx <= right - 6 && ly + szAll.cy <= bottom) {
+            // Dagens hoy (fase 27) ligger 8 % under flatens topp naar dagens
+            // topp er utsnittets, og paa et lavt panel er det midt i denne
+            // raden: strekene gikk tvers gjennom sifrene (sett i en fangst
+            // ved 560x300). Da - og bare da - faar teksten ugjennomsiktig
+            // bakgrunn, saa tallene staar hele og linja fortsetter bak dem.
+            BOOL struck = FALSE;
+            for (int q = 0; q < 2; ++q)
+                if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
+            if (struck) { SetBkColor(hdc, CLR_BG); SetBkMode(hdc, OPAQUE); }
             SetTextColor(hdc, Blend(CLR_BG, CLR_SMA, indT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
             SetTextColor(hdc, Blend(CLR_BG, CLR_EMA, indT));
@@ -3464,6 +3475,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                 SetTextColor(hdc, Blend(CLR_BG, CLR_VWAP, indT));
                 ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
             }
+            if (struck) SetBkMode(hdc, TRANSPARENT);
         }
     }
 
