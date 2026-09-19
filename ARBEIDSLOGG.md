@@ -61,6 +61,9 @@ per UTC-døgn som en gyllen linje, dagens høy og lav som stiplede linjer med
 dempede aksemerker, og SMA, EMA og VWAP som rader i hover-boksen — alt regnet
 av `candles[]` under opptegning og alt bak indikatorbryteren, så
 skrivebordet er urørt. Bufferet bakfyller seg selv til døgnskiftet.
+**Fase 28** legger gårsdagens nivåer ved siden av: forrige UTC-døgns høy, lav
+og sluttkurs som tre kjøligere, stiplede linjer med dempede aksemerker, bak
+samme bryter — og bakfyllingen går nå til *forrige* døgnskifte.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -84,12 +87,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-18-ticker-robuste-inndata.md` og
 `docs/superpowers/plans/2026-09-19-ticker-indikatorer.md` og
 `docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md` og
-`docs/superpowers/plans/2026-09-19-ticker-bloomberg-essentials.md`. Design:
+`docs/superpowers/plans/2026-09-19-ticker-bloomberg-essentials.md` og
+`docs/superpowers/plans/2026-09-19-ticker-gaarsdagens-nivaaer.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~6290 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~6410 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -112,7 +116,8 @@ den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
 `[ + ]` — ellers feiler
 `LNK1104: cannot open file 'ticker.exe'`.
 
-Fotavtrykk: ~3,5 MB private bytes, 199 KB exe etter fase 27 (203 776 byte;
+Fotavtrykk: ~3,5 MB private bytes, 200 KB exe etter fase 28 (204 800 byte;
+203 776 etter fase 27,
 199 680 etter fase 26, 199 168 etter fase 25, 195 584 etter fase 24;
 195 072 etter fase 23, 187 KB etter fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
 380×300 i fase 1 — dobbeltbufferet er 8× større.)
@@ -445,7 +450,7 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `V` | VOL-pillen: volumstolpene av/på, eased (fase 22) |
 | `1` … `6` | intervallpillene i rekkefølge, 1m … 1d (fase 22) |
 | «Volumstolper» i tray-menyen | bytter valget for **modusen prosessen står i**: panelets i panelmodus, skrivebordets i skrivebordsmodus (fase 22, per modus fra fase 26) |
-| `M` / `MA`-pillen / «Indikatorer» i tray-menyen | SMA 20, EMA 50, VWAP og dagens høy/lav av/på, tonet (fase 25; VWAP og høy/lav fra fase 27, da tray-punktet byttet navn fra «Glidende snitt»). `Ctrl`+`M` er fortsatt minimer. Tray-punktet er per modus, som «Volumstolper» (fase 26) |
+| `M` / `MA`-pillen / «Indikatorer» i tray-menyen | SMA 20, EMA 50, VWAP, dagens høy/lav og gårsdagens høy/lav/slutt av/på, tonet (fase 25; VWAP og høy/lav fra fase 27, gårsdagen fra fase 28, da tray-punktet byttet navn fra «Glidende snitt»). `Ctrl`+`M` er fortsatt minimer. Tray-punktet er per modus, som «Volumstolper» (fase 26) |
 | Klikk i priskolonnen / `A` | setter eller fjerner et prisvarsel — se *Prisvarsler* over (fase 23) |
 | «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises (fase 23) |
 | Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
@@ -2760,6 +2765,75 @@ Byttet: bakgrunnen visker da også ut veker og snittpiksler under teksten.
 **Ikke testet:** et ekte døgnskifte med panelet åpent, og bakfylling under
 nettverksfeil (lest, ikke kjørt).
 
+### Fase 28 — gårsdagens nivåer: forrige døgns høy, lav og slutt
+
+Plan: `docs/superpowers/plans/2026-09-19-ticker-gaarsdagens-nivaaer.md`.
+Gren `fase28-gaarsdagens-nivaaer`, flettet inn med `--no-ff`. Mandatet var
+«continue»; kandidaten sto i fase 27-planen.
+
+**Tre nivåer for i dag.** Forrige UTC-døgns høy, lav og sluttkurs tegnes som
+vannrette linjer fra *dagens* første lys og inn til aksen, som dagens
+høy/lav: lysene som laget dem trenger ingen strek over seg. `PrevSession`
+finner gårsdagen som [start, dagens start) med de samme binærsøkene som
+`SessionStartAt`; ligger lyset foran dagens første ikke i døgnet før (hull),
+finnes ingen gårsdag. Ufullstendig gårsdag tegnes ikke, som i fase 27.
+
+**Bakfyllingen går til forrige døgnskifte.** `SessionsNeedHistory` erstatter
+fase 27-vilkåret i `WM_APP_DATA`: sann til både dagens og gårsdagens session
+er hele, `histDone`, eller gårsdagen ikke finnes. Ved 1m er det opptil 2880
+lys (åtte hentinger), ved 5m én henting, fra 15m ingen. Hver henting poster
+`WM_APP_DATA`, som spør igjen — målt **3,3–3,7 s fra 360 til 2880 lys**.
+Fortsatt bare med panelet synlig og indikatorene på i modusen prosessen står
+i; skrivebordet henter ingenting (målt: 360 lys, felt 54 = 0).
+
+**Utseende.** `CLR_PREV` 6F7B95 — kjøligere og mørkere enn `CLR_SESSION`,
+«samme ting, eldre» — og ikke på blandingslinja fra `CLR_BG` eller `CLR_BOX`
+til noen tekstfarge (minste sprik per kanal 0,089). Samme periode (12) og
+anker som dagens linjer: høy/lav **2 på / 10 av**, sluttkursen **10 på / 2
+av**. Første utkast var 2/4; trådkorsets `PS_DOT` er et tett prikkemønster i
+grått, og 2/10 ligger lenger unna. `DrawDashLine` tar mønsteret som
+parameter. De fem nivåene (dagens høy, lav, gårsdagens slutt, høy, lav) står
+nå i **én tabell i aksekolonnens rang**, så kollisjonsregelen, merkene,
+rutenettetikettenes vikeplikt og forklaringens «struck»-regel er én løkke
+hver i stedet for en kopi per klasse. Ingen rader i hover-boksen (nivåene er
+konstanter), ingen pille, ingen registernøkkel: alt følger `ShowIndNow()`.
+
+**Verifisert.** `probe_prev.c` (1280×720, venter på inaktiv maskin, starter
+ikke 23:50–00:05 UTC): **52/52 i to kjøringer, rød mot commit 1: 21 FAIL**
+(bakfyllingen stoppet på 1442 lys, felt 54 sto på 1, nivåene −1, 0 px).
+Verdiene stemmer med probens lineære utregning av felt 38 og 47–50
+(81400,00 / 76296,00 / 80883,87); gårsdagen er 1440 lys ved 1m, 288 ved 5m
+(360 → 720 av seg selv), begge døgn åpner på 00:00 UTC. Piksler ved 15m:
+alle tre linjer på utregnet rad i eksakt `CLR_PREV` — slutt 249 av 312 px,
+lengste strek 10, 22 hele; høy 47 px, lengste 2; lav 52 px, lengste 2 —
+ingenting før dagens første lys, 0 px over og under grafflaten. Aksemerket
+for lav sto (1083 px `CLR_BOX`, tall i `CLR_PREV`); slutt vek for dagens lav
+4 px unna og høy for stempelet 2 px unna, som rangen sier. `M` og
+tray-kommando 1007: 348 → 0 px. 1d: ingen gårsdag, ingen bakfylling.
+**Kostnad (felt 56): 1 µs per bilde** med 1440 lys å lese; hele
+sessionblokka 26 µs (21 før), snittene 48 µs med 2880 lys i bufferet.
+GDI/USER **32/14 før og etter**. Enhetstester `unit_prev` 27/27 (rød mot
+master: bygger ikke). Regresjon: `probe_ind` 54/54, `probe_desk` 49/49 (**0
+px `CLR_PREV` og ingen bakfylling på skrivebordet som standard**; 545 px og
+2881 lys når indikatorene skrus på der), `probe_sess` 52/52 etter rettelsen av felt 14 under (to sjekker om en
+ufullstendig gårsdag faller bort nå som den alltid hentes). Sett på:
+fangst ved 1280×720 og 560×300 (15m).
+**Exe 203 776 → 204 800 byte (+1 024)**, commit 1: 0, `/TP` byte-identisk.
+
+**Funnet underveis:** `probe_sess` (fase 27) feilet på «VWAP innen 5 cent»
+med 5,7 cent. VWAP-koden er urørt. Avvikene var ensidige (0, +4,0, +2,6,
++5,7 cent), altså systematiske: probe-felt 14 **trunkerte** volumet til
+hundredeler i stedet for å avrunde, så hver vekt i probens sum var litt for
+liten, og skjevheten vokser med antall lys — fase 27 kjørte kl. 06 UTC med
+~360 lys i sessionen, denne kl. 19 med 1152. Felt 14 avrunder nå (bare
+testbygget; prod-exe uendret), og avviket er under 0,5 cent på alle fire lys
+med toleransen tilbake på 5 cent (fallgruve 91).
+
+**Ikke testet:** et ekte døgnskifte med panelet åpent (enhetstestet: rett
+etter 00:00 er gårsdagen «resten av bufferet, ufullstendig», og bakfyllingen
+starter på nytt), et hull i Binance' historikk (enhetstestet), og bakfylling
+under nettverksfeil.
+
 ---
 
 ## Kjente begrensninger
@@ -2895,11 +2969,23 @@ nettverksfeil (lest, ikke kjørt).
   når nivået ligger innenfor det synlige prisområdet og utsnittet rekker inn
   i dagen; aksemerket viker for stempelet, varsler og spøkelsesmerket.
 - **Et døgn som ikke er helt i bufferet, får ingen VWAP** (fase 27). For
-  *dagens* døgn hentes eldre lys av seg selv (høyst fire hentinger ved 1m,
+  *dagens* og (fra fase 28) gårsdagens døgn hentes eldre lys av seg selv
+  (høyst åtte hentinger ved 1m,
   bare med panelet synlig og indikatorene på); for eldre døgn i venstre kant
   av bufferet står linja tom til neste døgnskifte, til brukeren drar i
-  veggen. Bakfyllingen betyr at bufferet ved 1m har opptil 1800 lys kort
+  veggen. Bakfyllingen betyr at bufferet ved 1m har opptil 2880 lys kort
   etter åpning, ikke 360 — private bytes er uendret (`candles[]` er statisk).
+- **Gårsdagens nivåer synes sjelden i standardutsnittet ved 1m** (fase 28).
+  300 minutter av i dag har et smalt prisområde, og et nivå utenfor det
+  tegnes ikke — heller ikke som markør i kanten, samme regel som varslene og
+  dagens høy/lav. Zoom ut, eller bytt til 15m/1t. Linjene har ingen
+  merkelapp: høyest er høy, lavest er lav, og den lange streken er slutt.
+- **To nivåer få piksler fra hverandre tegnes begge** (fase 28; sett i
+  fangsten: gårsdagens slutt 4 px over dagens lav). Det er to tall, og
+  avstanden er informasjon; aksemerket til det lavest rangerte viker.
+- **Åpnet sent i døgnet ved 1m hentes opptil 2880 lys** (fase 28, åtte
+  hentinger på 3–4 s) når indikatorene er på. EMA-såpunktet flytter seg
+  tilsvarende bakover (se EMA-punktet over); private bytes er uendret.
 - **Trådkorsets aksemerke skjuler ikke rutenettetiketten under seg** (sett i
   fangsten i fase 27, eldre enn fasen): står pekeren 8–15 px fra en etikett,
   stikker en stripe av tallet fram under merket. Stempelet, varslene og
@@ -3420,20 +3506,39 @@ nettverksfeil (lest, ikke kjørt).
     lys hopper for hvert lys under panorering, og høy/lav for utsnittet står
     alltid 8 % fra kantene (`PriceRange`). Les hva koden gjør med utsnittet
     før et tall forankres i det.
+91. **Et probe-felt skal avrunde, ikke trunkere — og ensidige avvik er
+    aldri avrundingsstøy.** Felt 14 var `(LRESULT)(volume * 100.0)`. Probens
+    VWAP holdt 5 cent med 360 lys i sessionen (fase 27, kl. 06 UTC) og røk
+    med 1152 (fase 28, kl. 19: 0, +4,0, +2,6, +5,7 cent — alle samme vei).
+    Første forklaring var «avrundingsfeil som vokser med N», og toleransen
+    ble løftet til 15 cent; men avrunding av prisen til cent kan aldri gi mer
+    enn 0,5 cent i et vektet snitt, uansett N. Trunkerte *vekter* kan.
+    `floor(x * 100 + 0.5)` i feltet: under 0,5 cent. Løft ikke en toleranse
+    før fortegnet på avvikene er sett på, og kjør klokkeavhengige prober
+    sent i døgnet også (89).
+92. **Når en venteregel i appen utvides, må probene som venter på den gamle
+    regelen utvides samtidig.** Fase 27-probene ventet på felt 46 (dagens
+    døgn dekket) og leste så indekser; fra fase 28 går bakfyllingen videre,
+    og indeksene flytter seg under dem. Felt 54 er nå «appen vil ha mer
+    historikk» — definert som det `WM_APP_DATA` avgjør, med `ShowIndNow()`,
+    ellers venter skrivebordsproben (indikatorer av) til evig tid.
+93. **`\t` i en Python-heredoc er en tabulator.** `"$s\ticker_test.exe"`
+    skrevet fra en bash-heredoc ble `$s<TAB>icker_test.exe`. Samme klasse som
+    41/55: skript med omvendt skråstrek skrives med Write-verktøyet.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak22` ligger igjen** (19.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 27, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak21` er slettet: de dekket fase 1 til 26, og den
+**Bare `ticker.c.bak23` ligger igjen** (19.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 28, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak22` er slettet: de dekket fase 1 til 27, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26) og `.bak22` (fase 27). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27) og `.bak23` (fase 28). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
