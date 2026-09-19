@@ -31,6 +31,7 @@
 #define IDM_TOGGLE_AUTOSTART 1004   // start ved paalogging av/paa (fase 13)
 #define ID_TRAY_VOLUME   1005   // volumstolper av/paa (fase 22)
 #define ID_TRAY_ALERTS_CLEAR 1006   // fjern prisvarslene for symbolet (fase 23)
+#define ID_TRAY_INDICATORS 1007   // glidende snitt av/paa (fase 25)
 // Symbol og intervall fra tray-menyen (fase 17). Punkt i faar FIRST + i.
 // Omraadene er 100 brede; #error under tabellene sikrer at de aldri overlapper.
 #define ID_TRAY_SYMBOL_FIRST   1100
@@ -52,7 +53,11 @@
 // Fullt buffer stopper bakfyllingen (histDone) - levende lys kastes aldri
 // for aa gi plass til gamle. Var 1440 (ett dogn paa 1m) til og med fase 17.
 #define MAX_CANDLES      6000
-#define SEED_COUNT       300   // forste henting: 5 timer i ett jafs
+// Forste henting, og hver bakfylling: 6 timer i ett jafs (~60 KB svar av
+// s_httpBuf paa 96). 60 lys mer enn standardutsnittet (fase 25): EMA 50 er
+// foerst definert paa lys 49, og med 300 av 300 lys synlige begynte linja en
+// sjettedel inn i grafen. Oppvarmingen ligger naa utenfor venstre kant.
+#define SEED_COUNT       360
 #define DEFAULT_VIEW     300   // synlig utsnitt ved apning
 #define MIN_VIEW         8     // minste antall synlige lys ved full zoom
 #define ZOOM_STEP        1.2   // per musehjul-hakk
@@ -190,6 +195,21 @@
 #define VOL_FRAC         0.22
 #define CLR_VOL_UP       RGB(0x09, 0x54, 0x2D)
 #define CLR_VOL_DOWN     RGB(0x51, 0x21, 0x2D)
+// Glidende snitt (fase 25): SMA 20 og EMA 50 paa lukkekursen, tegnet som
+// 1 px linjer over lysene. Dempet staalblaa og dempet fiolett: ingen av dem
+// finnes ellers i flaten (groenn/roed er lys, rav er varsler, graatt er
+// rutenett og traadkors), saa en linje kan aldri leses som noe annet.
+// Eksakte verdier, saa en probe kan telle dem. Prefikset er IND_, ikke MA_:
+// winuser.h eier MA_ACTIVATE og MA_NOACTIVATE (fallgruve 67).
+#define IND_SMA_PERIOD   20
+#define IND_EMA_PERIOD   50
+#define CLR_SMA          RGB(0x3D, 0x8F, 0xBF)
+#define CLR_EMA          RGB(0xA0, 0x72, 0xD0)
+#define IND_TAU_FADE     ANIM_TAU_FADE   // MA-bryteren toner linjene, som overlayet
+// Begge snitt skal vaere definert paa foerste synlige lys naar panelet
+// aapner paa standardutsnittet (se SEED_COUNT).
+C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_EMA_PERIOD);
+C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_SMA_PERIOD);
 // Vannmerket blandes mot hvitt med alfa fra WatermarkAlpha(W). Hvitt fordi
 // den gamle faste fargen #15191F var noytral: CLR_BG + 8 i alle kanaler,
 // altsaa ~3,3 % mot hvitt.
@@ -258,12 +278,14 @@ C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 #define TBAR_SYM_W         74    // "BNB/USDT" + pil
 #define TBAR_IV_W          28    // "15m"
 #define TBAR_VOL_W         32
+#define TBAR_IND_W         26    // "MA" (fase 25)
 #define TBAR_GAP           2     // mellom intervallpillene
 #define TBAR_GROUP_GAP     8     // mellom symbol, intervaller og VOL
 #define TBAR_SYM           0
 #define TBAR_IV_FIRST      1
 #define TBAR_VOL           (TBAR_IV_FIRST + INTERVAL_COUNT)
-#define TBAR_COUNT         (TBAR_VOL + 1)
+#define TBAR_IND           (TBAR_VOL + 1)   // samme gruppe som VOL: overlegg
+#define TBAR_COUNT         (TBAR_IND + 1)
 
 // 4x9 piksel-font. En rad per byte, bit 3 = venstre kolonne, bit 0 = hoyre.
 // Ett linje med 9px hoye sifre er nesten dobbelt saa lesbart som to linjer
@@ -423,6 +445,13 @@ typedef struct {
     int    tbHot;
     BOOL   showVol;
     double dispVolF;
+    // Glidende snitt (fase 25): SMA 20 og EMA 50 over lysene. Samme par som
+    // showVol/dispVolF: showInd er valget og lagres i registret, dispIndF
+    // er visningen, 0..1, og eases av klokka - her som FARGE mot bakgrunnen,
+    // ikke som geometri. UI-eid. Selve snittene lagres ikke: de regnes ut
+    // av candles[] i hver opptegning (se IndStep).
+    BOOL   showInd;
+    double dispIndF;
     // Prisvarsler (fase 23). Alt er UI-eid: varslene settes fra musa og
     // proeves i WM_APP_DATA, begge paa UI-traaden, saa traadkontrakten er
     // uroert. Per symbol - et nivaa i dollar er meningsloest paa tvers av
@@ -501,13 +530,18 @@ static BOOL g_isDuplicate = FALSE;
 // men ingen ramme, ingen knapper, ingen input og ingen geometri i registret.
 static BOOL g_desktopMode = FALSE;
 static UINT g_msgTaskbarCreated = 0;   // Explorer startet paa nytt
-static char s_httpBuf[98304];    // 300 lys gir ~50 KB svar
+static char s_httpBuf[98304];    // 360 lys gir ~60 KB svar
 static Candle s_incoming[SEED_COUNT];
 // Volumstolper (fase 21) tegnes med PolyPolygon i bolker: ett kall per 256
 // stolper i stedet for ett FillRect per lys. Maalt ved 1280x720 med 300
 // synlige lys: FillRect per lys la 0,40 ms paa en opptegning paa 1,44 ms.
 // Statisk, ikke stakk - som resten av bufrene i fila.
+//
+// Glidende snitt (fase 25) laaner s_volPts til Polyline, i bolker paa
+// IND_BATCH punkter. Stolpene er ferdig tegnet naar linjene begynner, og
+// alt skjer paa UI-traaden under samme laas, saa de to kan ikke moetes.
 #define VOL_BATCH 256
+#define IND_BATCH (VOL_BATCH * 4)
 static POINT s_volPts[VOL_BATCH * 4];
 static INT   s_volCnt[VOL_BATCH];
 #ifdef TICKER_PROBE
@@ -516,6 +550,11 @@ static INT   s_volCnt[VOL_BATCH];
 // WM_APP_PROBE 15, saa en probe kan maale median over mange bilder uten
 // aa ta skjermbilder samtidig (fallgruve 37).
 static LONGLONG g_probePaintUs = 0;
+// Bare testbygg (fase 25): tiden de to DrawIndicator-kallene tok i siste
+// fulle opptegning, i mikrosekunder. Leses med WM_APP_PROBE 39. Overlegget
+// koster mindre enn stoeyen mellom to maaleserier av hele opptegningen
+// (fallgruve 80), saa det maales for seg.
+static LONGLONG g_probeIndUs = 0;
 // Bare testbygg (fase 23): demper ballong og lyd naar et varsel fyrer, saa en
 // probe kan fyre mange varsler uten aa plage den som sitter ved maskinen.
 // Settes med WM_APP_PROBE 101 til hovedvinduet. En kjoering fyrer ett varsel
@@ -680,6 +719,75 @@ static double AlertRound(double price, double pxStep) {
     return (r > 0.0) ? r : price;
 }
 
+// Glidende snitt (fase 25). En stegmaskin, ikke en tabell: snittene lagres
+// ikke noe sted. Opptegningen mater lysene gjennom IndStep og tegner verdien
+// i det den faller ut, saa overlegget koster 40 byte stakk og ingen
+// double[MAX_CANDLES] ved siden av candles[].
+//
+// SMA: rullende sum over de siste period lukkekursene. c er HELE bufferet,
+// ikke bare lyset, fordi steget maa trekke fra lyset som faller ut av
+// vinduet. Maskinen kan startes paa et hvilket som helst lys; verdien er
+// definert fra og med det period-te lyset den har faatt.
+// EMA: saadd med SMA av de foerste period lysene, deretter
+// v += k * (close - v) med k = 2 / (period + 1) - den vanlige definisjonen
+// (TradingView, Binance). EMA har uendelig hukommelse, saa den mates ALLTID
+// fra lys 0: startet midt i bufferet ville linja avhenge av hvor utsnittet
+// begynner, og flytte seg under panorering.
+//
+// Returnerer TRUE naar s->val er definert. Ingen pow, ingen log: bare
+// + - * /, saa CRT-en vokser ikke (fallgruve 75).
+typedef struct { int period; BOOL ema; int fed; double sum; double val; } IndState;
+
+static void IndInit(IndState* s, int period, BOOL ema) {
+    s->period = (period > 0) ? period : 1;
+    s->ema = ema;
+    s->fed = 0;
+    s->sum = 0.0;
+    s->val = 0.0;
+}
+
+static BOOL IndStep(IndState* s, const Candle* c, int i) {
+    double x = c[i].close;
+    s->fed++;
+    if (s->fed <= s->period) {
+        s->sum += x;
+        if (s->fed < s->period) return FALSE;
+        s->val = s->sum / (double)s->period;
+        return TRUE;
+    }
+    if (s->ema) {
+        s->val += (2.0 / (double)(s->period + 1)) * (x - s->val);
+    } else {
+        s->sum += x - c[i - s->period].close;
+        s->val = s->sum / (double)s->period;
+    }
+    return TRUE;
+}
+
+// Foerste lys maskinen maa mates fra for at verdien paa lys idx (og alle
+// etter) skal vaere den riktige: 0 for EMA, idx - period + 1 for SMA.
+static int IndFeedStart(int idx, int period, BOOL ema) {
+    if (period < 1) period = 1;   // samme vern som IndInit, ellers mates ingenting
+    int s = ema ? 0 : idx - period + 1;
+    return (s > 0) ? s : 0;
+}
+
+#ifdef TICKER_PROBE
+// Bare testbygg: snittet paa ett lys, FALSE naar det ikke er definert der
+// (for faa lys foran). Probe-felt 36/37 og enhetstestene leser denne;
+// opptegningen bruker maskinen direkte og faar hele utsnittet, og
+// forklaringens verdi, i ett gjennomloep.
+static BOOL IndValueAt(const Candle* c, int n, int period, BOOL ema, int idx, double* out) {
+    if (idx < 0 || idx >= n) return FALSE;
+    IndState s;
+    IndInit(&s, period, ema);
+    BOOL ok = FALSE;
+    for (int i = IndFeedStart(idx, period, ema); i <= idx; ++i) ok = IndStep(&s, c, i);
+    if (ok) *out = s.val;
+    return ok;
+}
+#endif
+
 // Skiller "ingen lagret posisjon" fra en ekte koordinat, som godt kan vaere
 // negativ paa en skjerm til venstre for eller over den primaere.
 #define GEOM_UNSET  ((int)0x80000000)
@@ -707,6 +815,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->ivIdx      = 0;
     ctx->intervalMs = INTERVALS[0].ms;
     ctx->showVol    = TRUE;
+    ctx->showInd    = TRUE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
 
@@ -722,8 +831,10 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD px = RegReadDword(k, L"PanelX", 0);
     DWORD py = RegReadDword(k, L"PanelY", 0);
     DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // fase 22, paa som standard
+    DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // fase 25, paa som standard
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
+    ctx->showInd = (si != 0);
 
     // Bundet sjekk. Et register redigert for hand, eller etterlatt av en
     // nyere versjon med flere symboler, skal ikke kunne indeksere utenfor
@@ -834,6 +945,8 @@ static void SaveConfig(const AppContext* ctx) {
     RegSetValueExW(k, L"IntervalIndex", 0, REG_DWORD, (const BYTE*)&iv, sizeof(iv));
     DWORD sv = ctx->showVol ? 1 : 0;
     RegSetValueExW(k, L"ShowVolume",    0, REG_DWORD, (const BYTE*)&sv, sizeof(sv));
+    DWORD si = ctx->showInd ? 1 : 0;
+    RegSetValueExW(k, L"ShowIndicators", 0, REG_DWORD, (const BYTE*)&si, sizeof(si));
     RegCloseKey(k);
 }
 
@@ -1787,10 +1900,17 @@ static int HeaderRow2Limit(int W) {
     return W - PAD_R + AXIS_LBL_GAP - HDR_GAP;
 }
 
-// Hele verktoylinja skal faa plass paa minstebredden. Vokser en tabell
-// eller en pillebredde forbi det, stopper bygget her - og regelen i
+// Verktoylinja til og med VOL skal faa plass paa minstebredden. Vokser en
+// tabell eller en pillebredde forbi det, stopper bygget her - og regelen i
 // ToolbarLayout, som skjuler piller fra hoyre, blir aldri det brukeren
 // ser paa et panel i lovlig storrelse.
+//
+// MA-pillen (fase 25) er det ene, bevisste unntaket: raden slutter paa
+// x = 310 av 312 paa minstebredden, og 28 px til finnes ikke. Pillen staar
+// ytterst til hoyre, saa skjuleregelen tar den og bare den: under 426 px
+// bredde er den borte, og M-tasten og tray-menyen baerer bryteren alene.
+// POPUP_MIN_W heves ikke for dette - den vokter ogsaa hvilken geometri
+// registret faar lov til aa gi tilbake.
 C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + INTERVAL_COUNT * TBAR_IV_W +
          (INTERVAL_COUNT - 1) * TBAR_GAP + TBAR_GROUP_GAP + TBAR_VOL_W
          <= POPUP_MIN_W - PAD_R + AXIS_LBL_GAP - HDR_GAP);
@@ -1807,7 +1927,8 @@ static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
     int x = PAD_L, n = 0;
     BOOL cut = FALSE;
     for (int i = 0; i < TBAR_COUNT; ++i) {
-        int w = (i == TBAR_SYM) ? TBAR_SYM_W : (i == TBAR_VOL) ? TBAR_VOL_W : TBAR_IV_W;
+        int w = (i == TBAR_SYM) ? TBAR_SYM_W : (i == TBAR_VOL) ? TBAR_VOL_W
+              : (i == TBAR_IND) ? TBAR_IND_W : TBAR_IV_W;
         if (i == TBAR_IV_FIRST || i == TBAR_VOL) x += TBAR_GROUP_GAP;
         else if (i > 0)                          x += TBAR_GAP;
         if (!cut && x + w > limit) cut = TRUE;
@@ -2389,6 +2510,60 @@ static void FormatTagPrice(HDC hdc, double p, double range, int avail,
     }
 }
 
+// En glidende-snitt-linje (fase 25) over utsnittet [i0, i1). Kalles fra
+// DrawChart under laasen og innenfor grafens klipp, med DC_PEN valgt.
+//
+// Linja gaar ETT lys ut paa hver side av utsnittet, saa den forlater flaten
+// gjennom klippet i stedet for aa slutte i midten av det ytterste lyset.
+// Samme x og y som lysene: midten av kolonnen, og top + (int)(...) paa
+// prisen - floor paa x fordi lyset utenfor venstre kant har negativ
+// forskyvning, der (int) runder mot null og ikke nedover.
+//
+// y klemmes til 16 flatehoyder: snittet ser period lys bakover og kan ligge
+// langt utenfor et innzoomet prisomraade, og GDI regner i 27 bit. Klemmen
+// ligger saa langt ute at den ikke endrer hellingen paa noe som synes.
+//
+// Punktene gaar til Polyline i bolker; siste punkt i en bolk er foerste i
+// neste, saa linja er sammenhengende. Med flere lys enn piksler faller mange
+// punkter i samme kolonne - Polyline tegner dem som den loddrette streken
+// de er.
+//
+// legendIdx: lyset forklaringen vil ha verdien for. TRUE naar *legendVal er
+// satt - verdien faller ut av samme gjennomloep, uten et ekstra.
+static BOOL DrawIndicator(HDC hdc, const AppContext* ctx, const ChartRect* g,
+                          int period, BOOL ema, COLORREF clr,
+                          double dStart, double slot, int i0, int i1,
+                          double maxP, double range,
+                          int legendIdx, double* legendVal) {
+    int n = ctx->candleCount;
+    int first = (i0 > 0) ? i0 - 1 : 0;
+    int last  = (i1 < n) ? i1 : n - 1;
+    double yLo = -16.0 * (double)g->ch, yHi = 17.0 * (double)g->ch;
+
+    IndState s;
+    IndInit(&s, period, ema);
+    BOOL haveLegend = FALSE;
+    int k = 0;
+    SetDCPenColor(hdc, clr);
+    for (int i = IndFeedStart(first, period, ema); i <= last; ++i) {
+        if (!IndStep(&s, ctx->candles, i)) continue;
+        if (i == legendIdx) { *legendVal = s.val; haveLegend = TRUE; }
+        if (i < first) continue;
+        double yy = ((maxP - s.val) / range) * (double)g->ch;
+        if (yy < yLo) yy = yLo;
+        if (yy > yHi) yy = yHi;
+        s_volPts[k].x = g->left + (int)floor(((double)i - dStart + 0.5) * slot);
+        s_volPts[k].y = g->top + (int)yy;
+        if (++k == IND_BATCH) {
+            Polyline(hdc, s_volPts, k);
+            s_volPts[0] = s_volPts[k - 1];
+            k = 1;
+        }
+    }
+    if (k >= 2) Polyline(hdc, s_volPts, k);
+    return haveLegend;
+}
+
 static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     RECT rcAll = { 0, 0, W, H };
     // Vannmerket ligger I bakgrunnen, for rutenett, lys og akser - grafen
@@ -2723,6 +2898,51 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         Rectangle(hdc, cx - bodyW / 2, yTop, cx - bodyW / 2 + bodyW, yBot);
     }
 
+    // --- Glidende snitt (fase 25) ---
+    // OVER lysene, innenfor samme klipp: en 1 px dempet linje bak mettede
+    // lyskropper ville forsvunnet nettopp der den krysser prisen, som er der
+    // den leses. Under siste-pris-linja, traadkorset og overlayet. Begge
+    // modi - en kurve er ikke tekst (fase 14). Prisaksen ser IKKE snittene:
+    // PriceRange er uroert, og en linje utenfor utsnittets prisomraade
+    // klippes, som i TradingView. Ellers ville et innzoomet utsnitt blitt
+    // presset sammen av et snitt som ligger langt unna.
+    //
+    // dispIndF (0..1) toner fargen mot CLR_BG - MA-bryteren. DC_PEN, saa
+    // ingen nye GDI-objekter. EMA sist: den lange linja ligger oeverst der
+    // de to krysser.
+    //
+    // Forklaringen (under) viser verdien paa lyset under traadkorset, ellers
+    // paa siste synlige lys. Samme vilkaar som traadkorset bruker.
+    double indVal[2] = { 0.0, 0.0 };
+    BOOL   indOk[2]  = { FALSE, FALSE };
+    int    indT = (int)(ctx->dispIndF * 255.0 + 0.5);
+#ifdef TICKER_PROBE
+    LARGE_INTEGER indQ0;
+    QueryPerformanceCounter(&indQ0);
+#endif
+    if (indT > 0) {
+        int legendIdx = i1 - 1;
+        if (ctx->hoverIdx >= 0 && ctx->hoverIdx < n) {
+            double hr = (double)ctx->hoverIdx - dStart;
+            if (hr >= 0.0 && hr < dCount) legendIdx = ctx->hoverIdx;
+        }
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        indOk[0] = DrawIndicator(hdc, ctx, &g, IND_SMA_PERIOD, FALSE,
+                                 Blend(CLR_BG, CLR_SMA, indT), dStart, slot, i0, i1,
+                                 maxP, range, legendIdx, &indVal[0]);
+        indOk[1] = DrawIndicator(hdc, ctx, &g, IND_EMA_PERIOD, TRUE,
+                                 Blend(CLR_BG, CLR_EMA, indT), dStart, slot, i0, i1,
+                                 maxP, range, legendIdx, &indVal[1]);
+    }
+#ifdef TICKER_PROBE
+    {
+        LARGE_INTEGER indQ1, indQf;
+        QueryPerformanceCounter(&indQ1);
+        QueryPerformanceFrequency(&indQf);
+        g_probeIndUs = (indQ1.QuadPart - indQ0.QuadPart) * 1000000LL / indQf.QuadPart;
+    }
+#endif
+
     // Klippingen MAA vekk for aksetekstene - de ligger i margen til hoyre.
     SelectClipRgn(hdc, NULL);
 
@@ -2901,6 +3121,36 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             ExtTextOutW(hdc, x, bottom + 2, 0, NULL, tl, (int)wcslen(tl), NULL);
         }
         SetTextAlign(hdc, oldAlign);
+    }
+
+    // --- Forklaring til glidende snitt (fase 25) ---
+    // Oeverst til venstre i grafflaten, i linjenes egne farger: det er
+    // fargen som sier hvilken linje som er hvilken, og tallet er snittet
+    // paa lyset under traadkorset (uten traadkors: siste synlige lys). Et
+    // snitt som ikke er definert der - faerre enn period lys foran - faar
+    // en strek. Aksefonten, som er valgt her; gjennomsiktig over lysene,
+    // som vannmerket under dem. Ikke paa skrivebordet (fase 14: ingen
+    // maaleverdier der), og bare naar HELE teksten faar plass i flaten -
+    // samme regel som prosenten i headeren: et avkuttet tall er et feil tall.
+    if (indT > 0 && !g_desktopMode) {
+        wchar_t lg[96];
+        int len1, lenAll;
+        if (indOk[0]) swprintf_s(lg, 96, L"SMA %d  %.2f    ", IND_SMA_PERIOD, indVal[0]);
+        else          swprintf_s(lg, 96, L"SMA %d  -    ", IND_SMA_PERIOD);
+        len1 = (int)wcslen(lg);
+        if (indOk[1]) swprintf_s(lg + len1, 96 - len1, L"EMA %d  %.2f", IND_EMA_PERIOD, indVal[1]);
+        else          swprintf_s(lg + len1, 96 - len1, L"EMA %d  -", IND_EMA_PERIOD);
+        lenAll = (int)wcslen(lg);
+        SIZE szAll = { 0, 0 }, sz1 = { 0, 0 };
+        GetTextExtentPoint32W(hdc, lg, lenAll, &szAll);
+        GetTextExtentPoint32W(hdc, lg, len1, &sz1);
+        int lx = left + 6, ly = top + 4;
+        if (lx + szAll.cx <= right - 6 && ly + szAll.cy <= bottom) {
+            SetTextColor(hdc, Blend(CLR_BG, CLR_SMA, indT));
+            ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
+            SetTextColor(hdc, Blend(CLR_BG, CLR_EMA, indT));
+            ExtTextOutW(hdc, lx + sz1.cx, ly, 0, NULL, lg + len1, lenAll - len1, NULL);
+        }
     }
 
     // --- Siste pris: stiplet linje + aksestempel ---
@@ -3184,6 +3434,7 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         const wchar_t* lbl;
         if (i == TBAR_SYM)      { on = ctx->overlayOpen; lbl = SYMBOLS[ctx->symIdx].label; }
         else if (i == TBAR_VOL) { on = ctx->showVol;     lbl = L"VOL"; }
+        else if (i == TBAR_IND) { on = ctx->showInd;     lbl = L"MA"; }
         else { on = (i - TBAR_IV_FIRST == ctx->ivIdx);   lbl = INTERVALS[i - TBAR_IV_FIRST].label; }
 
         if (hot || on) FillRect(hdc, r, ctx->brBox);
@@ -3388,6 +3639,21 @@ static void SetShowVolume(AppContext* ctx, BOOL on) {
     }
 }
 
+// MA-bryteren (fase 25): glidende snitt av og paa. Samme form og samme
+// grunner som SetShowVolume over - et rent tegnevalg, fra pillen, M-tasten
+// og tray-menyen, eased naar flaten synes og snappet ellers.
+static void SetShowIndicators(AppContext* ctx, BOOL on) {
+    if (ctx->showInd == on) return;
+    ctx->showInd = on;
+    SaveConfig(ctx);
+    if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
+        StartAnim(ctx->hPopup);
+        InvalidateRect(ctx->hPopup, NULL, FALSE);
+    } else {
+        ctx->dispIndF = on ? 1.0 : 0.0;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Prisvarsler (fase 23). Alt her kjoerer paa UI-traaden og roerer bare
 // UI-eide felter; laasen tas kun for aa lese referanseprisen.
@@ -3530,6 +3796,8 @@ static void OnToolbarClick(HWND hwnd, int th) {
         InvalidateRect(hwnd, NULL, FALSE);
     } else if (th == TBAR_VOL) {
         SetShowVolume(&g_Ctx, !g_Ctx.showVol);
+    } else if (th == TBAR_IND) {
+        SetShowIndicators(&g_Ctx, !g_Ctx.showInd);
     } else if (th >= TBAR_IV_FIRST && th < TBAR_VOL) {
         ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (th - TBAR_IV_FIRST));
     }
@@ -4191,6 +4459,24 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 31: r = (LRESULT)floor(g_Ctx.dispMin * 100.0 + 0.5); break;
                 case 32: r = (LRESULT)floor(g_Ctx.dispMax * 100.0 + 0.5); break;
                 case 33: r = (LRESULT)floor(g_Ctx.alertFresh * 100.0 + 0.5); break;
+                // Fase 25: glidende snitt. 36/37 er SMA/EMA paa lysindeksen
+                // i lParam, x100, -1 naar snittet ikke er definert der. 38
+                // er lukkekursen x100, saa proben kan regne snittene selv.
+                // 39 er tiden de to linjene tok i siste opptegning (us).
+                case 34: r = g_Ctx.showInd; break;
+                case 35: r = (LRESULT)(g_Ctx.dispIndF * 1000.0); break;
+                case 36: case 37: {
+                    double iv = 0.0;
+                    BOOL isE = (wParam == 37);
+                    if (IndValueAt(g_Ctx.candles, g_Ctx.candleCount,
+                                   isE ? IND_EMA_PERIOD : IND_SMA_PERIOD, isE,
+                                   (int)lParam, &iv))
+                        r = (LRESULT)floor(iv * 100.0 + 0.5);
+                    break;
+                }
+                case 39: r = (LRESULT)g_probeIndUs; break;
+                case 38: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
+                             ? (LRESULT)floor(g_Ctx.candles[(int)lParam].close * 100.0 + 0.5) : -1; break;
                 default: break;
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -4227,6 +4513,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                                                  ALERT_TAU_FLASH, 0.02);
                     redraw = TRUE;
                     if (g_Ctx.alertFlashF > 0.0) settled = FALSE;
+                }
+
+                // MA-bryteren (fase 25): dispIndF toner linjene og
+                // forklaringen mot 0 eller 1. Snapper paa 0,02 som
+                // ettergloeden - de siste fargetrinnene over CLR_BG synes ikke.
+                {
+                    double ifT = g_Ctx.showInd ? 1.0 : 0.0;
+                    if (g_Ctx.dispIndF != ifT) {
+                        g_Ctx.dispIndF = AnimStep(g_Ctx.dispIndF, ifT, dt,
+                                                  IND_TAU_FADE, 0.02);
+                        redraw = TRUE;
+                        if (g_Ctx.dispIndF != ifT) settled = FALSE;
+                    }
                 }
 
                 // View- og Y-akse-easing. Maalet leses under laas; selve
@@ -4532,6 +4831,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // staar ledig.
                 if (!ctrl && wParam == 'V') {
                     OnToolbarClick(hwnd, TBAR_VOL);
+                    return 0;
+                }
+                // M (fase 25): MA-pillen. Uten Ctrl - Ctrl+M minimerer.
+                // Virker ogsaa naar pillen er skjult paa et smalt panel.
+                if (!ctrl && wParam == 'M') {
+                    OnToolbarClick(hwnd, TBAR_IND);
                     return 0;
                 }
                 if (!ctrl && wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
@@ -5000,6 +5305,9 @@ static HMENU BuildTrayMenu(void) {
         // VOL-bryteren (fase 22) - skrivebordsmodus har ingen verktoylinje.
         AppendMenuW(hMenu, MF_STRING | (g_Ctx.showVol ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_VOLUME, L"Volumstolper	V");
+        // MA-bryteren (fase 25), samme grunn.
+        AppendMenuW(hMenu, MF_STRING | (g_Ctx.showInd ? MF_CHECKED : MF_UNCHECKED),
+                    ID_TRAY_INDICATORS, L"Glidende snitt	M");
         // Prisvarslene (fase 23) settes i panelets priskolonne, men maa kunne
         // ryddes herfra: skrivebordsmodus tegner linjene og har ingen input.
         // Antallet gjelder symbolet som vises. Graatt, ikke borte, uten
@@ -5064,6 +5372,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (LOWORD(wParam) == ID_TRAY_VOLUME) {
                 SetShowVolume(&g_Ctx, !g_Ctx.showVol);
+                return 0;
+            }
+            if (LOWORD(wParam) == ID_TRAY_INDICATORS) {
+                SetShowIndicators(&g_Ctx, !g_Ctx.showInd);
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_ALERTS_CLEAR) {
@@ -5369,6 +5681,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.axisHotY    = -1;
     g_Ctx.showVol     = TRUE;   // fase 22; LoadConfig kan skru det av
     g_Ctx.dispVolF    = 1.0;
+    g_Ctx.showInd     = TRUE;   // fase 25; LoadConfig kan skru det av
+    g_Ctx.dispIndF    = 1.0;
     // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
     // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
@@ -5386,6 +5700,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
     g_Ctx.dispVolF = g_Ctx.showVol ? 1.0 : 0.0;   // fase 22: ingen animasjon ved oppstart
+    g_Ctx.dispIndF = g_Ctx.showInd ? 1.0 : 0.0;   // fase 25, samme grunn
 
     // Duplikat: "--dup x y w h sym iv", skrevet av SpawnInstance. Overstyrer
     // det LoadConfig leste, med samme grenser - en haandskrevet kommandolinje
