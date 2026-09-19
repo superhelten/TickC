@@ -63,6 +63,8 @@
 #define ZOOM_STEP        1.2   // per musehjul-hakk
 #define TIMER_ANIM_ID    2
 #define TIMER_EMBED_ID   3      // skrivebordsmodus: prov WorkerW igjen
+#define TIMER_REFIT_ID   4      // skrivebordsmodus: legg flaten paa nytt etter skjermbytte (fase 26)
+#define REFIT_SETTLE_MS  1000
 // 250 ms: ved omstart av Explorer er ny Progman paa plass etter 290-480 ms
 // (maalt). Med 1000 ms sto skrivebordet uten graf i 1,1 s. Timeren gaar bare
 // mens flaten mangler.
@@ -452,6 +454,13 @@ typedef struct {
     // av candles[] i hver opptegning (se IndStep).
     BOOL   showInd;
     double dispIndF;
+    // Overleggene har ett valg PER MODUS (fase 26). showVol/showInd er
+    // panelets; disse to er skrivebordsflatens, og de er AV som standard:
+    // flaten leses perifert bak ikonene (fase 14), og stolper og snitt er
+    // maaleverktoey, ikke tapet. Tray-menyen bytter den som gjelder modusen
+    // prosessen staar i. Les gjennom ShowVolNow/ShowIndNow, aldri direkte.
+    BOOL   showVolDesk;
+    BOOL   showIndDesk;
     // Prisvarsler (fase 23). Alt er UI-eid: varslene settes fra musa og
     // proeves i WM_APP_DATA, begge paa UI-traaden, saa traadkontrakten er
     // uroert. Per symbol - et nivaa i dollar er meningsloest paa tvers av
@@ -529,6 +538,14 @@ static BOOL g_isDuplicate = FALSE;
 // hele primaerskjermen. Samme vindusklasse og samme opptegning som panelet,
 // men ingen ramme, ingen knapper, ingen input og ingen geometri i registret.
 static BOOL g_desktopMode = FALSE;
+// Overleggsvalgene for modusen vi staar i (fase 26). Alt som tegner, easer,
+// haker av i menyen eller svarer en probe leser disse.
+static BOOL ShowVolNow(const AppContext* ctx) {
+    return g_desktopMode ? ctx->showVolDesk : ctx->showVol;
+}
+static BOOL ShowIndNow(const AppContext* ctx) {
+    return g_desktopMode ? ctx->showIndDesk : ctx->showInd;
+}
 static UINT g_msgTaskbarCreated = 0;   // Explorer startet paa nytt
 static char s_httpBuf[98304];    // 360 lys gir ~60 KB svar
 static Candle s_incoming[SEED_COUNT];
@@ -569,6 +586,9 @@ static volatile LONG g_probeResumes = 0;
 static volatile LONG g_probeRejects = 0;
 // 113: forbindelser arbeidertraaden har sluppet etter en oppvaakning.
 static volatile LONG g_probeConnDrops = 0;
+// Bare testbygg (fase 26): WM_DISPLAYCHANGE sett paa hovedvinduet. Leses med
+// WM_APP_PROBE 114 der.
+static volatile LONG g_probeDisplayChanges = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -816,6 +836,8 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->intervalMs = INTERVALS[0].ms;
     ctx->showVol    = TRUE;
     ctx->showInd    = TRUE;
+    ctx->showVolDesk = FALSE;   // fase 26: skrivebordet starter rent
+    ctx->showIndDesk = FALSE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
 
@@ -832,9 +854,13 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD py = RegReadDword(k, L"PanelY", 0);
     DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // fase 22, paa som standard
     DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // fase 25, paa som standard
+    DWORD svd = RegReadDword(k, L"ShowVolumeDesktop", 0);       // fase 26, AV som standard
+    DWORD sid = RegReadDword(k, L"ShowIndicatorsDesktop", 0);
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
     ctx->showInd = (si != 0);
+    ctx->showVolDesk = (svd != 0);
+    ctx->showIndDesk = (sid != 0);
 
     // Bundet sjekk. Et register redigert for hand, eller etterlatt av en
     // nyere versjon med flere symboler, skal ikke kunne indeksere utenfor
@@ -947,6 +973,9 @@ static void SaveConfig(const AppContext* ctx) {
     RegSetValueExW(k, L"ShowVolume",    0, REG_DWORD, (const BYTE*)&sv, sizeof(sv));
     DWORD si = ctx->showInd ? 1 : 0;
     RegSetValueExW(k, L"ShowIndicators", 0, REG_DWORD, (const BYTE*)&si, sizeof(si));
+    DWORD svd = ctx->showVolDesk ? 1 : 0, sid = ctx->showIndDesk ? 1 : 0;
+    RegSetValueExW(k, L"ShowVolumeDesktop",     0, REG_DWORD, (const BYTE*)&svd, sizeof(svd));
+    RegSetValueExW(k, L"ShowIndicatorsDesktop", 0, REG_DWORD, (const BYTE*)&sid, sizeof(sid));
     RegCloseKey(k);
 }
 
@@ -3433,8 +3462,8 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         BOOL on;
         const wchar_t* lbl;
         if (i == TBAR_SYM)      { on = ctx->overlayOpen; lbl = SYMBOLS[ctx->symIdx].label; }
-        else if (i == TBAR_VOL) { on = ctx->showVol;     lbl = L"VOL"; }
-        else if (i == TBAR_IND) { on = ctx->showInd;     lbl = L"MA"; }
+        else if (i == TBAR_VOL) { on = ShowVolNow(ctx);  lbl = L"VOL"; }
+        else if (i == TBAR_IND) { on = ShowIndNow(ctx);  lbl = L"MA"; }
         else { on = (i - TBAR_IV_FIRST == ctx->ivIdx);   lbl = INTERVALS[i - TBAR_IV_FIRST].label; }
 
         if (hot || on) FillRect(hdc, r, ctx->brBox);
@@ -3628,8 +3657,9 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
 // eases dispVolF av klokka; ellers snapper den, saa et panel som aapnes
 // senere ikke spiller av en animasjon ingen ba om.
 static void SetShowVolume(AppContext* ctx, BOOL on) {
-    if (ctx->showVol == on) return;
-    ctx->showVol = on;
+    if (ShowVolNow(ctx) == on) return;
+    if (g_desktopMode) ctx->showVolDesk = on;   // fase 26: ett valg per modus
+    else               ctx->showVol     = on;
     SaveConfig(ctx);
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
         StartAnim(ctx->hPopup);
@@ -3643,8 +3673,9 @@ static void SetShowVolume(AppContext* ctx, BOOL on) {
 // grunner som SetShowVolume over - et rent tegnevalg, fra pillen, M-tasten
 // og tray-menyen, eased naar flaten synes og snappet ellers.
 static void SetShowIndicators(AppContext* ctx, BOOL on) {
-    if (ctx->showInd == on) return;
-    ctx->showInd = on;
+    if (ShowIndNow(ctx) == on) return;
+    if (g_desktopMode) ctx->showIndDesk = on;   // fase 26: ett valg per modus
+    else               ctx->showInd     = on;
     SaveConfig(ctx);
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
         StartAnim(ctx->hPopup);
@@ -3795,9 +3826,9 @@ static void OnToolbarClick(HWND hwnd, int th) {
         StartAnim(hwnd);
         InvalidateRect(hwnd, NULL, FALSE);
     } else if (th == TBAR_VOL) {
-        SetShowVolume(&g_Ctx, !g_Ctx.showVol);
+        SetShowVolume(&g_Ctx, !ShowVolNow(&g_Ctx));
     } else if (th == TBAR_IND) {
-        SetShowIndicators(&g_Ctx, !g_Ctx.showInd);
+        SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
     } else if (th >= TBAR_IV_FIRST && th < TBAR_VOL) {
         ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (th - TBAR_IV_FIRST));
     }
@@ -4437,7 +4468,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // Fase 22: verktoylinja.
                 case 16: r = g_Ctx.ivIdx; break;
                 case 17: r = g_Ctx.symIdx; break;
-                case 18: r = g_Ctx.showVol; break;
+                case 18: r = ShowVolNow(&g_Ctx); break;   // modusens valg (fase 26)
                 case 19: r = g_Ctx.tbHot; break;
                 case 20: r = g_Ctx.overlayOpen; break;
                 case 21: r = (LRESULT)(g_Ctx.dispVolF * 1000.0); break;
@@ -4463,7 +4494,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // i lParam, x100, -1 naar snittet ikke er definert der. 38
                 // er lukkekursen x100, saa proben kan regne snittene selv.
                 // 39 er tiden de to linjene tok i siste opptegning (us).
-                case 34: r = g_Ctx.showInd; break;
+                case 34: r = ShowIndNow(&g_Ctx); break;
                 case 35: r = (LRESULT)(g_Ctx.dispIndF * 1000.0); break;
                 case 36: case 37: {
                     double iv = 0.0;
@@ -4475,6 +4506,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     break;
                 }
                 case 39: r = (LRESULT)g_probeIndUs; break;
+                // Fase 26: hoyden stempelfonten er bygget for (skrivebordsmodus).
+                case 40: r = g_Ctx.pillFontH; break;
                 case 38: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)floor(g_Ctx.candles[(int)lParam].close * 100.0 + 0.5) : -1; break;
                 default: break;
@@ -4519,7 +4552,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // forklaringen mot 0 eller 1. Snapper paa 0,02 som
                 // ettergloeden - de siste fargetrinnene over CLR_BG synes ikke.
                 {
-                    double ifT = g_Ctx.showInd ? 1.0 : 0.0;
+                    double ifT = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
                     if (g_Ctx.dispIndF != ifT) {
                         g_Ctx.dispIndF = AnimStep(g_Ctx.dispIndF, ifT, dt,
                                                   IND_TAU_FADE, 0.02);
@@ -4555,7 +4588,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     // intervallbytte skal ogsaa sette seg. Snapp er en kvart
                     // piksel av baandhoeyden, som for de andre.
                     {
-                        double vfT = g_Ctx.showVol ? 1.0 : 0.0;
+                        double vfT = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
                         if (g_Ctx.dispVolF != vfT) {
                             double bandPx = (double)gE.ch * VOL_FRAC;
                             double snapF  = (bandPx > 1.0) ? SNAP_PX / bandPx : 1.0;
@@ -5043,6 +5076,19 @@ static HWND FindDesktopWorkerW(void) {
 //
 // WS_EX_TRANSPARENT slipper musa gjennom. Flaten ligger uansett under
 // ikonenes SysListView32, men lagdelt maa den vaere, saa det koster ingenting.
+// Legger flaten over primaerskjermen. Primaerskjermen staar i 0,0 i
+// skjermkoordinater, men WorkerW dekker hele den virtuelle skjermen og har
+// sitt origo i dens hjorne. Paa et oppsett med en skjerm til venstre for den
+// primaere er de ikke det samme. Skilt ut av AttachToDesktop i fase 26, saa
+// et skjermbytte kan legge flaten paa nytt uten aa lage den paa nytt.
+static void PlaceDesktopSurface(HWND hwnd, HWND ww) {
+    POINT org = { 0, 0 };
+    MapWindowPoints(NULL, ww, &org, 1);
+    SetWindowPos(hwnd, HWND_BOTTOM, org.x, org.y,
+                 GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+                 SWP_NOACTIVATE);
+}
+
 static BOOL AttachToDesktop(HWND hwnd) {
     HWND ww = FindDesktopWorkerW();
     if (!ww) return FALSE;
@@ -5055,16 +5101,44 @@ static BOOL AttachToDesktop(HWND hwnd) {
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED | WS_EX_TRANSPARENT);
     if (!SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)) return FALSE;
 
-    // Primaerskjermen staar i 0,0 i skjermkoordinater, men WorkerW dekker
-    // hele den virtuelle skjermen og har sitt origo i dens hjorne. Paa et
-    // oppsett med en skjerm til venstre for den primaere er de ikke det
-    // samme.
-    POINT org = { 0, 0 };
-    MapWindowPoints(NULL, ww, &org, 1);
-    SetWindowPos(hwnd, HWND_BOTTOM, org.x, org.y,
-                 GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
-                 SWP_NOACTIVATE);
+    PlaceDesktopSurface(hwnd, ww);
     return TRUE;
+}
+
+// Skjermen er en annen enn da flaten ble lagt (fase 26): ny opploesning, ny
+// primaerskjerm, en skjerm koblet til eller fra. WM_DISPLAYCHANGE gaar bare
+// til toppnivaavinduer, saa det er det skjulte hovedvinduet som faar den -
+// flaten er et barn av WorkerW og hoerer ingenting. Kalles ogsaa en gang
+// til et sekund senere: Explorer legger sin egen WorkerW paa nytt etter
+// samme melding, og origo regnes i DENS koordinater.
+//
+// Sitter flaten ikke lenger i dagens WorkerW, rives den; WM_NCDESTROY
+// starter da gjenoppbyggingen, samme sti som naar Explorer startes paa nytt.
+// Ellers legges den paa nytt. SetWindowPos med uendret geometri er en
+// no-op; endres storrelsen, kommer WM_SIZE, som kaster vannmerket, og
+// dobbeltbufferet og stempelfonten (H/40) er noklet paa storrelsen og
+// bygges paa nytt av seg selv.
+//
+// Per-monitor-bevisst rundt kallene, som da flaten ble laget (se
+// TogglePopup): GetSystemMetrics foelger traadens kontekst, og hovedtraaden
+// er DPI-uvitende - uten dette ville flaten faatt virtualiserte maal.
+//
+// En ren SKALERINGSendring (100 % -> 150 %, samme opploesning) krever
+// ingenting: flaten regner i fysiske piksler. Vannmerkets fontgrenser leser
+// DPI, saa det kastes uansett.
+static void RefitDesktopSurface(void) {
+    if (!g_desktopMode || !g_Ctx.hPopup) return;
+    DPI_AWARENESS_CONTEXT prev =
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    HWND ww = FindDesktopWorkerW();
+    if (!ww || GetParent(g_Ctx.hPopup) != ww) {
+        DestroyWindow(g_Ctx.hPopup);
+    } else {
+        PlaceDesktopSurface(g_Ctx.hPopup, ww);
+        g_Ctx.wmValid = FALSE;
+        InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
+    }
+    if (prev) SetThreadDpiAwarenessContext(prev);
 }
 
 
@@ -5247,6 +5321,11 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
 
     g_desktopMode = on;
     SaveDesktopMode(on);
+    // Overleggene foelger modusen (fase 26). Den nye flaten finnes ikke
+    // enda, saa visningen snapper - samme regel som SetShowVolume naar
+    // ingenting synes.
+    ctx->dispVolF = ShowVolNow(ctx) ? 1.0 : 0.0;
+    ctx->dispIndF = ShowIndNow(ctx) ? 1.0 : 0.0;
 
     TogglePopup(ctx, hInst);
 }
@@ -5303,10 +5382,10 @@ static HMENU BuildTrayMenu(void) {
         if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
         if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Intervall");
         // VOL-bryteren (fase 22) - skrivebordsmodus har ingen verktoylinje.
-        AppendMenuW(hMenu, MF_STRING | (g_Ctx.showVol ? MF_CHECKED : MF_UNCHECKED),
+        AppendMenuW(hMenu, MF_STRING | (ShowVolNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_VOLUME, L"Volumstolper	V");
         // MA-bryteren (fase 25), samme grunn.
-        AppendMenuW(hMenu, MF_STRING | (g_Ctx.showInd ? MF_CHECKED : MF_UNCHECKED),
+        AppendMenuW(hMenu, MF_STRING | (ShowIndNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_INDICATORS, L"Glidende snitt	M");
         // Prisvarslene (fase 23) settes i panelets priskolonne, men maa kunne
         // ryddes herfra: skrivebordsmodus tegner linjene og har ingen input.
@@ -5371,11 +5450,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_VOLUME) {
-                SetShowVolume(&g_Ctx, !g_Ctx.showVol);
+                SetShowVolume(&g_Ctx, !ShowVolNow(&g_Ctx));
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_INDICATORS) {
-                SetShowIndicators(&g_Ctx, !g_Ctx.showInd);
+                SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_ALERTS_CLEAR) {
@@ -5505,6 +5584,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (wParam == 111) return (LRESULT)g_probeResumes;
             if (wParam == 112) return (LRESULT)g_probeRejects;
             if (wParam == 113) return (LRESULT)g_probeConnDrops;
+            if (wParam == 114) return (LRESULT)g_probeDisplayChanges;   // fase 26
             return 0;
 #endif
 
@@ -5523,6 +5603,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         // InitializeCriticalSection i WinMain, og en sendt melding kan
         // leveres i det vinduet. hWakeEvent settes etter laasen, saa er den
         // satt, finnes laasen.
+        // Skjermbytte (fase 26). lParam leses ikke: hovedtraaden er
+        // DPI-uvitende, saa maalene der er virtualiserte.
+        case WM_DISPLAYCHANGE:
+#ifdef TICKER_PROBE
+            InterlockedIncrement(&g_probeDisplayChanges);
+#endif
+            RefitDesktopSurface();
+            if (g_desktopMode) SetTimer(hwnd, TIMER_REFIT_ID, REFIT_SETTLE_MS, NULL);
+            break;
+
         case WM_POWERBROADCAST:
             if (wParam == PBT_APMRESUMEAUTOMATIC && g_Ctx.hWakeEvent) {
                 EnterCriticalSection(&g_Ctx.lock);
@@ -5557,6 +5647,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         // rev den ned. Proeves til den sitter; TogglePopup setter timeren
         // paa nytt selv om det feiler igjen.
         case WM_TIMER:
+            if (wParam == TIMER_REFIT_ID) {   // fase 26: en gang til, naar Explorer har satt seg
+                KillTimer(hwnd, TIMER_REFIT_ID);
+                RefitDesktopSurface();
+                return 0;
+            }
             if (wParam == TIMER_EMBED_ID) {
                 KillTimer(hwnd, TIMER_EMBED_ID);
                 if (g_desktopMode && !g_Ctx.hPopup) {
@@ -5699,8 +5794,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // vannmerket skal vaere korrekt fra forste bilde.
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
-    g_Ctx.dispVolF = g_Ctx.showVol ? 1.0 : 0.0;   // fase 22: ingen animasjon ved oppstart
-    g_Ctx.dispIndF = g_Ctx.showInd ? 1.0 : 0.0;   // fase 25, samme grunn
 
     // Duplikat: "--dup x y w h sym iv", skrevet av SpawnInstance. Overstyrer
     // det LoadConfig leste, med samme grenser - en haandskrevet kommandolinje
@@ -5736,6 +5829,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // modus (fase 12). Flagget vinner for denne kjoeringen, og et duplikat
     // er alltid et panel.
     if (!g_desktopMode && !g_isDuplicate) g_desktopMode = LoadDesktopMode();
+    // Ingen animasjon ved oppstart (fase 22 og 25). Her, og ikke rett etter
+    // LoadConfig: hvilket valg som gjelder avhenger av modusen (fase 26).
+    g_Ctx.dispVolF = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
+    g_Ctx.dispIndF = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
     // Prisvarslene (fase 23). Etter --dup-tolkingen: LoadAlerts hopper over
     // duplikater, og g_isDuplicate er foerst kjent her. Foer traaden: foerste
     // pris skal proeves mot varslene fra forrige kjoering.
