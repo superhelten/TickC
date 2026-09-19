@@ -56,6 +56,11 @@ en stegmaskin uten egen tabell — med forklaring i grafens hjørne og en
 **Fase 26** gir skrivebordsflaten egne overleggsvalg — volum og snitt er av
 der som standard, etter tilbakemelding fra bruk — og legger flaten på nytt
 ved `WM_DISPLAYCHANGE`.
+**Fase 27** («Bloomberg Essentials») legger dagens session over lysene: VWAP
+per UTC-døgn som en gyllen linje, dagens høy og lav som stiplede linjer med
+dempede aksemerker, og SMA, EMA og VWAP som rader i hover-boksen — alt regnet
+av `candles[]` under opptegning og alt bak indikatorbryteren, så
+skrivebordet er urørt. Bufferet bakfyller seg selv til døgnskiftet.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -78,12 +83,13 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md` og
 `docs/superpowers/plans/2026-09-18-ticker-robuste-inndata.md` og
 `docs/superpowers/plans/2026-09-19-ticker-indikatorer.md` og
-`docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md`. Design:
+`docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md` og
+`docs/superpowers/plans/2026-09-19-ticker-bloomberg-essentials.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~5870 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~6290 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -106,7 +112,8 @@ den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
 `[ + ]` — ellers feiler
 `LNK1104: cannot open file 'ticker.exe'`.
 
-Fotavtrykk: ~3,5 MB private bytes, 195 KB exe etter fase 24 (195 584 byte;
+Fotavtrykk: ~3,5 MB private bytes, 199 KB exe etter fase 27 (203 776 byte;
+199 680 etter fase 26, 199 168 etter fase 25, 195 584 etter fase 24;
 195 072 etter fase 23, 187 KB etter fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
 380×300 i fase 1 — dobbeltbufferet er 8× større.)
 
@@ -438,7 +445,7 @@ håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
 | `V` | VOL-pillen: volumstolpene av/på, eased (fase 22) |
 | `1` … `6` | intervallpillene i rekkefølge, 1m … 1d (fase 22) |
 | «Volumstolper» i tray-menyen | bytter valget for **modusen prosessen står i**: panelets i panelmodus, skrivebordets i skrivebordsmodus (fase 22, per modus fra fase 26) |
-| `M` / `MA`-pillen / «Glidende snitt» i tray-menyen | SMA 20 og EMA 50 av/på, tonet (fase 25). `Ctrl`+`M` er fortsatt minimer. Tray-punktet er per modus, som «Volumstolper» (fase 26) |
+| `M` / `MA`-pillen / «Indikatorer» i tray-menyen | SMA 20, EMA 50, VWAP og dagens høy/lav av/på, tonet (fase 25; VWAP og høy/lav fra fase 27, da tray-punktet byttet navn fra «Glidende snitt»). `Ctrl`+`M` er fortsatt minimer. Tray-punktet er per modus, som «Volumstolper» (fase 26) |
 | Klikk i priskolonnen / `A` | setter eller fjerner et prisvarsel — se *Prisvarsler* over (fase 23) |
 | «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises (fase 23) |
 | Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
@@ -2687,6 +2694,71 @@ WorkerW ved et ekte bytte, om en skaleringsendring sender
 `WM_DISPLAYCHANGE`, flere skjermer og bytte av primærskjerm er lest, ikke
 kjørt; maskinen har én skjerm.
 
+### Fase 27 — «Bloomberg Essentials»: VWAP, dagens høy/lav og verdier i hover-boksen
+
+Plan og målinger: `docs/superpowers/plans/2026-09-19-ticker-bloomberg-essentials.md`.
+Gren `fase27-bloomberg-essentials`, flettet inn med `--no-ff`.
+
+**Bestillingen:** stiplede linjer for sessionens høy og lav bak lysene med
+diskret etikett på aksen, VWAP som gyllen linje over lysene, og SMA/EMA/VWAP
+som eksakte tall i hover-boksen — uten nytt minne og uten å røre
+skrivebordet.
+
+**Session = UTC-døgnet, ikke utsnittet.** Bestillingen sa «døgn/utsnitt» og
+«VWAP for det synlige utsnittet». `PriceRange` legger 8 % luft rundt
+utsnittets høy og lav, så linjer på *utsnittets* ekstremer ville stått på
+samme sted i hvert bilde; og en VWAP forankret i første synlige lys ville
+hoppet for hvert lys under panorering (fallgruve 90). `SessionStartAt` finner
+døgnets første lys med binærsøk i `openTime`; på 1d-lys finnes ingen session.
+**VWAP nullstilles per døgn** (`DrawVwap`), typisk pris (H + L + C) / 3, og
+linja brytes ved døgnskiftet — så den er definert også når utsnittet står i
+gårsdagen. Dagens høy/lav gjelder bare i dag og går fra døgnets første lys
+inn til aksen. Alt er stegmaskiner og rene funksjoner som i fase 25: ingen
+tabell, ingen nye buffere (`s_volPts` lånes til `Polyline` og `PolyPolyline`).
+
+**Et ufullstendig døgn tegnes ikke — og hentes inn.** 360 lys er seks timer
+ved 1m, og «dagens høy» av de siste seks timene er et feil tall.
+`WM_APP_DATA` ber om eldre lys (`RequestHistory`, fase 18) til døgnet er
+dekket: høyst fire hentinger, bare med panelet synlig og indikatorene på i
+modusen prosessen står i.
+
+**Bak indikatorbryteren.** Verktøylinja er full (`C_ASSERT`, fase 25), så alt
+følger `ShowIndNow()` / `dispIndF`: `M`, `MA`-pillen og tray-punktet, som nå
+heter «Indikatorer». Skrivebordet har `ShowIndicatorsDesktop` = 0 som
+standard (fase 26) og er dermed urørt; ingen nye registernøkler. De stiplede
+linjene tones med resten, og er derfor streker til `PolyPolyline` med
+`DC_PEN` og ikke en `PS_DASH`-penn — GDI-tallet i hvile er uendret. Mønsteret
+(6 på / 6 av) er forankret i flatens venstre kant. `CLR_VWAP` F2D14B er gulere
+og lysere enn varslenes rav; `CLR_SESSION` 90939E er nøytral grå (fallgruve
+87 forklarer hvorfor ikke 8A93A0). Aksemerkene er dempede (`CLR_BOX`-flate,
+grå tekst, ingen ramme) og lavest i rang i kollisjonssystemet fra fase 23.
+Forklaringen fikk et tredje ledd i gull, som faller ut alene når raden er
+smal; krysser en sessionlinje forklaringens rad (lavt panel), får teksten
+ugjennomsiktig bakgrunn. Hover-boksen er 126 px høy med indikatorene på
+(87 + 3 × 13) og 87 som før uten.
+
+**Verifisert.** `probe_sess.c` (1280×720, ekte peker for hover, venter
+på inaktiv maskin): **54/54 i to kjøringer** (og 53/53 før 06:00 UTC, da
+bakfyllingen ikke trengtes), rød kjøring **14 FAIL** før 06:00 og **18 FAIL**
+etter. Kl. 06:01 UTC hentet bufferet seg fra 360 til 720 lys av seg selv og
+stoppet; commit 1 samme minutt sto på `fullstendig = 0`. Dagens høy/lav og
+VWAP stemmer med probens egen utregning av feltene 14 og 47–50 (VWAP innen
+5 cent på fire lys). Begge stiplede linjer ligger på utregnet rad i eksakt
+`CLR_SESSION` (548 av 1098 px, lengste strek 6 px, ingenting før døgnets
+første lys), VWAP i 1081 av 1081 kolonner innen 2 px av utregnet (x, y), 0 px
+utenfor grafflaten. Hover-boksen 126 px på / 87 av. 1d: ingen session, ingen
+bakfylling, «VWAP  -». 1t: VWAP regnet fra hvert døgns start, 1088 av 1136
+kolonner. **Kostnad, direkte målt (felt 45): 15–21 µs per bilde** (snittene
+fra fase 25: 48–57 µs). GDI/USER **32/14 før og etter**. Enhetstester 24/24.
+Skrivebordsproben (utvidet) 47/47: **0 px VWAP og 0 px høy/lav som
+standard** på 3840×1600, 3860 / 1824 px når de skrus på. Fase 25-proben
+54/54 etter at den lærte å vente på bakfyllingen. En fangst ved 560×300
+viste dagens høy tvers gjennom forklaringens sifre; rettet i commit 3.
+**Exe 199 680 → 203 776 byte (+4 096)**, `/TP` byte-identisk.
+
+**Ikke testet:** et ekte døgnskifte med panelet åpent, og bakfylling under
+nettverksfeil (lest, ikke kjørt).
+
 ---
 
 ## Kjente begrensninger
@@ -2815,6 +2887,22 @@ kjørt; maskinen har én skjerm.
   og skrus på fra tray-menyen *mens prosessen står i skrivebordsmodus*.
   Panelet har sine egne valg. Den som hadde dem på skrivebordet før fase
   26, må skru dem på igjen én gang.
+- **Dagens session er UTC-døgnet** (fase 27), ikke lokal midnatt og ikke
+  utsnittet: VWAP nullstilles og «dagens» høy/lav begynner 00:00 UTC (02:00
+  norsk sommertid), som Binance sine dagslys. På 1d-lys finnes ingen session
+  — VWAP viser en strek og linjene tegnes ikke. Dagens høy/lav tegnes bare
+  når nivået ligger innenfor det synlige prisområdet og utsnittet rekker inn
+  i dagen; aksemerket viker for stempelet, varsler og spøkelsesmerket.
+- **Et døgn som ikke er helt i bufferet, får ingen VWAP** (fase 27). For
+  *dagens* døgn hentes eldre lys av seg selv (høyst fire hentinger ved 1m,
+  bare med panelet synlig og indikatorene på); for eldre døgn i venstre kant
+  av bufferet står linja tom til neste døgnskifte, til brukeren drar i
+  veggen. Bakfyllingen betyr at bufferet ved 1m har opptil 1800 lys kort
+  etter åpning, ikke 360 — private bytes er uendret (`candles[]` er statisk).
+- **Trådkorsets aksemerke skjuler ikke rutenettetiketten under seg** (sett i
+  fangsten i fase 27, eldre enn fasen): står pekeren 8–15 px fra en etikett,
+  stikker en stripe av tallet fram under merket. Stempelet, varslene og
+  sessionmerkene har kollisjonsregelen; trådkorset har den ikke.
 - **Oppvåkning fra dvale er bare prøvd med en sendt melding** (fase 24).
   `PBT_APMRESUMEAUTOMATIC` vekker tråden og slipper forbindelsen, men ekte
   dvale kan ikke drives fra en probe. Er nettet ikke oppe ved første forsøk,
@@ -3310,20 +3398,41 @@ kjørt; maskinen har én skjerm.
     er kjent.** `dispVolF` ble snappet rett etter `LoadConfig`, men
     `g_desktopMode` leses 35 linjer lenger ned (`--desktop-mode`, så
     `DesktopMode`). Usynlig så lenge valget var felles for begge modi.
+87. **En linjefarge må ikke ligge på blandingslinja mellom bakgrunnen og en
+    tekstfarge.** Første valg for dagens høy/lav (fase 27) var 8A93A0 — som
+    er *eksakt* `CLR_BG` + 0,85 × (`CLR_AXIS` − `CLR_BG`) i alle tre kanaler.
+    Kantutjevnede aksetall inneholder da samme farge, og en pikselprobe som
+    teller «eksakt linjefarge» teller tekst. Regn ut t per kanal før fargen
+    tas i bruk; 90939E ligger ikke på linja til noen av tekstfargene.
+88. **En forklaring i linjas farge ER piksler i linjas farge.** Proben i fase
+    27 telte gull i hele vinduet for å vise at VWAP *ikke* tegnes på 1d — og
+    fant forklaringens «VWAP  -», som er gull med vilje. Rød kjøring var
+    grønn på den sjekken av feil grunn (ingen forklaring i commit 1). Let
+    etter linja der linja går, ikke i hele fangsten.
+89. **En sti som avhenger av klokka, må øves med vilje.** Bakfyllingen til
+    døgnskiftet (fase 27) kjører bare når døgnet er eldre enn de 360 lysene
+    fra første henting — ved 1m etter 06:00 UTC. De første kjøringene gikk
+    05:30 og øvde den aldri; proben skriver derfor UTC-tiden og om stien ble
+    tatt, og én grønn kjøring ble lagt etter 06:00.
+90. **«For det synlige utsnittet» i en bestilling er et forslag til
+    forankring, ikke et krav** (samme klasse som 79). VWAP fra første synlige
+    lys hopper for hvert lys under panorering, og høy/lav for utsnittet står
+    alltid 8 % fra kantene (`PriceRange`). Les hva koden gjør med utsnittet
+    før et tall forankres i det.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak21` ligger igjen** (19.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 26, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak20` er slettet: de dekket fase 1 til 25, og den
+**Bare `ticker.c.bak22` ligger igjen** (19.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 27, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak21` er slettet: de dekket fase 1 til 26, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25) og `.bak21` (fase 26). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26) og `.bak22` (fase 27). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
