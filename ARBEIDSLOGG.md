@@ -1,6 +1,6 @@
 # BTC Ticker — arbeidslogg
 
-Status per 18.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
+Status per 19.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
 del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
 indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
@@ -48,6 +48,11 @@ overlayet), en pille per intervall og en `VOL`-bryter som eases, med `V` og
 den prisen, et klikk på merket fjerner den, og når prisen når nivået fyrer
 varselet én gang med etterglød, ballong og lyd — også med panelet lukket.
 Testbygget fikk **skrivende** probe-felt som injiserer en pris.
+**Fase 24** gjør inndataene sunne (parserne forkaster nan, inf, 0 og usunne
+lys) og vekker tråden etter dvale.
+**Fase 25** legger glidende snitt over lysene — SMA 20 og EMA 50, regnet av
+en stegmaskin uten egen tabell — med forklaring i grafens hjørne og en
+`MA`-bryter i verktøylinja, på `M` og i tray-menyen.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -67,12 +72,14 @@ Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md` og
 `docs/superpowers/plans/2026-09-18-ticker-volum.md` og
 `docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md` og
-`docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md`. Design:
+`docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md` og
+`docs/superpowers/plans/2026-09-18-ticker-robuste-inndata.md` og
+`docs/superpowers/plans/2026-09-19-ticker-indikatorer.md`. Design:
 `docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~5360 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `ticker.c` (~5780 linjer). Ved siden av ligger
 `ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -294,6 +301,7 @@ DC. En `C_ASSERT` holder hele linja innenfor `HeaderRow2Limit` ved
 | symbol `▾` | åpner overlayet (det samme som høyreklikk i grafen); aktiv mens det står åpent |
 | `1m` … `1d` | `ApplyConfigChoice` — samme sti som overlayet og tray-menyen; klikk på den aktive er en no-op |
 | `VOL` | `SetShowVolume` — **ikke** `ApplyConfigChoice`: bufferet skal ikke tømmes for et tegnevalg |
+| `MA` | `SetShowIndicators` (fase 25) — samme form. Eneste pille utenfor minstebredden: skjult under 426 px, `M` og tray-menyen virker uansett |
 
 Pillene er `HTCLIENT`, mellomrommene og resten av headeren `HTCAPTION`
 (fallgruve 21). `tbHot` følger `btnHot`s regler: satt etter
@@ -615,8 +623,8 @@ Bygges i `EnsureWatermark`, som per definisjon bare kjører når
 
 `HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
 `PanelWidth`, `PanelHeight`, `PanelX`, `PanelY`, `PanelHasPos`,
-`DesktopMode` (fase 12) og `ShowVolume` (fase 22, standard 1; skrives av
-`SaveConfig` sammen med indeksene). Leses i `WinMain` **før `CreateThread`**, slik at
+`DesktopMode` (fase 12), `ShowVolume` (fase 22) og `ShowIndicators` (fase 25)
+— de to siste standard 1, skrevet av `SaveConfig` sammen med indeksene. Leses i `WinMain` **før `CreateThread`**, slik at
 første henting går mot riktig par. Indeksene er bundet sjekket. Enhver feilsti
 lander på BTC/USDT 1m.
 
@@ -649,14 +657,14 @@ er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
 | Navn | Verdi | Betydning |
 |---|---|---|
 | `MAX_CANDLES` | 6000 | 4 dager på 1m, 16 år på 1d; var 1440 til fase 17 |
-| `SEED_COUNT` / `DEFAULT_VIEW` | 300 | 5 t frø / standard utsnitt |
+| `SEED_COUNT` / `DEFAULT_VIEW` | 360 / 300 | 6 t frø og bakfyllingsbolk / standard utsnitt. 60 lys oppvarming, så EMA 50 er definert fra venstre kant (fase 25; var 300 / 300) |
 | `MIN_VIEW` | 8 | maks innzoom |
 | `ZOOM_STEP` | 1.2 | per hjulhakk |
 | `TIMER_INTERVAL` | 3000 | hentefrekvens (ms) |
 | `KLINE_MS` | 60000 | ett 1m-lys |
 | `REOPEN_GUARD_MS` | 250 | hindrer at lukkeklikk åpner igjen |
 | `SHOW_GRACE_MS` | 400 | ignorer fokustap rett etter åpning |
-| `s_httpBuf` | 98304 | 1,94× margin mot 50,7 KB svar |
+| `s_httpBuf` | 98304 | ~1,6× margin mot ~60 KB svar (360 lys; var 1,94× mot 50,7 KB) |
 | `ANIM_INTERVAL` | 16 | animasjonsklokke (~60 fps) |
 | `ANIM_TAU_CHROME` | 55,0 | tidskonstant chrome-fade (ms) |
 | `ANIM_DT_MAX` | 100,0 | klemmer `dt`, lang pause gir ett hopp |
@@ -682,6 +690,11 @@ er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
 | `TBAR_TOP` / `TBAR_H` | 28 / 15 | verktøylinjas rad: y i [28, 43), under prisens grunnlinje og over grafflaten (fase 22) |
 | `TBAR_SYM_W` / `TBAR_IV_W` / `TBAR_VOL_W` | 74 / 28 / 32 | faste pillebredder; sum med luft 300 px, slutt på x = 310 mot grensen 312 ved 400 px |
 | `TBAR_GAP` / `TBAR_GROUP_GAP` | 2 / 8 | mellom intervallpiller / mellom gruppene |
+| `TBAR_IND_W` | 26 | `MA`-pillen (fase 25), x i [312, 338): utenfor minstebredden med vilje, skjult under 426 px |
+| `IND_SMA_PERIOD` / `IND_EMA_PERIOD` | 20 / 50 | glidende snitt på lukkekursen (fase 25). Prefiks `IND_`: `MA_*` tilhører `winuser.h` |
+| `CLR_SMA` / `CLR_EMA` | `#3D8FBF` / `#A072D0` | dempet stålblå / dempet fiolett, 1 px over lysene. Finnes ikke ellers i flaten, så en probe kan telle dem |
+| `IND_TAU_FADE` | 55,0 | `MA`-bryterens toning (= `ANIM_TAU_FADE`), snapp 0,02 |
+| `IND_BATCH` | 1024 | punkter per `Polyline`; bufferet er volumstolpenes `s_volPts` |
 | `ALERT_MAX` | 8 | prisvarsler per symbol, faste plasser, 256 byte i alt (fase 23) |
 | `CLR_ALERT` / `CLR_ALERT_LINE` | `#FFB020` / `#86601B` | rav: merke og etterglød / linja over dataflaten, blandet halvveis mot `CLR_BG`. Ikke blant de elleve faste fargene, så en probe kan telle dem |
 | `ALERT_HIT_PX` | 8 | halve merkehøyden: treffet er flaten som er tegnet |
@@ -2503,6 +2516,109 @@ maskin; stien fra `WM_APP_DATA` og ut er urørt. Et usunt lys *ende til ende*
 svar), og bakfyllingen (fase 18) gjennom den nye parseren (samme funksjon som
 seed-svaret, men stien med `rejected` er bare lest).
 
+### Fase 25 — glidende snitt: SMA 20 og EMA 50
+
+Plan og målinger: `docs/superpowers/plans/2026-09-19-ticker-indikatorer.md`.
+Gren `indikatorer`, flettet inn med `--no-ff`.
+
+**Mandatet** listet SMA/EMA i C, `WM_DISPLAYCHANGE`/`WM_DPICHANGED` i
+skrivebordsmodus, og eget initiativ. **Valgt: SMA/EMA** — det eneste av de
+tre brukeren ser hver gang panelet åpnes, og det fase 24 lovet («indikatorer
+er ønsket, bygg dem i C»). Skjermbytte står som neste kandidat, med en
+testbar utforming i planfila.
+
+**Ingen tabell.** Snittene lagres ikke. `IndState` er en stegmaskin på 40
+byte: `IndStep(&s, candles, i)` mates ett lys og gir verdien i det den
+faller ut. SMA er en rullende sum, startet `period − 1` lys før første
+tegnede lys (`IndFeedStart`), så summen aldri lever lenger enn ett bilde og
+ikke kan drive. EMA er sådd med SMA av de første 50 lysene og går videre med
+`v += k·(close − v)`, `k = 2/51`; den har uendelig hukommelse og mates
+**alltid fra lys 0**, ellers ville linja avhenge av hvor utsnittet begynner
+og flytte seg under panorering. Bare `+ − × ÷` — ingen `pow`/`log`
+(fallgruve 75). Punktene legges rett i `s_volPts`, volumstolpenes buffer,
+som er ferdig brukt når linjene begynner: **overlegget har null byte eget
+statisk minne.**
+
+**Tegningen** (`DrawIndicator`): `Polyline` med `DC_PEN` i bolker på 1024
+punkter, siste punkt i en bolk er første i neste. Etter lysene og før
+`SelectClipRgn(NULL)` — *over* lysene (en dempet 1 px linje bak mettede
+lyskropper forsvinner der den krysser prisen), under siste-pris-linja og
+trådkorset. Linja går ett lys ut på hver side og forlater flaten gjennom
+klippet. `floor` på x, fordi lyset utenfor venstre kant har negativ
+forskyvning der `(int)` runder mot null. `y` klemmes til ±16 flatehøyder
+(GDI regner i 27 bit). **`PriceRange` er urørt:** prisaksen ser ikke
+snittene, og en linje utenfor prisområdet klippes, som i TradingView. Begge
+modi — en kurve er ikke tekst (fase 14).
+
+**Forklaringen** står øverst til venstre i grafflaten i linjenes egne
+farger — `SMA 20  81162.66    EMA 50  81196.25` — med verdien på lyset
+under trådkorset, ellers siste synlige lys. Verdien faller ut av samme
+gjennomløp som tegner linja. Bare i panelet, og bare når hele teksten får
+plass (~323 px; et avkuttet tall er et feil tall).
+
+**Bryteren** følger VOL (fase 22): `showInd` (registret, `ShowIndicators`,
+på som standard), `dispIndF` ∈ [0, 1] eased i `WM_TIMER` — her som *farge*
+mot `CLR_BG` (`Blend`), τ 55 ms, snapp 0,02 — og snappet når flaten ikke
+synes. `MA`-pille, tasten `M` (uten Ctrl; `Ctrl`+`M` minimerer) og «Glidende
+snitt» i tray-menyen (`ID_TRAY_INDICATORS` 1007), som er veien inn i
+skrivebordsmodus. **Verktøylinja var full** (x = 310 av 312 på 400 px):
+`MA`-pillen er det ene, bevisste unntaket fra `C_ASSERT`-regelen og skjules
+under 426 px av den regelen som alltid har stått der. `POPUP_MIN_W` er ikke
+hevet.
+
+**`SEED_COUNT` 300 → 360.** Første skjermbilde viste EMA-linja begynne en
+sjettedel inn i grafen: med 300 av 300 lys synlige er lys 0–48 udefinert.
+Første henting (og hver bakfyllingsbolk) tar nå 360 lys; standardutsnittet
+er fortsatt de siste 300, så oppvarmingen ligger utenfor venstre kant.
+`C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_EMA_PERIOD)`. Svaret er ~60 KB av
+`s_httpBuf` på 96.
+
+**Verifisert.** Enhetstester på ekte kode (`unit_ind`): **20/20**, rød mot
+commit 1 (funksjonene finnes ikke). 6000 pseudotilfeldige lukkekurser mot
+uavhengige referanser: største avvik SMA 0, EMA 1,5·10⁻¹⁰; rullende sum
+startet midt i bufferet over 3000 lys: 2,5·10⁻¹⁰. Testene fant én ekte feil
+før den ble committet: periodevernet lå i `IndInit`, men ikke i
+`IndFeedStart`. Ende til ende (`probe_ind.c`): **54/54 i to kjøringer**, rød
+kjøring **29 FAIL**. Appens verdier (felt 36/37) mot probens egen utregning
+av lukkekursene (felt 38) på fire lys, innen 2 cent; SMA i 1126–1130 og EMA i
+1136 av 1136 kolonner, null linjepiksler utenfor grafflaten, en
+linjepiksel innen 2 px av utregnet (x, y) på tre lys per linje; `M` toner
+`dispIndF` gjennom mellomverdier til 0 på ~220–250 ms og skriver registret
+med en gang; pillen på (325, 35) skrur på, mellomrommet VOL|MA treffer
+ingenting; tray-kommandoen; omstart med `ShowIndicators` = 0 gir null linjer
+fra første bilde; 410 px skjuler pillen mens `M` virker, 430 px viser den;
+bakfylt til ~4700–5000 lys og zoomet helt ut er EMA sammenhengende i 1136
+av 1136 kolonner. Skrivebordsmodus sett i `PrintWindow` ved 3840×1600: 4165 +
+3730 linjepiksler, ingen forklaring. **Opptegning:** de to linjene koster
+**52–59 µs** per bilde med 300 synlige lys og **179–181 µs** med 4300–4700
+(median, QPC rundt blokka i testbygget, felt 39) — 3 % av en opptegning på
+~1,9 ms. Å måle det som *differansen* mellom hele opptegningen med og uten
+snitt lot seg ikke gjøre: fem vekslende runder ga −139, +63, +78, +80 og
++196 µs ved 300 lys i fem kjøringer — støygulvet er større enn det som måles
+(fallgruve 80). **GDI/USER 32/14 før og etter** 12 bytter med toning og 1200 bilder. **Exe
+195 584 → 199 168 byte (+3 584)**; commit 1 alene 0; `/TP` identisk; uten
+`wcscat_s` samme tall — veksten er koden, ikke CRT.
+
+**Proben trenger en inaktiv maskin likevel.** Den sender ingen `SendInput`
+og flytter ikke pekeren, og første utgave startet derfor uten å vente. I
+en grønn kjøring kom brukeren tilbake (siste inndata 0,3 s gammel da det
+ble undersøkt) og må ha holdt `Ctrl` idet proben postet `M` — panelet sto
+minimert med `showInd` urørt, og `Ctrl`+`M` er eneste vei dit: appen leste `Ctrl`+`M`, minimerte panelet som den skal, og
+proben — som fanget et 0×0-vindu og talte piksler i 1280×720 — døde med
+tilgangsfeil etter fire FAIL. Ingen produktfeil; proben venter nå på 25 s
+uten inndata, venter ut modifikatortaster før hver postet tast, og avbryter
+med kode 4 når fangsten ikke har den størrelsen den regner med (fallgruve 84).
+
+**Ikke testet:** trådkorsets innvirkning på forklaringen er sett i et
+skjermbilde (ekte peker, 80959.24 på lyset 02:22 mot 81157.62 på siste lys),
+ikke i proben — en postet `WM_MOUSEMOVE` holder ikke hover (fallgruve 35).
+Tray-*menyen* er ikke åpnet; kommandoen den sender, er. Utkasting i front
+ved fullt buffer (6000 lys) mens linjene vises er lest, ikke kjørt: EMA
+mates fra det nye lys 0 og flytter seg med under 10⁻⁹ av prisen etter ~1000
+lys. Fase 23- og fase 24-probene er ikke kjørt på nytt; `WM_APP_DATA`-stien,
+parserne og varslene er urørt, men **`SEED_COUNT` er endret** og eldre prober
+som forventer 300 lys etter første henting, vil feile på det tallet.
+
 ---
 
 ## Kjente begrensninger
@@ -2544,10 +2660,31 @@ seed-svaret, men stien med `rejected` er bare lest).
 - **De ytterste 6 px av priskolonnen er skaleringskant** (`HTRIGHT`), ikke
   varselflate, når panelet ikke er maksimert.
 - **Frakoblet-telleren vises ikke i headeren på smale paneler** (fase 22).
-  Verktøylinja slutter på x = 310; teksten trenger ~75 px til før
-  prisaksens etikett, altså et panel på ~480 px eller mer. Dempet pris,
+  Verktøylinja slutter på x = 338 (med `MA`-pillen, fase 25; 310 uten);
+  teksten trenger ~75 px til før prisaksens etikett, altså et panel på
+  ~510 px eller mer. Dempet pris,
   tray-tips og ikon bærer tilstanden uansett. Symbollinjas ellipse-gren
   er borte sammen med symbollinja.
+- **Periodene er faste** (fase 25): SMA 20 og EMA 50, ikke valgbare, og
+  begge eller ingen — én bryter.
+- **`MA`-pillen finnes ikke under 426 px bredde** (fase 25). `M` og
+  tray-menyen virker. Forklaringen trenger ~335 px grafbredde og er borte
+  under ~440 px panelbredde; linjene tegnes uansett.
+- **EMA avhenger av hvor bufferet begynner** (fase 25). Den mates fra lys 0,
+  så en bakfylling (fase 18) eller en utkasting i front flytter såpunktet.
+  Virkningen dør ut med (49/51)ⁿ: etter 300 lys er den under 10⁻⁵ av
+  avviket i såpunktet. På de første ~150 lysene etter lys 49 i et *kort*
+  buffer kan linja skille seg synlig fra TradingViews, som har lengre
+  historikk.
+- **Snittene er udefinert på de første 19 / 49 lysene i bufferet**, og
+  linja begynner der. Standardutsnittet skjuler det (`SEED_COUNT` 360);
+  panorert helt til historikkens start synes det.
+- **Linjene er 1 px også på skrivebordet** (fase 25). Stempelet skalerer
+  med H/40; linjene gjør ikke det (`DC_PEN` er alltid 1 px), og ved
+  3840×1600 er de tynne. Rutenettet har samme egenskap.
+- **Trådkorset tegnes over forklaringen** når pekeren står under den.
+- **Et duplikat arver `ShowIndicators` fra registret**, som `ShowVolume`
+  under, og skriver det aldri.
 - **Et duplikat arver `ShowVolume` fra registret, ikke fra panelet det ble
   startet fra** (fase 22). `--dup` bærer symbol og intervall, ikke
   volumvalget; i praksis er de like, fordi hovedinstansen skriver valget
@@ -3063,20 +3200,48 @@ seed-svaret, men stien med `rejected` er bare lest).
     erstatte `malloc` med `std::vector` i en kodebase uten `malloc`. To
     `grep` og tre små bygg i scratchpad avgjorde det; tallene står i
     *Avviste forslag*. Mål midlene, lever målet.
+80. **Mål det lille direkte, ikke som differansen mellom to store.** Fase
+    25-proben målte hele opptegningen (~1,9 ms) med og uten glidende snitt
+    og fikk «overlegget koster −61 µs» — og −239 µs mot et bygg *uten*
+    overlegg. Fem vekslende runder med minste median per tilstand hjalp
+    ikke: −139, +63, +78, +80, +196 µs i fem kjøringer. QPC rundt selve
+    blokka (probe-felt 39) gir 52 og 59 µs i to kjøringer.
+81. **`MA_` er tatt, som `TB_`.** `winuser.h` definerer `MA_ACTIVATE` …
+    `MA_NOACTIVATEANDEAT` (svarene på `WM_MOUSEACTIVATE`). Indikatorene heter
+    `IND_*`. Fallgruve 67 i ny drakt: sjekk prefikset mot SDK-et før du
+    velger det.
+82. **Se på første skjermbilde før du skriver proben.** Tallene var riktige
+    og linjene sammenhengende, men EMA 50 begynte en sjettedel inn i
+    standardutsnittet — 300 av 300 lys synlige, de første 49 udefinert.
+    Ingen pikselsjekk ville lett etter det. Rettet ved kilden
+    (`SEED_COUNT` 360), og *så* fikk proben sjekken «definert på første
+    synlige lys».
+83. **Et vern i `Init` verner ikke søsknene.** `IndInit` klemte perioden til
+    1; `IndFeedStart` tok den rå og regnet startindeksen forbi målet, så
+    løkka aldri gikk. Funnet av en enhetstest på periode 0, ikke av noe
+    brukeren kan nå — men neste fase gjør periodene valgbare.
+84. **En postet tast er ikke uavhengig av brukeren.** `WM_KEYDOWN` kan
+    postes til et vindu uten fokus, men appen leser `Ctrl` med
+    `GetKeyState` — den EKTE tasten. Holder brukeren `Ctrl` i et annet
+    vindu, blir probens `M` til `Ctrl`+`M` (fallgruve 63 sa at postede
+    taster ikke kan *teste* Ctrl; dette er motsatsen: de kan heller ikke
+    *unngå* den). «Ingen `SendInput`» betyr ikke «trenger ikke inaktiv
+    maskin». Og en fangst skal sjekke størrelsen den fikk før den indekserer
+    med størrelsen den ventet: et minimert panel er 0×0.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak19` ligger igjen** (18.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 24, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak18` er slettet: de dekket fase 1 til 23, og den
+**Bare `ticker.c.bak20` ligger igjen** (19.09.2026). Den er identisk med
+`ticker.c` slik den står etter fase 25, og er rollback-referansen for bygget som
+kjører. `ticker.c.bak` … `.bak19` er slettet: de dekket fase 1 til 24, og den
 historikken ligger i git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23) og `.bak19` (fase 24). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24) og `.bak20` (fase 25). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
