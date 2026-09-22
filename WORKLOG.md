@@ -77,6 +77,8 @@ section).
 status text, the alert balloon, `1h`/`4h`, ISO dates).
 **Phase 32** translates every comment in `tickc.c`, proven comment-only:
 the production exe is byte-identical apart from the link timestamp.
+**Phase 33** translates this work log and every plan, renames it from
+`ARBEIDSLOGG.md` and moves the plans to `docs/plans/` with English names.
 See **The window** below. Plans:
 `docs/plans/2026-09-16-borderless-window.md`,
 `docs/plans/2026-09-16-glyph-hover-cursor.md`,
@@ -3091,6 +3093,36 @@ old source except for the two copies of the link timestamp (0x108 and
 0x2dadc), so the pixel probes were not rerun. `probe_migrate` 24/24.
 Exe 206 336 bytes, unchanged.
 
+### Phase 33 — English docs: this work log and every plan
+
+Plan: `docs/plans/2026-09-22-english-docs.md`. Branch `fase33-english-docs`,
+merged with `--no-ff`.
+
+**Part 1, names.** `docs/superpowers/plans/` and `.../specs/` became
+`docs/plans/` and `docs/specs/`, every plan got an English slug without the
+`ticker-` prefix, and `ARBEIDSLOGG.md` became `WORKLOG.md`. The 88 references
+in the docs, README and manifest were rewritten by script, and every
+`docs/...` path in the repo resolves. The manifest's comment is English.
+
+**Part 2, translation.** This log in nine chunks and the 28 Norwegian plan and
+spec documents in ten batches, by eighteen parallel agents from one rules file:
+one glossary, fixed heading names (so "see **The window** below" and similar
+references still match), ISO dates, decimal points, current English UI labels
+where prose names a menu item, US spelling, comments inside code blocks
+translated. **Kept on purpose:** inline code byte for byte, and inside code
+blocks the `git commit -m` message bodies, test assertion strings and old
+menu sketches — verbatim records of the Norwegian history, like the git log.
+
+**Verified.** `doc_check.py` per file against the original: code blocks
+identical apart from comments, inline code identical as a multiset, links,
+counts of headings, numbered items and table rows, no Norwegian-looking prose,
+no æ ø å « » outside code. This log: 2 470 inline code spans, 72 headings,
+111 numbered items, 382 table rows. The agents found two bugs in the checker
+(inline code wrapping onto a new line, code blocks indented under list items);
+both were fixed and every file was checked again. A final scan of the repo:
+0 Norwegian comments, 0 Norwegian UI strings, no Norwegian prose. No code
+changed; exe 206 336 bytes.
+
 ---
 
 ## Known limitations
@@ -3841,8 +3873,8 @@ Exe 206 336 bytes, unchanged.
 ## Backups
 
 **Only `tickc.c.bak27` is left** (2026-09-22). It is identical to `tickc.c`
-as it stands after phase 32, and is the rollback reference for the build that
-is running. `ticker.c.bak` … `.bak24` and `tickc.c.bak25`/`.bak26` are deleted: they covered phases 1 to
+as it stands after phase 32 (phase 33 changed no code), and is the rollback
+reference for the build that is running. `ticker.c.bak` … `.bak24` and `tickc.c.bak25`/`.bak26` are deleted: they covered phases 1 to
 31, and that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
