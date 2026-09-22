@@ -78,34 +78,34 @@ status text, the alert balloon, `1h`/`4h`, ISO dates).
 **Phase 32** translates every comment in `tickc.c`, proven comment-only:
 the production exe is byte-identical apart from the link timestamp.
 Se **Vinduet** under. Planer:
-`docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
-`docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
-`docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`,
-`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`,
-`docs/superpowers/plans/2026-09-17-ticker-opptegning.md`,
-`docs/superpowers/plans/2026-09-17-ticker-akser.md`,
-`docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md`,
-`docs/superpowers/plans/2026-09-17-ticker-modusveksling.md` og
-`docs/superpowers/plans/2026-09-17-ticker-autostart.md` og
-`docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md` og
-`docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md` og
-`docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md` og
-`docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md` og
-`docs/superpowers/plans/2026-09-18-ticker-historikk.md` og
-`docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md` og
-`docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md` og
-`docs/superpowers/plans/2026-09-18-ticker-volum.md` og
-`docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md` og
-`docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md` og
-`docs/superpowers/plans/2026-09-18-ticker-robuste-inndata.md` og
-`docs/superpowers/plans/2026-09-19-ticker-indikatorer.md` og
-`docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md` og
-`docs/superpowers/plans/2026-09-19-ticker-bloomberg-essentials.md` og
-`docs/superpowers/plans/2026-09-19-ticker-gaarsdagens-nivaaer.md` og
-`docs/superpowers/plans/2026-09-19-ticker-lesbare-nivaaer.md`. Design:
-`docs/superpowers/specs/2026-09-16-ticker-fase2-design.md`. Planer med
+`docs/plans/2026-09-16-borderless-window.md`,
+`docs/plans/2026-09-16-glyph-hover-cursor.md`,
+`docs/plans/2026-09-16-new-instance.md`,
+`docs/plans/2026-09-17-desktop-mode.md`,
+`docs/plans/2026-09-17-painting.md`,
+`docs/plans/2026-09-17-axes.md`,
+`docs/plans/2026-09-17-focus-flash.md`,
+`docs/plans/2026-09-17-mode-switching.md` og
+`docs/plans/2026-09-17-autostart.md` og
+`docs/plans/2026-09-17-ambient-mode.md` og
+`docs/plans/2026-09-17-price-line-offset.md` og
+`docs/plans/2026-09-17-desktop-stamp.md` og
+`docs/plans/2026-09-18-tray-symbol-interval.md` og
+`docs/plans/2026-09-18-history.md` og
+`docs/plans/2026-09-18-keyboard-shortcuts.md` og
+`docs/plans/2026-09-18-keyboard-navigation.md` og
+`docs/plans/2026-09-18-volume.md` og
+`docs/plans/2026-09-18-toolbar.md` og
+`docs/plans/2026-09-18-price-alerts.md` og
+`docs/plans/2026-09-18-robust-input.md` og
+`docs/plans/2026-09-19-indicators.md` og
+`docs/plans/2026-09-19-desktop-surface.md` og
+`docs/plans/2026-09-19-bloomberg-essentials.md` og
+`docs/plans/2026-09-19-yesterdays-levels.md` og
+`docs/plans/2026-09-19-readable-levels.md`. Design:
+`docs/specs/2026-09-16-phase2-design.md`. Planer med
 «Avvik under utførelse»:
-`docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
+`docs/plans/2026-09-16-phase2-part-b.md` og `...-del-c.md`.
 
 All kode ligger i **én fil**, `tickc.c` (~6700 linjer, English comments from phase 32). Ved siden av ligger
 `tickc.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
@@ -1412,7 +1412,7 @@ Tallene er fra andre gjennomløp:
 
 ### Fase 8 — `[ + ]`, flere instanser og nullstilling på dobbeltklikk
 
-Plan og avklarte tolkninger: `docs/superpowers/plans/2026-09-16-ticker-ny-instans.md`.
+Plan og avklarte tolkninger: `docs/plans/2026-09-16-new-instance.md`.
 
 **`[ ↺ ]` er borte.** Den satte *vindusgeometrien* tilbake — det gjør
 `Ctrl`+`0` og tray-menyen fortsatt. Plassen er overtatt av `[ + ]` i samme
@@ -1528,7 +1528,7 @@ underveis:
 ### Fase 9 — skrivebordsmodus (`--desktop-mode`)
 
 Plan, forundersøkelse og avvik:
-`docs/superpowers/plans/2026-09-17-ticker-skrivebordsmodus.md`. Utviklet på
+`docs/plans/2026-09-17-desktop-mode.md`. Utviklet på
 grenen `desktop-mode` (tre commits) og flettet inn med `--no-ff`.
 
 **Hva den gjør.** `ticker.exe --desktop-mode` (eneste argument) starter uten
@@ -1717,7 +1717,7 @@ som har flatens bakgrunn `#0D1117`. Nede til høyre ligger lengst fra origo:
 
 ### Fase 10 — vedvarende dobbeltbuffer
 
-Plan og avvik: `docs/superpowers/plans/2026-09-17-ticker-opptegning.md`.
+Plan og avvik: `docs/plans/2026-09-17-painting.md`.
 Gren `opptegning`, flettet inn med `--no-ff`.
 
 **Hvor tiden gikk.** QPC-markører rundt hvert ledd i `PaintPopup` og
@@ -1813,7 +1813,7 @@ avlesninger per runde, to runder:
 
 ### Fase 11 — akser, kontrast og tidsakse
 
-Plan og avvik: `docs/superpowers/plans/2026-09-17-ticker-akser.md`. Gren `akser`.
+Plan og avvik: `docs/plans/2026-09-17-axes.md`. Gren `akser`.
 
 **Endringen:**
 - **Geometri:** `PAD_R` 54 → 84 (priskolonne 76 + kantsikring 8) og `PAD_B`
@@ -1882,7 +1882,7 @@ Runde 1 er oppvarming. Etter den er forskjellen innenfor støyen: ~12–25
 
 ### Fokus-blink — klassisk NC-ramme ved aktivering
 
-Plan og avvik: `docs/superpowers/plans/2026-09-17-ticker-fokus-blink.md`.
+Plan og avvik: `docs/plans/2026-09-17-focus-flash.md`.
 Gren `fokus-blink`, flettet inn med `--no-ff` før fase 12.
 
 **Årsaken, målt.** En probe leste panelets kant fra den ferdig sammensatte
@@ -1921,7 +1921,7 @@ GDI/USER i hvile: 30 / 14. `/W4` rent, x86.
 
 ### Fase 12 — modusveksling fra tray-menyen
 
-Plan, målinger og avvik: `docs/superpowers/plans/2026-09-17-ticker-modusveksling.md`.
+Plan, målinger og avvik: `docs/plans/2026-09-17-mode-switching.md`.
 Gren `modusveksling`, flettet inn med `--no-ff`.
 
 **Endringen:**
@@ -1971,7 +1971,7 @@ Gren `modusveksling`, flettet inn med `--no-ff`.
 
 ### Fase 13 — start ved pålogging fra tray-menyen
 
-Plan, målinger og avvik: `docs/superpowers/plans/2026-09-17-ticker-autostart.md`.
+Plan, målinger og avvik: `docs/plans/2026-09-17-autostart.md`.
 Gren `autostart`.
 
 **Endringen:**
@@ -2007,7 +2007,7 @@ skrivebordsmodus. Run-nøkkelen sto uten `Ticker`-verdi før og etter.
 
 ### Fase 14 — tekstfri flate på skrivebordet
 
-Plan og målinger: `docs/superpowers/plans/2026-09-17-ticker-omgivelsesmodus.md`.
+Plan og målinger: `docs/plans/2026-09-17-ambient-mode.md`.
 Gren `omgivelsesmodus`.
 
 **Premisset:** et panel leses fovealt — brukeren stopper opp og dekoder tall.
@@ -2055,7 +2055,7 @@ enkelt piksel). Tray-menyen har fortsatt alle seks punktene.
 
 ### Fase 15 — luft mot aksen og prislinja som bro
 
-Plan og målinger: `docs/superpowers/plans/2026-09-17-ticker-prislinje-offset.md`.
+Plan og målinger: `docs/plans/2026-09-17-price-line-offset.md`.
 Gren `prislinje-offset`.
 
 **Endringen:** `ChartRect` skiller nå mellom `right`/`cw` (lysenes flate) og
@@ -2094,7 +2094,7 @@ med lysfarge i luftrommet, siste lyspiksel x = 1184 mot kanten 1186, og
 
 ### Fase 16 — pris-stempel i skrivebordsmodus
 
-Plan og målinger: `docs/superpowers/plans/2026-09-17-ticker-skrivebordsstempel.md`.
+Plan og målinger: `docs/plans/2026-09-17-desktop-stamp.md`.
 Gren `skrivebordsstempel`.
 
 **Endringen:** skrivebordsflaten har fått tilbake en høyre marg — ikke til
@@ -2131,7 +2131,7 @@ tapetet.
 
 ### Fase 17 — symbol og intervall fra tray-menyen
 
-Plan, målinger og avvik: `docs/superpowers/plans/2026-09-18-ticker-tray-symbol-intervall.md`.
+Plan, målinger og avvik: `docs/plans/2026-09-18-tray-symbol-interval.md`.
 Gren `tray-symbol-intervall`, flettet inn med `--no-ff`.
 
 **Endringen:** tray-menyen har fått to undermenyer øverst, «Symbol» og
@@ -2174,7 +2174,7 @@ i `Software\Ticker`. Undermenyenes egne punkter har ID −1 (`MF_POPUP`), som
 
 ### Fase 18 — historikk på forespørsel
 
-Plan, målinger og avvik: `docs/superpowers/plans/2026-09-18-ticker-historikk.md`.
+Plan, målinger og avvik: `docs/plans/2026-09-18-history.md`.
 Gren `historikk`, flettet inn med `--no-ff`. Valgt av agenten etter fri
 gjennomgang; begrunnelsen står i planen.
 
@@ -2215,7 +2215,7 @@ til **11.08.2020**, noteringsdagen; BTC/USDT 1m fyller 6000 på 19 runder;
 
 ### Fase 19 — tastatursnarveier for kontrollknappene
 
-Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-tastatursnarveier.md`.
+Plan og målinger: `docs/plans/2026-09-18-keyboard-shortcuts.md`.
 Gren `tastatursnarveier`, flettet inn med `--no-ff`. Valgt av agenten blant
 fire kandidater; begrunnelsen og det som ble lagt bort (DPI-skalering av
 stempelet, maskinen står på 100 %) står i planen.
@@ -2251,7 +2251,7 @@ og panoreringssperren (krever tast midt i et ekte drag). Begge er lest.
 
 ### Fase 20 — tastaturnavigasjon i grafen og tapt capture
 
-Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-tastaturnavigasjon.md`.
+Plan og målinger: `docs/plans/2026-09-18-keyboard-navigation.md`.
 Gren `tastaturnavigasjon`, flettet inn med `--no-ff`. Valgt av agenten blant
 fem kandidater; det som ble lagt bort (volum, hvilemodus, oppløsningsbytte,
 DPI-stempelet) står i planen med begrunnelse.
@@ -2313,7 +2313,7 @@ ga `vs` 68 / `vc` 173 før og etter i hver kjøring). Stien er lest.
 
 ### Fase 21 — volumstolper under lysene
 
-Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-volum.md`.
+Plan og målinger: `docs/plans/2026-09-18-volume.md`.
 Gren `volum`, flettet inn med `--no-ff`. Valgt av agenten blant fire
 kandidater; hvilemodus og oppløsningsbytte ble lagt bort fordi ingen av dem
 kan observeres i en probe på denne maskinen (begrunnelsen står i planen).
@@ -2373,7 +2373,7 @@ ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
 
 ### Fase 22 — verktøylinje i headeren
 
-Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-verktoylinje.md`.
+Plan og målinger: `docs/plans/2026-09-18-toolbar.md`.
 Gren `verktoylinje`, flettet inn med `--no-ff`. Brukeren la fram to idéer —
 verktøylinje og pris-varsler på prisaksen — og agenten valgte. Varslene er
 lagt bort som kandidat: utløseren (levende pris krysser en linje) kan ikke
@@ -2411,7 +2411,7 @@ nye plass.
 
 ### Fase 23 — prisvarsler på prisaksen
 
-Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-prisvarsler.md`.
+Plan og målinger: `docs/plans/2026-09-18-price-alerts.md`.
 Gren `prisvarsler`, flettet inn med `--no-ff`. Brukeren la fram tre
 kandidater — prisvarsler med prisinjeksjon i proben, re-initialisering etter
 hvilemodus og oppløsnings-/DPI-bytte i skrivebordsmodus — og agenten valgte.
@@ -2488,7 +2488,7 @@ stempelet).
 
 ### Fase 24 — sunne inndata og oppvåkning fra dvale
 
-Plan og målinger: `docs/superpowers/plans/2026-09-18-ticker-robuste-inndata.md`.
+Plan og målinger: `docs/plans/2026-09-18-robust-input.md`.
 Gren `robuste-inndata`, flettet inn med `--no-ff`.
 
 **Mandatet var et arkitekturdirektiv:** behold C nær Win32, flytt «høyere
@@ -2553,7 +2553,7 @@ seed-svaret, men stien med `rejected` er bare lest).
 
 ### Fase 25 — glidende snitt: SMA 20 og EMA 50
 
-Plan og målinger: `docs/superpowers/plans/2026-09-19-ticker-indikatorer.md`.
+Plan og målinger: `docs/plans/2026-09-19-indicators.md`.
 Gren `indikatorer`, flettet inn med `--no-ff`.
 
 **Mandatet** listet SMA/EMA i C, `WM_DISPLAYCHANGE`/`WM_DPICHANGED` i
@@ -2656,7 +2656,7 @@ som forventer 300 lys etter første henting, vil feile på det tallet.
 
 ### Fase 26 — skrivebordsflaten: egne overleggsvalg og skjermbytte
 
-Plan og målinger: `docs/superpowers/plans/2026-09-19-ticker-skrivebordsflate.md`.
+Plan og målinger: `docs/plans/2026-09-19-desktop-surface.md`.
 Gren `skrivebordsflate`, flettet inn med `--no-ff`.
 
 **Tilbakemelding fra bruk: «nå vises volum og MA i bakgrunnsbildet».** Lest
@@ -2717,7 +2717,7 @@ kjørt; maskinen har én skjerm.
 
 ### Fase 27 — «Bloomberg Essentials»: VWAP, dagens høy/lav og verdier i hover-boksen
 
-Plan og målinger: `docs/superpowers/plans/2026-09-19-ticker-bloomberg-essentials.md`.
+Plan og målinger: `docs/plans/2026-09-19-bloomberg-essentials.md`.
 Gren `fase27-bloomberg-essentials`, flettet inn med `--no-ff`.
 
 **Bestillingen:** stiplede linjer for sessionens høy og lav bak lysene med
@@ -2783,7 +2783,7 @@ nettverksfeil (lest, ikke kjørt).
 
 ### Fase 28 — gårsdagens nivåer: forrige døgns høy, lav og slutt
 
-Plan: `docs/superpowers/plans/2026-09-19-ticker-gaarsdagens-nivaaer.md`.
+Plan: `docs/plans/2026-09-19-yesterdays-levels.md`.
 Gren `fase28-gaarsdagens-nivaaer`, flettet inn med `--no-ff`. Mandatet var
 «continue»; kandidaten sto i fase 27-planen.
 
@@ -2852,7 +2852,7 @@ under nettverksfeil.
 
 ### Fase 29 — lesbare nivåer: merkelapper og et trådkorsmerke som ikke kutter tall
 
-Plan: `docs/superpowers/plans/2026-09-19-ticker-lesbare-nivaaer.md`. Gren
+Plan: `docs/plans/2026-09-19-readable-levels.md`. Gren
 `fase29-lesbare-nivaaer`, flettet inn med `--no-ff`. Mandatet var «ok kjør».
 To lesbarhetsfeil ble valgt foran nye indikatorer: fase 28 etterlot fem
 vannrette linjer uten navn, og trådkorsets aksemerke — det eneste merket som
@@ -2896,7 +2896,7 @@ ikke fanget (samme `yTag`-løkke som rutenettetikettene, som er fanget).
 
 ### Phase 30 — the name TickC: registry, autostart and exe renamed, with migration
 
-Plan: `docs/superpowers/plans/2026-09-22-ticker-navnet-tickc.md`. Branch
+Plan: `docs/plans/2026-09-22-name-tickc.md`. Branch
 `fase30-navnet-tickc`, merged with `--no-ff`. The user chose "fully, with
 migration" out of three options before the GitHub release.
 
@@ -2968,7 +2968,7 @@ are English from phase 30 on; translating what exists is the next phases.
 
 ### Phase 31 — English UI: every string the user sees
 
-Plan: `docs/superpowers/plans/2026-09-22-tickc-english-ui.md`. Branch
+Plan: `docs/plans/2026-09-22-english-ui.md`. Branch
 `fase31-english-ui`, merged with `--no-ff`.
 
 **What changed.** All 25 Norwegian string literals: the tray menu
@@ -2996,7 +2996,7 @@ on the same row with the same 40 of 54 pixels: the data, not the code.
 
 ### Phase 32 — English comments: every comment in tickc.c
 
-Plan: `docs/superpowers/plans/2026-09-22-tickc-english-comments.md`. Branch
+Plan: `docs/plans/2026-09-22-english-comments.md`. Branch
 `fase32-english-comments`, merged with `--no-ff`.
 
 **What changed.** All ~1 470 Norwegian comments and the three `#error`

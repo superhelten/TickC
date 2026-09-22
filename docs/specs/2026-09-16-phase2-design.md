@@ -1,6 +1,6 @@
 # Ticker fase 2 — design
 
-Dato: 2026-09-16. Bygger på fase 1 slik den er dokumentert i `ARBEIDSLOGG.md`.
+Dato: 2026-09-16. Bygger på fase 1 slik den er dokumentert i `WORKLOG.md`.
 Utgangspunkt: commit `f7d3997`.
 
 ## Formål
@@ -437,7 +437,7 @@ den tilstanden to ganger.
 
 ## Fallgruver som gjelder alt arbeid i denne fila
 
-Fra `ARBEIDSLOGG.md`, gjentatt fordi de har slått til før:
+Fra `WORKLOG.md`, gjentatt fordi de har slått til før:
 
 1. **Stopp `ticker.exe` før du linker.** Ellers `LNK1104`.
 2. **Ingen forward-deklarasjoner i fila.** Nye hjelpefunksjoner må stå *før*
