@@ -618,6 +618,17 @@ static LONGLONG g_probeIndUs = 0;
 // Set with WM_APP_PROBE 101 to the main window. One run fires one alert
 // unmuted and reads the result from Shell_NotifyIconW (field 29).
 static BOOL g_probeMute = FALSE;
+// Test build only (phase 34): recorded responses instead of the network.
+// TICKER_FIXTURE_DIR names a folder; HttpGet then answers every request from
+// a file there and never touches WinHTTP, so a capture shows the same candles
+// every time and a probe runs offline. The mapping is by request:
+//   /api/v3/klines?symbol=S&interval=I&limit=N   -> klines_S_I.json
+//   /api/v3/klines?...&endTime=...               -> hist_S_I.json, or "[]"
+//                                                   when the file is missing
+//                                                   (the history has ended)
+//   /api/v3/ticker/price?symbol=S                -> price_S.json
+// A missing klines or price file is a failed request, like a network error.
+static wchar_t g_fixtureDir[MAX_PATH] = L"";
 // Test build only (phase 24): counters read from the main window with
 // WM_APP_PROBE 110-112. Fetch cycles in the worker thread (Interlocked: it
 // is written there and read on the UI thread), wake-ups seen in
@@ -1707,9 +1718,40 @@ static HICON RenderMicroFontIcon(const char* str, unsigned int argb) {
 
 // Shared GET against api.binance.com. Reads the whole response in a loop - a
 // single WinHttpReadData call returns only what happens to be in the buffer.
+#ifdef TICKER_PROBE
+// The fixture branch of HttpGet (phase 34). Picks the file from the request
+// path; see g_fixtureDir. Reads at most bufSize - 1 bytes, like the network
+// branch.
+static BOOL FixtureGet(const wchar_t* path, char* buf, DWORD bufSize) {
+    wchar_t sym[24] = L"", iv[16] = L"", file[MAX_PATH];
+    const wchar_t* p = wcsstr(path, L"symbol=");
+    if (p) { p += 7; int k = 0; while (*p && *p != L'&' && k < 23) sym[k++] = *p++; sym[k] = 0; }
+    p = wcsstr(path, L"interval=");
+    if (p) { p += 9; int k = 0; while (*p && *p != L'&' && k < 15) iv[k++] = *p++; iv[k] = 0; }
+    BOOL hist = wcsstr(path, L"endTime=") != NULL;
+    if (wcsstr(path, L"/klines"))      swprintf_s(file, MAX_PATH, L"%s\\%s_%s_%s.json", g_fixtureDir, hist ? L"hist" : L"klines", sym, iv);
+    else if (wcsstr(path, L"/price")) swprintf_s(file, MAX_PATH, L"%s\\price_%s.json", g_fixtureDir, sym);
+    else return FALSE;
+
+    HANDLE h = CreateFileW(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        if (hist) { strcpy_s(buf, bufSize, "[]"); return TRUE; }
+        return FALSE;
+    }
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, buf, bufSize - 1, &got, NULL) && got > 0;
+    CloseHandle(h);
+    buf[ok ? got : 0] = '\0';
+    return ok;
+}
+#endif
+
 static BOOL HttpGet(AppContext* ctx, const wchar_t* path, char* buf, DWORD bufSize) {
     if (bufSize == 0) return FALSE;
     buf[0] = '\0';
+#ifdef TICKER_PROBE
+    if (g_fixtureDir[0]) return FixtureGet(path, buf, bufSize);
+#endif
 
     if (!ctx->hConnect) {
         ctx->hConnect = WinHttpConnect(ctx->hSession, L"api.binance.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -6622,6 +6664,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // has time to send 101. The probe therefore sets the variable in its own
     // environment, and the test build inherits it.
     g_probeMute = GetEnvironmentVariableW(L"TICKER_PROBE_MUTE", NULL, 0) > 0;
+    // Recorded responses (phase 34); see g_fixtureDir. Read before the thread
+    // starts, which is the only reader.
+    if (GetEnvironmentVariableW(L"TICKER_FIXTURE_DIR", g_fixtureDir, MAX_PATH) == 0 ||
+        GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+        g_fixtureDir[0] = L'\0';
+    }
 #endif
 
     InitializeCriticalSection(&g_Ctx.lock);
