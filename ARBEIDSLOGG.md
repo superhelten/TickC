@@ -73,6 +73,8 @@ så det ikke lenger kutter tallet under seg.
 `tickc.manifest`, with settings and autostart migrated on first start. From
 phase 30 on, new text in this repo is written in English (see the phase 30
 section).
+**Phase 31** puts every string the user sees into English (tray menu,
+status text, the alert balloon, `1h`/`4h`, ISO dates).
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -2962,10 +2964,44 @@ value. The stale `ticker.exe` was deleted: started again, it would recreate
 comments, this log, the plans) before the release. New commits and new text
 are English from phase 30 on; translating what exists is the next phases.
 
+### Phase 31 — English UI: every string the user sees
+
+Plan: `docs/superpowers/plans/2026-09-22-tickc-english-ui.md`. Branch
+`fase31-english-ui`, merged with `--no-ff`.
+
+**What changed.** All 25 Norwegian string literals: the tray menu
+(`Interval`, `Volume bars`, `Indicators`, `Clear price alerts (%d)`,
+`Desktop mode`, `Default view`, `Start at sign-in`, `Quit TickC`), the start
+tooltip `Connecting to Binance...`, `Loading data from Binance...`,
+`No connection - retrying in %ds`, `offline`, the overlay header `INTERVAL`
+and the alert balloon (`Price crossed the alert going up/down. Last price:
+...`). Hours are `h` (`1h`, `4h`, `2h 30m`). Dates are ISO: `2026-09-22` on
+1d, `09-22 14:30` on 1h and 4h — the same width as `22.09.2026` and
+`22.09 14:30`, so the monospace time axis lays out the same. The last
+non-ASCII escape in the file (`\x00e5` in "pålogging") is gone.
+
+**Verified.** `scan_ui_strings.py` scans every literal outside comments for
+Norwegian words, `æøå` escapes, the `t` hour suffix and `dd.mm` dates:
+**25 on master, 0 after.** Screenshots at 1280×720 (1h) and 900×400 (1d)
+show the `1h` pill, the span `12d 12h` and the axis labels `09-12 00:00` and
+`2026-02-16`. No probe reads UI text (grepped first), so none changed.
+Regression: `probe_migrate` 24/24, `probe_lbl` 27/27, `probe_sess` 51/51,
+`probe_ind` 54/54, `probe_desk` 49/49, `probe_prev` 51/52. The `probe_prev`
+FAIL is the one from phase 30, and a **control run against a phase 29 test
+build** (4d3dc21, `REG_PATH` rewritten to the test key) fails the same way
+on the same row with the same 40 of 54 pixels: the data, not the code.
+**Exe unchanged at 206 336 bytes.**
+
 ---
 
 ## Kjente begrensninger
 
+- **`probe_prev` cannot check a dash pattern when two levels share a row.**
+  When today's high and yesterday's close lie one row apart (86 625.82 and
+  86 620.00 on 22.09.2026), one line's dashes break the other's, and the
+  pattern check fails on any build (confirmed against phase 29). It clears
+  itself when the levels move apart; a fix would skip the check for a level
+  within two rows of another.
 - **Windows sees `TickC.exe` as a new tray program** (phase 30). The
   notification-area choice "always show this icon" is stored per exe path,
   so after the rename the icon may start out in the overflow menu once.
