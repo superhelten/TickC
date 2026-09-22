@@ -114,7 +114,7 @@ opens the panel should get an attempt immediately, not wait out a minute.
 successful fetch.
 
 ```
-stale = (naa - lastOkTick) > 3 * TIMER_INTERVAL     // 9 s = two missed cycles
+stale = (now - lastOkTick) > 3 * TIMER_INTERVAL     // 9 s = two missed cycles
 ```
 
 The threshold of three cycles, not one, keeps a single slow request from
@@ -274,11 +274,11 @@ with a large font is not free; measured, it typically costs 0.05–0.30 ms, not
 `HBITMAP`:
 
 ```
-Ved (W, H, symIdx, ivIdx)-endring:
-    render bakgrunn + vannmerke inn i wmBmp
+On a (W, H, symIdx, ivIdx) change:
+    render background + watermark into wmBmp
 
-Per bilde:
-    BitBlt(wmBmp) i stedet for FillRect(brBg)
+Per frame:
+    BitBlt(wmBmp) instead of FillRect(brBg)
 ```
 
 This **replaces** today's `FillRect` — so it does not add a step, it swaps one
