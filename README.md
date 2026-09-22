@@ -36,7 +36,7 @@ The menus and labels are in Norwegian. The key bindings below work whatever your
 Open a **Developer Command Prompt for VS** in the repo folder and run:
 
 ```
-cl /nologo /W4 /O2 ticker.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:ticker.manifest /OUT:TickC.exe
+cl /nologo /W4 /O2 tickc.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
 ```
 
 That's it. The libraries are pulled in with `#pragma comment(lib, ...)` in the source,
@@ -88,7 +88,7 @@ to the new name, then removes the old ones.
 
 ## How it's put together
 
-Everything lives in `ticker.c`. A worker thread fetches data over HTTPS with WinHTTP.
+Everything lives in `tickc.c`. A worker thread fetches data over HTTPS with WinHTTP.
 The UI thread draws with GDI into a back buffer that's kept between frames.
 Nothing from the network is trusted: prices that come back as NaN, infinity, zero
 or garbage are dropped before they reach the chart.
