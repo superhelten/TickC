@@ -106,8 +106,7 @@ or garbage are dropped before they reach the chart.
 
 `WORKLOG.md` is the development diary. It covers why things are the way they
 are, what was measured, and the pitfalls I ran into. The `(phase N)` notes in the
-code comments point to its sections, and `docs/plans/` holds the plan for each
-phase.
+code comments point to its sections.
 
 ## Data source
 

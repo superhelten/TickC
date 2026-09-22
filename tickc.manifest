@@ -2,7 +2,7 @@
 <!--
   Only the compatibility section. Without supportedOS Windows 8 or later,
   Windows rejects WS_EX_LAYERED on child windows, and the desktop mode surface
-  is invisible under WorkerW (measured, see docs/plans/2026-09-17-desktop-mode.md).
+  is invisible under WorkerW (measured, see WORKLOG.md, phase 9).
   No dpiAware: the process is still DPI-unaware.
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">

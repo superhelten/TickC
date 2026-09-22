@@ -77,37 +77,9 @@ section).
 status text, the alert balloon, `1h`/`4h`, ISO dates).
 **Phase 32** translates every comment in `tickc.c`, proven comment-only:
 the production exe is byte-identical apart from the link timestamp.
-**Phase 33** translates this work log and every plan, renames it from
-`ARBEIDSLOGG.md` and moves the plans to `docs/plans/` with English names.
-See **The window** below. Plans:
-`docs/plans/2026-09-16-borderless-window.md`,
-`docs/plans/2026-09-16-glyph-hover-cursor.md`,
-`docs/plans/2026-09-16-new-instance.md`,
-`docs/plans/2026-09-17-desktop-mode.md`,
-`docs/plans/2026-09-17-painting.md`,
-`docs/plans/2026-09-17-axes.md`,
-`docs/plans/2026-09-17-focus-flash.md`,
-`docs/plans/2026-09-17-mode-switching.md` and
-`docs/plans/2026-09-17-autostart.md` and
-`docs/plans/2026-09-17-ambient-mode.md` and
-`docs/plans/2026-09-17-price-line-offset.md` and
-`docs/plans/2026-09-17-desktop-stamp.md` and
-`docs/plans/2026-09-18-tray-symbol-interval.md` and
-`docs/plans/2026-09-18-history.md` and
-`docs/plans/2026-09-18-keyboard-shortcuts.md` and
-`docs/plans/2026-09-18-keyboard-navigation.md` and
-`docs/plans/2026-09-18-volume.md` and
-`docs/plans/2026-09-18-toolbar.md` and
-`docs/plans/2026-09-18-price-alerts.md` and
-`docs/plans/2026-09-18-robust-input.md` and
-`docs/plans/2026-09-19-indicators.md` and
-`docs/plans/2026-09-19-desktop-surface.md` and
-`docs/plans/2026-09-19-bloomberg-essentials.md` and
-`docs/plans/2026-09-19-yesterdays-levels.md` and
-`docs/plans/2026-09-19-readable-levels.md`. Design:
-`docs/specs/2026-09-16-phase2-design.md`. Plans with
-"Deviations during execution":
-`docs/plans/2026-09-16-phase2-part-b.md` and `...-del-c.md`.
+**Phase 33** translates this work log and renames it from `ARBEIDSLOGG.md`.
+See **The window** below. Design spec for phase 2:
+`docs/specs/2026-09-16-phase2-design.md`.
 
 All code lives in **one file**, `tickc.c` (~6700 lines, English comments from phase 32). Next to it is
 `tickc.manifest`, which the build embeds (phase 9). No external dependencies
@@ -1443,7 +1415,6 @@ The numbers are from the second pass:
 
 ### Phase 8 — `[ + ]`, multiple instances and reset on double-click
 
-Plan and settled interpretations: `docs/plans/2026-09-16-new-instance.md`.
 
 **`[ ↺ ]` is gone.** It reset the *window geometry* — `Ctrl`+`0` and the
 tray menu still do that. Its place is taken by `[ + ]` in the same
@@ -1558,8 +1529,7 @@ along the way:
 
 ### Phase 9 — desktop mode (`--desktop-mode`)
 
-Plan, preliminary investigation and deviations:
-`docs/plans/2026-09-17-desktop-mode.md`. Developed on
+Developed on
 the branch `desktop-mode` (three commits) and merged with `--no-ff`.
 
 **What it does.** `ticker.exe --desktop-mode` (the only argument) starts without
@@ -1750,7 +1720,6 @@ from the origin:
 
 ### Phase 10 — persistent double buffer
 
-Plan and deviations: `docs/plans/2026-09-17-painting.md`.
 Branch `opptegning`, merged with `--no-ff`.
 
 **Where the time went.** QPC markers around each step in `PaintPopup` and
@@ -1848,7 +1817,7 @@ readings per round, two rounds:
 
 ### Phase 11 — axes, contrast and time axis
 
-Plan and deviations: `docs/plans/2026-09-17-axes.md`. Branch `akser`.
+Branch `akser`.
 
 **The change:**
 - **Geometry:** `PAD_R` 54 → 84 (price column 76 + edge margin 8) and `PAD_B`
@@ -1918,7 +1887,6 @@ Round 1 is warm-up. After it the difference is within the noise: ~12–25
 
 ### Focus flash — classic NC frame on activation
 
-Plan and deviations: `docs/plans/2026-09-17-focus-flash.md`.
 Branch `fokus-blink`, merged with `--no-ff` before phase 12.
 
 **The cause, measured.** A probe read the panel's edge from the fully composed
@@ -1958,7 +1926,6 @@ GDI/USER at rest: 30 / 14. `/W4` clean, x86.
 
 ### Phase 12 — mode switching from the tray menu
 
-Plan, measurements and deviations: `docs/plans/2026-09-17-mode-switching.md`.
 Branch `modusveksling`, merged with `--no-ff`.
 
 **The change:**
@@ -2011,7 +1978,6 @@ Branch `modusveksling`, merged with `--no-ff`.
 
 ### Phase 13 — start at sign-in from the tray menu
 
-Plan, measurements and deviations: `docs/plans/2026-09-17-autostart.md`.
 Branch `autostart`.
 
 **The change:**
@@ -2052,7 +2018,6 @@ in desktop mode. The Run key had no `Ticker` value before and after.
 
 ### Phase 14 — text-free surface on the desktop
 
-Plan and measurements: `docs/plans/2026-09-17-ambient-mode.md`.
 Branch `omgivelsesmodus`.
 
 **The premise:** a panel is read foveally — the user stops and decodes
@@ -2100,7 +2065,6 @@ now on a single pixel). The tray menu still has all six items.
 
 ### Phase 15 — room before the axis and the price line as a bridge
 
-Plan and measurements: `docs/plans/2026-09-17-price-line-offset.md`.
 Branch `prislinje-offset`.
 
 **The change:** `ChartRect` now separates `right`/`cw` (the candles' area)
@@ -2141,7 +2105,6 @@ edge 1186, and `x = edge` and `edge + 1` both `0x00FF66`.
 
 ### Phase 16 — price stamp in desktop mode
 
-Plan and measurements: `docs/plans/2026-09-17-desktop-stamp.md`.
 Branch `skrivebordsstempel`.
 
 **The change:** the desktop surface has got a right margin back — not for
@@ -2180,7 +2143,6 @@ holes through to the wallpaper.
 
 ### Phase 17 — symbol and interval from the tray menu
 
-Plan, measurements and deviations: `docs/plans/2026-09-18-tray-symbol-interval.md`.
 Branch `tray-symbol-intervall`, merged with `--no-ff`.
 
 **The change:** the tray menu has got two submenus at the top, "Symbol" and
@@ -2225,7 +2187,6 @@ the radio checks are on BTC/USDT and 1m, matching `SymbolIndex` 0 and
 
 ### Phase 18 — history on demand
 
-Plan, measurements and deviations: `docs/plans/2026-09-18-history.md`.
 Branch `historikk`, merged with `--no-ff`. Chosen by the agent after an open
 review; the reasoning is in the plan.
 
@@ -2272,7 +2233,6 @@ BTC/USDT 1m fills 6000 in 19 rounds; `R` gives the last 300; **GDI/USER
 
 ### Phase 19 — keyboard shortcuts for the control buttons
 
-Plan and measurements: `docs/plans/2026-09-18-keyboard-shortcuts.md`.
 Branch `tastatursnarveier`, merged with `--no-ff`. Chosen by the agent among
 four candidates; the reasoning and what was set aside (DPI scaling of the
 stamp, the machine is at 100 %) are in the plan.
@@ -2310,7 +2270,6 @@ drag). Both are read.
 
 ### Phase 20 — keyboard navigation in the chart and lost capture
 
-Plan and measurements: `docs/plans/2026-09-18-keyboard-navigation.md`.
 Branch `tastaturnavigasjon`, merged with `--no-ff`. Chosen by the agent among
 five candidates; what was set aside (volume, sleep mode, resolution change,
 the DPI stamp) is in the plan with reasons.
@@ -2376,7 +2335,6 @@ gave `vs` 68 / `vc` 173 before and after in each run). The path is read.
 
 ### Phase 21 — volume bars under the candles
 
-Plan and measurements: `docs/plans/2026-09-18-volume.md`.
 Branch `volum`, merged with `--no-ff`. Chosen by the agent among four
 candidates; sleep mode and resolution change were set aside because neither
 can be observed in a probe on this machine (the reasoning is in the plan).
@@ -2437,7 +2395,6 @@ volume on 1m is under a thousand).
 
 ### Phase 22 — toolbar in the header
 
-Plan and measurements: `docs/plans/2026-09-18-toolbar.md`.
 Branch `verktoylinje`, merged with `--no-ff`. The user put forward two ideas
 — a toolbar and price alerts on the price axis — and the agent chose. The
 alerts were set aside as a candidate: the trigger (live price crosses a line)
@@ -2475,7 +2432,6 @@ mode, hiding of pills below 400 px, and the offline text's new place.
 
 ### Phase 23 — price alerts on the price axis
 
-Plan and measurements: `docs/plans/2026-09-18-price-alerts.md`.
 Branch `prisvarsler`, merged with `--no-ff`. The user put forward three
 candidates — price alerts with price injection in the probe, re-initialization
 after sleep, and a resolution/DPI change in desktop mode — and the agent chose.
@@ -2553,7 +2509,6 @@ stamp).
 
 ### Phase 24 — sane input and wake from sleep
 
-Plan and measurements: `docs/plans/2026-09-18-robust-input.md`.
 Branch `robuste-inndata`, merged with `--no-ff`.
 
 **The mandate was an architecture directive:** keep C close to Win32, move
@@ -2620,7 +2575,6 @@ the seed response, but the path with `rejected` is only read).
 
 ### Phase 25 — moving averages: SMA 20 and EMA 50
 
-Plan and measurements: `docs/plans/2026-09-19-indicators.md`.
 Branch `indikatorer`, merged with `--no-ff`.
 
 **The mandate** listed SMA/EMA in C, `WM_DISPLAYCHANGE`/`WM_DPICHANGED` in
@@ -2726,7 +2680,6 @@ will fail on that number.
 
 ### Phase 26 — the desktop surface: its own overlay choices and monitor change
 
-Plan and measurements: `docs/plans/2026-09-19-desktop-surface.md`.
 Branch `skrivebordsflate`, merged with `--no-ff`.
 
 **Feedback from use: "now volume and MA show on the wallpaper".** Read
@@ -2787,7 +2740,6 @@ not run; the machine has one monitor.
 
 ### Phase 27 — "Bloomberg Essentials": VWAP, today's high/low and values in the hover box
 
-Plan and measurements: `docs/plans/2026-09-19-bloomberg-essentials.md`.
 Branch `fase27-bloomberg-essentials`, merged with `--no-ff`.
 
 **The order:** dashed lines for the session's high and low behind the candles with
@@ -2853,7 +2805,6 @@ network errors (read, not run).
 
 ### Phase 28 — yesterday's levels: the previous day's high, low and close
 
-Plan: `docs/plans/2026-09-19-yesterdays-levels.md`.
 Branch `fase28-gaarsdagens-nivaaer`, merged with `--no-ff`. The mandate was
 "continue"; the candidate was in the phase 27 plan.
 
@@ -2923,7 +2874,7 @@ during network errors.
 
 ### Phase 29 — readable levels: labels and a crosshair tag that does not cut numbers
 
-Plan: `docs/plans/2026-09-19-readable-levels.md`. Branch
+Branch
 `fase29-lesbare-nivaaer`, merged with `--no-ff`. The mandate was "ok, go".
 Two readability bugs were chosen ahead of new indicators: phase 28 left five
 horizontal lines without names, and the crosshair's axis tag — the only tag
@@ -2971,7 +2922,7 @@ captured).
 
 ### Phase 30 — the name TickC: registry, autostart and exe renamed, with migration
 
-Plan: `docs/plans/2026-09-22-name-tickc.md`. Branch
+Branch
 `fase30-navnet-tickc`, merged with `--no-ff`. The user chose "fully, with
 migration" out of three options before the GitHub release.
 
@@ -3043,7 +2994,7 @@ are English from phase 30 on; translating what exists is the next phases.
 
 ### Phase 31 — English UI: every string the user sees
 
-Plan: `docs/plans/2026-09-22-english-ui.md`. Branch
+Branch
 `fase31-english-ui`, merged with `--no-ff`.
 
 **What changed.** All 25 Norwegian string literals: the tray menu
@@ -3071,7 +3022,7 @@ on the same row with the same 40 of 54 pixels: the data, not the code.
 
 ### Phase 32 — English comments: every comment in tickc.c
 
-Plan: `docs/plans/2026-09-22-english-comments.md`. Branch
+Branch
 `fase32-english-comments`, merged with `--no-ff`.
 
 **What changed.** All ~1 470 Norwegian comments and the three `#error`
@@ -3093,19 +3044,17 @@ old source except for the two copies of the link timestamp (0x108 and
 0x2dadc), so the pixel probes were not rerun. `probe_migrate` 24/24.
 Exe 206 336 bytes, unchanged.
 
-### Phase 33 — English docs: this work log and every plan
+### Phase 33 — English docs: this work log
 
-Plan: `docs/plans/2026-09-22-english-docs.md`. Branch `fase33-english-docs`,
+Branch `fase33-english-docs`,
 merged with `--no-ff`.
 
-**Part 1, names.** `docs/superpowers/plans/` and `.../specs/` became
-`docs/plans/` and `docs/specs/`, every plan got an English slug without the
-`ticker-` prefix, and `ARBEIDSLOGG.md` became `WORKLOG.md`. The 88 references
-in the docs, README and manifest were rewritten by script, and every
-`docs/...` path in the repo resolves. The manifest's comment is English.
+**Part 1, names.** `ARBEIDSLOGG.md` became `WORKLOG.md` and the design spec
+moved to `docs/specs/`. The references in the docs, README and manifest
+were rewritten by script. The manifest's comment is English.
 
-**Part 2, translation.** This log in nine chunks and the 28 Norwegian plan and
-spec documents in ten batches, by eighteen parallel agents from one rules file:
+**Part 2, translation.** This log in nine chunks and the design spec, by
+parallel agents from one rules file:
 one glossary, fixed heading names (so "see **The window** below" and similar
 references still match), ISO dates, decimal points, current English UI labels
 where prose names a menu item, US spelling, comments inside code blocks
@@ -3122,6 +3071,9 @@ no æ ø å « » outside code. This log: 2 470 inline code spans, 72 headings,
 both were fixed and every file was checked again. A final scan of the repo:
 0 Norwegian comments, 0 Norwegian UI strings, no Norwegian prose. No code
 changed; exe 206 336 bytes.
+
+**The per-phase plan documents are not part of the public repository.** Each
+phase section above carries the plan's decisions, measurements and deviations.
 
 ---
 
