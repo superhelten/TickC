@@ -1,0 +1,110 @@
+# TickC
+
+A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
+One source file. No runtime, no installer, no dependencies beyond what ships with Windows.
+The whole thing compiles to a single exe of about 200 KB.
+
+I built it because I wanted the BTC price in the corner of my screen without keeping
+a browser tab open, and without a 150 MB Electron app. It grew from there.
+
+## What it does
+
+- **Tray icon** with the live price. Updates every 3 seconds.
+- **Chart panel** (left-click the icon): candlesticks, volume bars, SMA 20, EMA 50,
+  and a daily VWAP. You also get today's high and low, and yesterday's high, low and close
+  (labelled HOD, LOD, PDH, PDL, PDC).
+- **Symbols:** BTC, ETH, SOL and BNB against USDT.
+- **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d.
+- **Price alerts.** Click the price column to set one. When the price gets there you get a
+  balloon and a sound, even with the panel closed.
+- **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
+  It stays quiet on purpose: no volume or moving averages there unless you turn them on.
+- **Scrolls back in time.** Pan into the left edge and it fetches older candles,
+  up to 6000 of them.
+
+The menus and labels are in Norwegian. The key bindings below work whatever your language is.
+
+## Requirements
+
+- Windows 8 or newer (developed on Windows 11)
+- To build: MSVC, either Visual Studio or the free
+  [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022),
+  with the Windows SDK
+
+## Building
+
+Open a **Developer Command Prompt for VS** in the repo folder and run:
+
+```
+cl /nologo /W4 /O2 ticker.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:ticker.manifest /OUT:TickC.exe
+```
+
+That's it. The libraries are pulled in with `#pragma comment(lib, ...)` in the source,
+so there's no build script to keep in sync. Don't skip the manifest: without it
+Windows refuses the layered child window, and desktop mode shows up blank.
+
+## Usage
+
+Run `TickC.exe`. An icon appears in the tray.
+
+| Action | What happens |
+|---|---|
+| Left-click the tray icon | Show or hide the chart panel |
+| Right-click the tray icon | Symbol, interval, overlays, desktop mode, autostart, quit |
+| `TickC.exe --desktop-mode` | Start with the chart on the desktop |
+
+In the chart panel:
+
+| Key | Action |
+|---|---|
+| Mouse wheel, `+` / `-` | Zoom |
+| Drag, `←` / `→` | Pan |
+| `PgUp` / `PgDn` | Jump one screen |
+| `Home` / `End` | Oldest / newest candle |
+| `1` … `6` | Switch interval |
+| `V` | Volume bars on/off |
+| `M` | Indicators on/off (moving averages, VWAP, levels) |
+| `A` | Set an alert at the crosshair price |
+| `R`, double-click | Reset zoom and pan |
+| `Esc` | Close the symbol picker, then reset the view, then hide the panel |
+| `Ctrl`+`0` | Reset window size and position |
+| `Ctrl`+`N` | Open another panel |
+| `Ctrl`+`M` / `F11` / `Ctrl`+`W` | Minimise / maximise / close |
+
+## What it writes to your system
+
+Nothing outside your user profile. No admin rights needed.
+
+- Settings live in `HKCU\Software\TickC`.
+- "Start ved pålogging" (start at sign-in) adds a `TickC` value under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+To remove it completely, untick autostart in the tray menu, quit, and delete
+`HKCU\Software\TickC`.
+
+Earlier builds were called Ticker and used `HKCU\Software\Ticker`. The first time
+TickC starts, it moves those settings, your price alerts and the autostart entry over
+to the new name, then removes the old ones.
+
+## How it's put together
+
+Everything lives in `ticker.c`. A worker thread fetches data over HTTPS with WinHTTP.
+The UI thread draws with GDI into a back buffer that's kept between frames.
+Nothing from the network is trusted: prices that come back as NaN, infinity, zero
+or garbage are dropped before they reach the chart.
+
+`ARBEIDSLOGG.md` (Norwegian for "work log") is the development diary. It covers why
+things are the way they are, and the pitfalls I ran into. The `(fase N)` notes in
+the code comments point there.
+
+## Data source
+
+Market data comes from the public [Binance API](https://developers.binance.com/docs/binance-spot-api-docs)
+(`api.binance.com`). No account or API key is involved.
+This project has no connection to Binance, and Binance doesn't endorse it.
+
+Prices are for information only. Don't trade on a tray icon.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

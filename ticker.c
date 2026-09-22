@@ -987,7 +987,7 @@ static BOOL SessionsNeedHistory(const Candle* c, int n, long long intervalMs, BO
 #define GEOM_UNSET  ((int)0x80000000)
 
 // ---------------------------------------------------------------------------
-// Registret. HKCU\Software\Ticker. Aldri en forutsetning for at appen
+// Registret. HKCU\Software\TickC. Aldri en forutsetning for at appen
 // starter - feiler lesningen, faller vi tilbake pa BTC/USDT 1m.
 // Plassert her, blant de rene hjelpefunksjonene, fordi ApplyConfigChoice
 // lenger nede kaller SaveConfig. Fila har ingen forward-deklarasjoner.
@@ -995,10 +995,13 @@ static BOOL SessionsNeedHistory(const Candle* c, int n, long long intervalMs, BO
 
 // Testbygget har egne navn her i kilden, ikke i et skript som skriver den om:
 // da kan ingen probe-kjoering roere brukerens innstillinger eller autostart.
+// REG_PATH_OLD er navnet fra foer fase 30; MigrateLegacyNames flytter det.
 #ifdef TICKER_PROBE
-#define REG_PATH L"Software\\TickerTest"
+#define REG_PATH     L"Software\\TickerTest"
+#define REG_PATH_OLD L"Software\\TickerTestOld"
 #else
-#define REG_PATH L"Software\\Ticker"
+#define REG_PATH     L"Software\\TickC"
+#define REG_PATH_OLD L"Software\\Ticker"
 #endif
 
 static DWORD RegReadDword(HKEY k, const wchar_t* name, DWORD fallback) {
@@ -1091,14 +1094,16 @@ static void SaveDesktopMode(BOOL on) {
 // Testbygget skriver aldri i den ekte Run-nokkelen: en verdi der ville startet
 // testbygget ved neste paalogging.
 #ifdef TICKER_PROBE
-#define AUTOSTART_KEY   L"Software\\TickerTestRun"
-#define AUTOSTART_VALUE L"TickerTest"
+#define AUTOSTART_KEY       L"Software\\TickerTestRun"
+#define AUTOSTART_VALUE     L"TickerTest"
+#define AUTOSTART_VALUE_OLD L"TickerTestOld"
 #else
-#define AUTOSTART_KEY   L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-#define AUTOSTART_VALUE L"Ticker"
+#define AUTOSTART_KEY       L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+#define AUTOSTART_VALUE     L"TickC"
+#define AUTOSTART_VALUE_OLD L"Ticker"
 #endif
 
-// Stien i anforselstegn, "C:\Mappe med mellomrom\ticker.exe". FALSE naar
+// Stien i anforselstegn, "C:\Mappe med mellomrom\TickC.exe". FALSE naar
 // stien ikke passer i MAX_PATH - en avkuttet sti skal aldri havne i registret.
 static BOOL AutostartCommand(wchar_t* out, size_t cch) {
     wchar_t exe[MAX_PATH];
@@ -1144,6 +1149,71 @@ static void ToggleAutostart(void) {
                        (DWORD)((wcslen(want) + 1) * sizeof(wchar_t)));
     }
     RegCloseKey(k);
+}
+
+// Navnebyttet Ticker -> TickC (fase 30). Kjoerer ved hver oppstart, foer
+// noe leses fra registret, og gjoer bare noe naar det gamle navnet finnes.
+//
+// Innstillingene flyttes bare naar den nye nokkelen ikke finnes: finnes
+// begge, vinner den nye, og den gamle roeres ikke. Den gamle slettes foerst
+// naar kopien lyktes; feiler kopien, slettes den halve nye nokkelen, saa
+// neste oppstart proever igjen i stedet for aa tro at jobben er gjort.
+//
+// Autostart skrives med stien til exe-en som kjoerer, ikke med den gamle
+// verdien: den peker paa ticker.exe, som ikke finnes lenger. Den gamle
+// verdien slettes ogsaa naar en ny alt finnes - ellers starter begge ved
+// paalogging - men aldri foer den nye er paa plass.
+//
+// Et duplikat og en hovedinstans kan starte samtidig. Da gjoer den ene
+// jobben og den andre finner ingenting aa gjoere, eller begge skriver det
+// samme.
+static void MigrateLegacyNames(void) {
+    int done = 0;   // bitmasken i g_probeMigrate
+    HKEY kOld, kNew;
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH_OLD, 0, KEY_READ, &kOld) == ERROR_SUCCESS) {
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &kNew) == ERROR_SUCCESS) {
+            RegCloseKey(kNew);
+            RegCloseKey(kOld);
+        // KEY_ALL_ACCESS, ikke KEY_WRITE: med bare KEY_WRITE paa maalet svarer
+        // RegCopyTreeW ERROR_ACCESS_DENIED (maalt, fallgruve 97).
+        } else if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0, KEY_ALL_ACCESS,
+                                   NULL, &kNew, NULL) == ERROR_SUCCESS) {
+            LSTATUS copied = RegCopyTreeW(kOld, NULL, kNew);
+            RegCloseKey(kNew);
+            RegCloseKey(kOld);
+            if (copied == ERROR_SUCCESS) {
+                done |= 1;
+                if (RegDeleteTreeW(HKEY_CURRENT_USER, REG_PATH_OLD) == ERROR_SUCCESS) done |= 2;
+            } else {
+                RegDeleteTreeW(HKEY_CURRENT_USER, REG_PATH);
+            }
+        } else {
+            RegCloseKey(kOld);
+        }
+    }
+
+    if (RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE_OLD,
+                     RRF_RT_ANY, NULL, NULL, NULL) == ERROR_SUCCESS) {
+        BOOL haveNew = AutostartPresent();
+        wchar_t want[MAX_PATH + 2];
+        if (!haveNew && AutostartCommand(want, MAX_PATH + 2)) {
+            haveNew = RegSetKeyValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
+                                      REG_SZ, want,
+                                      (DWORD)((wcslen(want) + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+            if (haveNew) done |= 4;
+        }
+        if (haveNew &&
+            RegDeleteKeyValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE_OLD) == ERROR_SUCCESS) {
+            done |= 8;
+        }
+    }
+
+#ifdef TICKER_PROBE
+    g_probeMigrate = done;
+#else
+    (void)done;
+#endif
 }
 
 static void SaveConfig(const AppContext* ctx) {
@@ -5560,7 +5630,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         case WM_CLOSE:
             // Lukkeknappen skjuler til systemstatusfeltet. Tickeren er et
-            // tray-program; "Avslutt Ticker" i tray-menyen avslutter det.
+            // tray-program; "Avslutt TickC" i tray-menyen avslutter det.
             // Posisjonen lagres for vi forsvinner. Et duplikat avsluttes.
             HidePanel(hwnd);
             return 0;
@@ -5794,7 +5864,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             : NULL;
         HWND hp = CreateWindowExW(
             0,
-            L"BTCPopupClass", L"BTC Chart",
+            L"BTCPopupClass", L"TickC",
             style,
             0, 0, POPUP_W, POPUP_H,
             NULL, NULL, hInst, NULL);
@@ -6009,7 +6079,7 @@ static HMENU BuildTrayMenu(void) {
                     IDM_TOGGLE_AUTOSTART, L"Start ved p\x00e5" L"logging");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     }
-    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt Ticker");
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt TickC");
     return hMenu;
 }
 
@@ -6319,7 +6389,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.overlayHot = -1; // samme grunn: 0 ville betydd "forste rad framhevet"
     g_Ctx.dispValid  = FALSE; // snap paa forste bilde
 
-    g_Ctx.hSession = WinHttpOpen(L"BTCTicker Engine/2.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    g_Ctx.hSession = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 
     if (!g_Ctx.hSession) return 1;
@@ -6364,7 +6434,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Kringkastes til toppnivaavinduer naar Explorer har startet paa nytt.
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 
-    g_Ctx.hWnd =CreateWindowExW(0, wc.lpszClassName, L"BTC Core Engine", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    g_Ctx.hWnd =CreateWindowExW(0, wc.lpszClassName, L"TickC", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
 
     g_Ctx.nid.cbSize           = sizeof(NOTIFYICONDATAW);
     g_Ctx.nid.hWnd             = g_Ctx.hWnd;
@@ -6408,6 +6478,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // den poster meldinger til hWnd med en gang.
     // MA staa for CreateThread: forste henting skal gaa mot riktig par, og
     // vannmerket skal vaere korrekt fra forste bilde.
+    MigrateLegacyNames();   // fase 30: foer foerste lesning fra registret
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
 
