@@ -628,6 +628,11 @@ static LONGLONG g_probePrevUs = 0;
 static int      g_probeLblMask  = 0;
 static int      g_probeCrossTag = 0;
 static LONGLONG g_probeLblUs    = 0;
+// Bare testbygg (fase 30): hva navnemigreringen gjorde ved oppstart, som
+// bitmaske. WM_APP_PROBE 115 paa hovedvinduet. Bit 0 gamle innstillinger
+// kopiert, 1 gammel nokkel slettet, 2 autostart skrevet under nytt navn,
+// 3 gammel autostartverdi slettet.
+static int      g_probeMigrate  = 0;
 #endif
 
 // Holder utsnittet innenfor dataene.
@@ -988,7 +993,13 @@ static BOOL SessionsNeedHistory(const Candle* c, int n, long long intervalMs, BO
 // lenger nede kaller SaveConfig. Fila har ingen forward-deklarasjoner.
 // ---------------------------------------------------------------------------
 
+// Testbygget har egne navn her i kilden, ikke i et skript som skriver den om:
+// da kan ingen probe-kjoering roere brukerens innstillinger eller autostart.
+#ifdef TICKER_PROBE
+#define REG_PATH L"Software\\TickerTest"
+#else
 #define REG_PATH L"Software\\Ticker"
+#endif
 
 static DWORD RegReadDword(HKEY k, const wchar_t* name, DWORD fallback) {
     DWORD v = 0, cb = sizeof(v), type = 0;
@@ -1077,8 +1088,15 @@ static void SaveDesktopMode(BOOL on) {
 // det er Explorer som leser den ved paalogging. Innholdet er stien til exe-en
 // i anforselstegn, saa en sti med mellomrom ikke deles opp til et program og
 // argumenter.
+// Testbygget skriver aldri i den ekte Run-nokkelen: en verdi der ville startet
+// testbygget ved neste paalogging.
+#ifdef TICKER_PROBE
+#define AUTOSTART_KEY   L"Software\\TickerTestRun"
+#define AUTOSTART_VALUE L"TickerTest"
+#else
 #define AUTOSTART_KEY   L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 #define AUTOSTART_VALUE L"Ticker"
+#endif
 
 // Stien i anforselstegn, "C:\Mappe med mellomrom\ticker.exe". FALSE naar
 // stien ikke passer i MAX_PATH - en avkuttet sti skal aldri havne i registret.
@@ -6182,6 +6200,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (wParam == 112) return (LRESULT)g_probeRejects;
             if (wParam == 113) return (LRESULT)g_probeConnDrops;
             if (wParam == 114) return (LRESULT)g_probeDisplayChanges;   // fase 26
+            if (wParam == 115) return (LRESULT)g_probeMigrate;          // fase 30
             return 0;
 #endif
 
