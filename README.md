@@ -22,8 +22,6 @@ a browser tab open, and without a 150 MB Electron app. It grew from there.
 - **Scrolls back in time.** Pan into the left edge and it fetches older candles,
   up to 6000 of them.
 
-The menus and labels are in Norwegian. The key bindings below work whatever your language is.
-
 ## Requirements
 
 - Windows 8 or newer (developed on Windows 11)
@@ -76,7 +74,7 @@ In the chart panel:
 Nothing outside your user profile. No admin rights needed.
 
 - Settings live in `HKCU\Software\TickC`.
-- "Start ved pålogging" (start at sign-in) adds a `TickC` value under
+- "Start at sign-in" adds a `TickC` value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 To remove it completely, untick autostart in the tray menu, quit, and delete

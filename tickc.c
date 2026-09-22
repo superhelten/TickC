@@ -268,8 +268,8 @@ static const IntervalDef INTERVALS[] = {
     { L"1m",  L"1m",  60000LL },
     { L"5m",  L"5m",  300000LL },
     { L"15m", L"15m", 900000LL },
-    { L"1h",  L"1t",  3600000LL },
-    { L"4h",  L"4t",  14400000LL },
+    { L"1h",  L"1h",  3600000LL },
+    { L"4h",  L"4h",  14400000LL },
     { L"1d",  L"1d",  86400000LL },
 };
 #define SYMBOL_COUNT   ((int)(sizeof(SYMBOLS) / sizeof(SYMBOLS[0])))
@@ -1426,12 +1426,12 @@ static void FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch) {
     }
     long long hours = mins / 60, rm = mins % 60;
     if (hours < 24) {
-        if (rm) swprintf_s(out, cch, L"%lldt %lldm", hours, rm);
-        else    swprintf_s(out, cch, L"%lldt", hours);
+        if (rm) swprintf_s(out, cch, L"%lldh %lldm", hours, rm);
+        else    swprintf_s(out, cch, L"%lldh", hours);
         return;
     }
     long long days = hours / 24, rh = hours % 24;
-    if (rh) swprintf_s(out, cch, L"%lldd %lldt", days, rh);
+    if (rh) swprintf_s(out, cch, L"%lldd %lldh", days, rh);
     else    swprintf_s(out, cch, L"%lldd", days);
 }
 
@@ -2092,7 +2092,7 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
 static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
     if (price <= 0.0) return;
     swprintf_s(ctx->fullPriceStr, 64, L"%s: $%.2f%s",
-               SYMBOLS[ctx->symIdx].label, price, stale ? L" (frakoblet)" : L"");
+               SYMBOLS[ctx->symIdx].label, price, stale ? L" (offline)" : L"");
 
     // Divisor og desimaler velges etter bredden paa den ferdig formaterte
     // strengen, ikke etter en terskel paa prisen. Se FormatIconPrice.
@@ -2472,10 +2472,10 @@ static void FormatCandleTime(long long unixMs, long long intervalMs,
     SYSTEMTIME st;
     if (FileTimeToLocalFileTime(&utc, &local) && FileTimeToSystemTime(&local, &st)) {
         if (intervalMs >= 86400000LL) {
-            swprintf_s(out, cch, L"%02d.%02d.%04d", st.wDay, st.wMonth, st.wYear);
+            swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
         } else if (intervalMs >= 3600000LL) {
-            swprintf_s(out, cch, L"%02d.%02d %02d:%02d",
-                       st.wDay, st.wMonth, st.wHour, st.wMinute);
+            swprintf_s(out, cch, L"%02d-%02d %02d:%02d",
+                       st.wMonth, st.wDay, st.wHour, st.wMinute);
         } else {
             swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
         }
@@ -2588,7 +2588,7 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     RECT h1 = r.symHdr, h2 = r.ivHdr;
     h1.left += 6; h2.left += 6;
     DrawTextW(hdc, L"SYMBOL",    -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    DrawTextW(hdc, L"INTERVALL", -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    DrawTextW(hdc, L"INTERVAL",  -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     for (int i = 0; i < r.count; ++i) {
         BOOL isSym  = (i < SYMBOL_COUNT);
@@ -2966,9 +2966,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         if (ctx->netFailures > 0) {
             ULONGLONG nx = ctx->nextRetryTick;
             int in_s = (nx > nowTick) ? (int)((nx - nowTick + 999) / 1000) : 0;
-            swprintf_s(msg, 96, L"Ingen forbindelse - prover igjen om %ds", in_s);
+            swprintf_s(msg, 96, L"No connection - retrying in %ds", in_s);
         } else {
-            wcscpy_s(msg, 96, L"Laster data fra Binance...");
+            wcscpy_s(msg, 96, L"Loading data from Binance...");
         }
         DrawTextW(hdc, msg, -1, &rcAll, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
         return;
@@ -3066,7 +3066,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             int tbN = ToolbarLayout(W, tb);
             int subLeft  = (tbN > 0) ? tb[tbN - 1].right + HDR_GAP : PAD_L;
             int subLimit = HeaderRow2Limit(W);
-            swprintf_s(buf, 64, L"frakoblet %ds", staleSecs);
+            swprintf_s(buf, 64, L"offline %ds", staleSecs);
             int lenSub = (int)wcslen(buf);
             SIZE szSub = { 0, 0 };
             GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
@@ -4354,8 +4354,8 @@ static void FireAlert(AppContext* ctx, double signedLevel, double price) {
     n.uFlags      = NIF_INFO;
     n.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
     swprintf_s(n.szInfoTitle, 64, L"%s  %.2f", SYMBOLS[ctx->symIdx].label, level);
-    swprintf_s(n.szInfo, 256, L"Prisen krysset varselet %s. Siste pris: $%.2f",
-               (signedLevel > 0.0) ? L"oppover" : L"nedover", price);
+    swprintf_s(n.szInfo, 256, L"Price crossed the alert going %s. Last price: $%.2f",
+               (signedLevel > 0.0) ? L"up" : L"down", price);
     ctx->alertNotifyOk = Shell_NotifyIconW(NIM_MODIFY, &n);
     MessageBeep(MB_ICONASTERISK);
 }
@@ -6045,14 +6045,14 @@ static HMENU BuildTrayMenu(void) {
         HMENU hSym = BuildSymbolMenu();
         HMENU hIv  = BuildIntervalMenu();
         if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
-        if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Intervall");
+        if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Interval");
         // VOL-bryteren (fase 22) - skrivebordsmodus har ingen verktoylinje.
         AppendMenuW(hMenu, MF_STRING | (ShowVolNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_VOLUME, L"Volumstolper	V");
+                    ID_TRAY_VOLUME, L"Volume bars	V");
         // MA-bryteren (fase 25), samme grunn. Fra fase 27 baerer den ogsaa
         // VWAP og dagens hoy/lav, saa den heter det den er.
         AppendMenuW(hMenu, MF_STRING | (ShowIndNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_INDICATORS, L"Indikatorer	M");
+                    ID_TRAY_INDICATORS, L"Indicators	M");
         // Prisvarslene (fase 23) settes i panelets priskolonne, men maa kunne
         // ryddes herfra: skrivebordsmodus tegner linjene og har ingen input.
         // Antallet gjelder symbolet som vises. Graatt, ikke borte, uten
@@ -6060,7 +6060,7 @@ static HMENU BuildTrayMenu(void) {
         {
             wchar_t lbl[48];
             int na = g_Ctx.alertCount[g_Ctx.symIdx];
-            swprintf_s(lbl, 48, L"Fjern prisvarsler (%d)", na);
+            swprintf_s(lbl, 48, L"Clear price alerts (%d)", na);
             AppendMenuW(hMenu, MF_STRING | (na > 0 ? MF_ENABLED : MF_GRAYED),
                         ID_TRAY_ALERTS_CLEAR, lbl);
         }
@@ -6068,18 +6068,17 @@ static HMENU BuildTrayMenu(void) {
     }
     if (!g_isDuplicate) {
         AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_DESKTOP, L"Skrivebordsmodus");
+                    ID_TRAY_DESKTOP, L"Desktop mode");
     }
     AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_GRAYED : MF_ENABLED),
-                ID_TRAY_RESET, L"Standardvisning	Ctrl+0");
+                ID_TRAY_RESET, L"Default view	Ctrl+0");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     if (!g_isDuplicate) {
-        // \x00e5 er aa: fila er ren ASCII, og cl leser den som CP1252.
         AppendMenuW(hMenu, MF_STRING | (AutostartPresent() ? MF_CHECKED : MF_UNCHECKED),
-                    IDM_TOGGLE_AUTOSTART, L"Start ved p\x00e5" L"logging");
+                    IDM_TOGGLE_AUTOSTART, L"Start at sign-in");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     }
-    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Avslutt TickC");
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Quit TickC");
     return hMenu;
 }
 
@@ -6442,7 +6441,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_Ctx.nid.uCallbackMessage = WM_TRAYICON;
     g_Ctx.nid.hIcon            = RenderMicroFontIcon("...", 0xFF00FF66);
-    wcscpy_s(g_Ctx.nid.szTip, 128, L"Kobler til Binance...");
+    wcscpy_s(g_Ctx.nid.szTip, 128, L"Connecting to Binance...");
 
     Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
 
