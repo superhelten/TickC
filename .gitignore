@@ -1,10 +1,14 @@
-# Byggeartefakter
+# Build artifacts
 *.obj
 *.exe
 *.pdb
 *.ilk
+*.exp
+*.lib
+*.i
+.vs/
 
-# Historiske sikkerhetskopier - erstattet av git, beholdt paa disk.
-# Tosifret mønster òg: `*.bak[0-9]` alene slapp `.bak10` og `.bak11` gjennom.
+# Local source backups - superseded by git, kept on disk.
+# The trailing * matters: `*.bak[0-9]` alone let `.bak10` and `.bak11` through.
 *.bak
 *.bak[0-9]*

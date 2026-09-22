@@ -7,27 +7,36 @@ The whole thing compiles to a single exe of about 200 KB.
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
 
+![The chart panel: candles, volume, SMA 20, EMA 50, VWAP and the day levels](docs/images/panel.png)
+
 ## What it does
 
 - **Tray icon** with the live price. Updates every 3 seconds.
 - **Chart panel** (left-click the icon): candlesticks, volume bars, SMA 20, EMA 50,
-  and a daily VWAP. You also get today's high and low, and yesterday's high, low and close
-  (labelled HOD, LOD, PDH, PDL, PDC).
+and a daily VWAP. You also get today's high and low, and yesterday's high, low and close
+(labelled HOD, LOD, PDH, PDL, PDC).
 - **Symbols:** BTC, ETH, SOL and BNB against USDT.
 - **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d.
 - **Price alerts.** Click the price column to set one. When the price gets there you get a
-  balloon and a sound, even with the panel closed.
+balloon and a sound, even with the panel closed.
 - **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
-  It stays quiet on purpose: no volume or moving averages there unless you turn them on.
+It stays quiet on purpose: no volume or moving averages there unless you turn them on.
 - **Scrolls back in time.** Pan into the left edge and it fetches older candles,
-  up to 6000 of them.
+up to 6000 of them.
+
+![Desktop mode: the chart drawn on the wallpaper, behind the icons](docs/images/desktop-mode.png)
+
+## Getting it
+
+Download `TickC.exe` from the [Releases](../../releases) page, put it anywhere, and run it.
+No installer. Or build it yourself, below.
 
 ## Requirements
 
 - Windows 8 or newer (developed on Windows 11)
 - To build: MSVC, either Visual Studio or the free
-  [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022),
-  with the Windows SDK
+[Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022),
+with the Windows SDK
 
 ## Building
 
@@ -45,29 +54,33 @@ Windows refuses the layered child window, and desktop mode shows up blank.
 
 Run `TickC.exe`. An icon appears in the tray.
 
-| Action | What happens |
-|---|---|
-| Left-click the tray icon | Show or hide the chart panel |
-| Right-click the tray icon | Symbol, interval, overlays, desktop mode, autostart, quit |
-| `TickC.exe --desktop-mode` | Start with the chart on the desktop |
+
+| Action                     | What happens                                              |
+| -------------------------- | --------------------------------------------------------- |
+| Left-click the tray icon   | Show or hide the chart panel                              |
+| Right-click the tray icon  | Symbol, interval, overlays, desktop mode, autostart, quit |
+| `TickC.exe --desktop-mode` | Start with the chart on the desktop                       |
+
 
 In the chart panel:
 
-| Key | Action |
-|---|---|
-| Mouse wheel, `+` / `-` | Zoom |
-| Drag, `←` / `→` | Pan |
-| `PgUp` / `PgDn` | Jump one screen |
-| `Home` / `End` | Oldest / newest candle |
-| `1` … `6` | Switch interval |
-| `V` | Volume bars on/off |
-| `M` | Indicators on/off (moving averages, VWAP, levels) |
-| `A` | Set an alert at the crosshair price |
-| `R`, double-click | Reset zoom and pan |
-| `Esc` | Close the symbol picker, then reset the view, then hide the panel |
-| `Ctrl`+`0` | Reset window size and position |
-| `Ctrl`+`N` | Open another panel |
-| `Ctrl`+`M` / `F11` / `Ctrl`+`W` | Minimize / maximize / close |
+
+| Key                             | Action                                                            |
+| ------------------------------- | ----------------------------------------------------------------- |
+| Mouse wheel, `+` / `-`          | Zoom                                                              |
+| Drag, `←` / `→`                 | Pan                                                               |
+| `PgUp` / `PgDn`                 | Jump one screen                                                   |
+| `Home` / `End`                  | Oldest / newest candle                                            |
+| `1` … `6`                       | Switch interval                                                   |
+| `V`                             | Volume bars on/off                                                |
+| `M`                             | Indicators on/off (moving averages, VWAP, levels)                 |
+| `A`                             | Set an alert at the crosshair price                               |
+| `R`, double-click               | Reset zoom and pan                                                |
+| `Esc`                           | Close the symbol picker, then reset the view, then hide the panel |
+| `Ctrl`+`0`                      | Reset window size and position                                    |
+| `Ctrl`+`N`                      | Open another panel                                                |
+| `Ctrl`+`M` / `F11` / `Ctrl`+`W` | Minimize / maximize / close                                       |
+
 
 ## What it writes to your system
 
@@ -75,7 +88,7 @@ Nothing outside your user profile. No admin rights needed.
 
 - Settings live in `HKCU\Software\TickC`.
 - "Start at sign-in" adds a `TickC` value under
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 To remove it completely, untick autostart in the tray menu, quit, and delete
 `HKCU\Software\TickC`.
