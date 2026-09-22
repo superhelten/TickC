@@ -75,6 +75,8 @@ phase 30 on, new text in this repo is written in English (see the phase 30
 section).
 **Phase 31** puts every string the user sees into English (tray menu,
 status text, the alert balloon, `1h`/`4h`, ISO dates).
+**Phase 32** translates every comment in `tickc.c`, proven comment-only:
+the production exe is byte-identical apart from the link timestamp.
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -105,7 +107,7 @@ Se **Vinduet** under. Planer:
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `tickc.c` (~6600 linjer). Ved siden av ligger
+All kode ligger i **én fil**, `tickc.c` (~6700 linjer, English comments from phase 32). Ved siden av ligger
 `tickc.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
@@ -2992,6 +2994,30 @@ build** (4d3dc21, `REG_PATH` rewritten to the test key) fails the same way
 on the same row with the same 40 of 54 pixels: the data, not the code.
 **Exe unchanged at 206 336 bytes.**
 
+### Phase 32 — English comments: every comment in tickc.c
+
+Plan: `docs/superpowers/plans/2026-09-22-tickc-english-comments.md`. Branch
+`fase32-english-comments`, merged with `--no-ff`.
+
+**What changed.** All ~1 470 Norwegian comments and the three `#error`
+messages, in US spelling and one glossary (phase, pitfall, candle, panel,
+surface, stamp, view, backfill, alert, main instance, duplicate, ...). The
+file was cut into ten chunks at top-level boundaries, translated in
+parallel, joined, and given one consistency pass (spelling, decimal points,
+one name per thing). UI text quoted in comments now matches phase 31. One
+stale fact was corrected: the `MAX_CANDLES` comment said 40 bytes per candle,
+but `Candle` has been 48 bytes since phase 21, so the buffer is 288 KB.
+
+**Verified.** `cl /EP` (comments stripped by the preprocessor) for the
+production and the `TICKER_PROBE` configuration: the code with all whitespace
+removed is byte-identical. All 199 string and char literals are identical and
+in order. The file is ASCII and CRLF. The verifier was tested first against a
+changed constant and a changed string (both caught) and a comment-only change
+(passed). **The production exe is byte-identical** to the one built from the
+old source except for the two copies of the link timestamp (0x108 and
+0x2dadc), so the pixel probes were not rerun. `probe_migrate` 24/24.
+Exe 206 336 bytes, unchanged.
+
 ---
 
 ## Kjente begrensninger
@@ -3727,15 +3753,15 @@ on the same row with the same 40 of 54 pixels: the data, not the code.
 
 ## Sikkerhetskopier
 
-**Only `tickc.c.bak25` is left** (22.09.2026). It is identical to `tickc.c`
-as it stands after phase 30, and is the rollback reference for the build that
-is running. `ticker.c.bak` … `.bak24` are deleted: they covered phases 1 to
-29, and that history is in git.
+**Only `tickc.c.bak27` is left** (22.09.2026). It is identical to `tickc.c`
+as it stands after phase 32, and is the rollback reference for the build that
+is running. `ticker.c.bak` … `.bak24` and `tickc.c.bak25`/`.bak26` are deleted: they covered phases 1 to
+31, and that history is in git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27), `.bak23` (fase 28), `.bak24` (fase 29) og `tickc.c.bak25` (phase 30). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27), `.bak23` (fase 28), `.bak24` (fase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31) and `.bak27` (phase 32). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
