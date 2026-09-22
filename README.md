@@ -91,9 +91,10 @@ The UI thread draws with GDI into a back buffer that's kept between frames.
 Nothing from the network is trusted: prices that come back as NaN, infinity, zero
 or garbage are dropped before they reach the chart.
 
-`WORKLOG.md` (Norwegian for "work log") is the development diary. It covers why
-things are the way they are, and the pitfalls I ran into. The `(fase N)` notes in
-the code comments point there.
+`WORKLOG.md` is the development diary. It covers why things are the way they
+are, what was measured, and the pitfalls I ran into. The `(phase N)` notes in the
+code comments point to its sections, and `docs/plans/` holds the plan for each
+phase.
 
 ## Data source
 

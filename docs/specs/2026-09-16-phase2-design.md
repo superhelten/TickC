@@ -1,271 +1,276 @@
-# Ticker fase 2 — design
+# Ticker phase 2 — design
 
-Dato: 2026-09-16. Bygger på fase 1 slik den er dokumentert i `WORKLOG.md`.
-Utgangspunkt: commit `f7d3997`.
+Date: 2026-09-16. Builds on phase 1 as documented in `WORKLOG.md`.
+Starting point: commit `f7d3997`.
 
-## Formål
+## Purpose
 
-Fase 1 flyttet nettverket ut på en arbeidertråd og fikk opptegningen ned i
-1,255 ms. Hovedtråden har dermed ledig kapasitet. Fase 2 bruker den til fire
-ting: myk visuell respons, feiltoleranse mot ustabile linjer, valg av symbol
-og intervall i kjøretid, og visuell kontekst i selve grafflaten.
+Phase 1 moved the network onto a worker thread and got painting down to
+1.255 ms. The main thread therefore has spare capacity. Phase 2 uses it for four
+things: smooth visual response, fault tolerance against unstable connections,
+choosing symbol and interval at runtime, and visual context in the chart area
+itself.
 
-Målet er å løfte grensesnittet fra en ren prisgraf til et helhetlig, stilrent
-finansielt verktøy med direkte kontekst — uten å gi fra seg farten.
+The goal is to lift the interface from a plain price chart to a coherent, clean
+financial tool with direct context — without giving up speed.
 
-Rammene fra fase 1 står: én fil, ingen eksterne avhengigheter utover Win32 og
-WinHTTP, ingen `malloc`, rent bygg på `/W4`, x86, ~3,3 MB fotavtrykk.
+The constraints from phase 1 stand: one file, no external dependencies beyond
+Win32 and WinHTTP, no `malloc`, clean build at `/W4`, x86, ~3.3 MB footprint.
 
 ---
 
-## Arkitektur
+## Architecture
 
-### Trådkontrakten er uendret
+### The thread contract is unchanged
 
-Fase 2 legger ikke til tråder og flytter ikke ansvar mellom de to som finnes.
-Reglene fra fase 1 gjelder uendret:
+Phase 2 adds no threads and moves no responsibility between the two that exist.
+The rules from phase 1 apply unchanged:
 
-- UI-tråden rører aldri WinHTTP.
-- `PostMessage` skjer aldri inne i låsen.
-- Arbeidertråden henter uten lås og låser kun rundt flettingen.
+- The UI thread never touches WinHTTP.
+- `PostMessage` never happens inside the lock.
+- The worker thread fetches without the lock and locks only around the merge.
 
-Låsedomenet **utvides** med: `symIdx`, `ivIdx`, `intervalMs`, `configGen`,
-`lastOkTick`, `netFailures`, `evictedTotal`.
+The lock domain is **extended** with: `symIdx`, `ivIdx`, `intervalMs`,
+`configGen`, `lastOkTick`, `netFailures`, `evictedTotal`.
 
-### Ny tilstandsdeling: mål vs. visning
+### New state split: target vs. display
 
-Det bærende grepet i fase 2. `viewStart` og `viewCount` (int, låsebeskyttet)
-forblir **målet** og eies fortsatt av begge tråder som i dag. Ved siden av
-kommer fire **rene UI-doubler** som ingen annen tråd rører:
+The key idea in phase 2. `viewStart` and `viewCount` (int, lock-protected)
+remain **the target** and are still owned by both threads as today. Next to
+them come four **pure UI doubles** that no other thread touches:
 
-| Felt | Betydning |
+| Field | Meaning |
 |---|---|
-| `dispStart` | animert posisjon, kan være brøk |
-| `dispCount` | animert bredde, kan være brøk |
-| `dispMin` | animert nedre priskant |
-| `dispMax` | animert øvre priskant |
+| `dispStart` | animated position, can be fractional |
+| `dispCount` | animated width, can be fractional |
+| `dispMin` | animated lower price edge |
+| `dispMax` | animated upper price edge |
 
-Arbeidertråden ser aldri disp-feltene. Den skriver mål; UI-tråden eases mot
-det. Dette er grunnen til at animasjonen ikke berører trådkontrakten i det
-hele tatt.
+The worker thread never sees the disp fields. It writes the target; the UI
+thread eases toward it. This is why the animation does not touch the thread
+contract at all.
 
 ---
 
-## Del A — animasjonsklokka, backoff og stale-indikator
+## Part A — the animation timer, backoff and stale indicator
 
-### A1. Animasjonsklokka
+### A1. The animation timer
 
-`TIMER_FADE_ID` erstattes av `TIMER_ANIM_ID`. Én timer på 16 ms driver alt
-tidsavhengig: chrome-fade, view-easing, Y-akse-easing, overlay-fade og
-stale-telleren.
+`TIMER_FADE_ID` is replaced by `TIMER_ANIM_ID`. One 16 ms timer drives
+everything time-dependent: chrome fade, view easing, Y-axis easing, overlay
+fade and the stale counter.
 
-**Tidsbasert, ikke stegbasert.** `SetTimer(16)` fyrer i praksis hver ~15,6 ms
-og slås sammen under last. Fast steglengde per tikk gir derfor ulik hastighet
-avhengig av systembelastning. Hver tikk måler faktisk forløpt tid med
-`GetTickCount64()` mot `lastAnimTick`.
+**Time-based, not step-based.** `SetTimer(16)` in practice fires every
+~15.6 ms and gets coalesced under load. A fixed step length per tick therefore
+gives different speeds depending on system load. Each tick measures the actual
+elapsed time with `GetTickCount64()` against `lastAnimTick`.
 
-Interpolasjon, per animert verdi:
-
-```
-d += (maal - d) * (1.0 - exp(-dt / TAU));
-if (fabs(maal - d) < snapTerskel) d = maal;
-```
-
-`TAU = 90.0` ms. `dt` klemmes til maks 100 ms, slik at en lang pause (låst
-skjerm, kraftig last) gir ett hopp i stedet for en tilsynelatende frossen
-animasjon som så spretter.
-
-Timeren startes av enhver tilstandsendring som gjør noe usettet, og **drepes**
-når chrome, view, Y-akse og overlay alle har satt seg *og* forbindelsen er
-frisk. I hvile går det ingen timer — fotavtrykket i ro er uendret.
-
-`FADE_STEP` utgår. Chrome-faden bruker samme eksponentielle form med kortere
-tau, og beholder dagens opplevde varighet på ~130 ms.
-
-### A2. Eksponentiell backoff
-
-I dag: arbeidertråden forkaster feil stille med `return` og venter alltid
-`TIMER_INTERVAL` (3000 ms).
+Interpolation, per animated value:
 
 ```
-netFailures = 0 ved suksess og ved hWakeEvent
-ventetid    = min(3000 * 2^netFailures, 60000) justert med +/- 12,5 % jitter
+d += (target - d) * (1.0 - exp(-dt / TAU));
+if (fabs(target - d) < snapThreshold) d = target;
 ```
 
-Jitteren hindrer at mange klienter synkroniserer seg mot serveren etter et
-felles avbrudd. Kilde: `GetTickCount64()`-lavbiter — ingen `rand()`, ingen
-seeding, ingen global tilstand.
+`TAU = 90.0` ms. `dt` is clamped to at most 100 ms, so that a long pause
+(locked screen, heavy load) gives one jump instead of an apparently frozen
+animation that then leaps.
 
-Taket på 60 s er valgt slik at en lang nedetid ikke gir minuttlange hull i
-gjenopptakelsen, samtidig som vi ikke hamrer på en død linje.
+The timer is started by any state change that leaves something unsettled, and
+is **killed** when chrome, view, Y axis and overlay have all settled *and* the
+connection is healthy. At rest no timer runs — the idle footprint is
+unchanged.
 
-**Etter tre sammenhengende feil** lukkes `hConnect` og settes til NULL.
-`HttpGet` oppretter den på nytt ved neste kall, og DNS slås dermed opp på
-nytt. Uten dette henger vi fast på en IP som ikke lenger svarer.
+`FADE_STEP` goes away. The chrome fade uses the same exponential form with a
+shorter tau, and keeps today's perceived duration of ~130 ms.
 
-`hWakeEvent` (panelet ble åpnet) nullstiller alltid backoffen — brukeren som
-åpner panelet skal få et forsøk umiddelbart, ikke vente ut et minutt.
+### A2. Exponential backoff
 
-### A3. Stale-tilstand
-
-`lastOkTick` (`ULONGLONG`, `GetTickCount64`) settes under lås ved hver
-vellykket henting.
+Today: the worker thread silently discards errors with `return` and always
+waits `TIMER_INTERVAL` (3000 ms).
 
 ```
-stale = (naa - lastOkTick) > 3 * TIMER_INTERVAL     // 9 s = to tapte sykluser
+netFailures = 0 on success and on hWakeEvent
+wait        = min(3000 * 2^netFailures, 60000) adjusted by +/- 12.5 % jitter
 ```
 
-Terskelen på tre sykluser, ikke én, gjør at en enkelt treg forespørsel ikke
-blinker indikatoren.
+The jitter keeps many clients from synchronizing against the server after a
+shared outage. Source: `GetTickCount64()` low bits — no `rand()`, no seeding,
+no global state.
 
-### A4. Synliggjøring
+The 60 s cap is chosen so that a long outage does not leave minute-long gaps
+in the resumption, while we still do not hammer a dead connection.
 
-Bevisst dempet — brukeren skal kunne se det, ikke bli avbrutt av det.
+**After three consecutive errors** `hConnect` is closed and set to NULL.
+`HttpGet` creates it again on the next call, so DNS is looked up again.
+Without this we stay stuck on an IP that no longer answers.
 
-| Sted | I ro | Frakoblet |
+`hWakeEvent` (the panel was opened) always resets the backoff — a user who
+opens the panel should get an attempt immediately, not wait out a minute.
+
+### A3. Stale state
+
+`lastOkTick` (`ULONGLONG`, `GetTickCount64`) is set under the lock on every
+successful fetch.
+
+```
+stale = (naa - lastOkTick) > 3 * TIMER_INTERVAL     // 9 s = two missed cycles
+```
+
+The threshold of three cycles, not one, keeps a single slow request from
+blinking the indicator.
+
+### A4. Making it visible
+
+Deliberately muted — the user should be able to see it, not be interrupted by
+it.
+
+| Place | At rest | Offline |
 |---|---|---|
-| Header-pris | `CLR_TEXT` | `CLR_DIM` |
-| Undertittel | `BTC/USDT  -  1m` | `BTC/USDT  -  1m  -  frakoblet 42s` |
-| Tray-tips | `BTC/USDT: $75872.21` | `BTC/USDT: $75872.21 (frakoblet)` |
-| Tray-ikon | fulle siffer | dempede siffer |
-| Tomt buffer | `Laster data fra Binance...` | `Ingen forbindelse - prover igjen om Ns` |
+| Header price | `CLR_TEXT` | `CLR_DIM` |
+| Subtitle | `BTC/USDT  -  1m` | `BTC/USDT  -  1m  -  frakoblet 42s` |
+| Tray tooltip | `BTC/USDT: $75872.21` | `BTC/USDT: $75872.21 (frakoblet)` |
+| Tray icon | full digits | dimmed digits |
+| Empty buffer | `Laster data fra Binance...` | `Ingen forbindelse - prover igjen om Ns` |
 
-Den siste raden retter en reell feil: i dag står det «Laster data fra
-Binance...» i all evighet dersom linja er nede ved første åpning. Meldingen
-lyver om tilstanden.
+The last row fixes a real bug: today "Laster data fra Binance..." (Loading
+data from Binance...) stays up forever if the connection is down at first
+open. The message lies about the state.
 
-`RenderMicroFontIcon` får en fargeparameter for det dempede ikonet.
+`RenderMicroFontIcon` gets a color parameter for the dimmed icon.
 
-Sekundtelleren krever at animasjonsklokka holdes i live mens vi er frakoblet.
-Den tegner om **bare når sifferet faktisk endrer seg** — ikke 60 ganger i
-sekundet.
+The seconds counter requires the animation timer to be kept alive while we are
+offline. It repaints **only when the digit actually changes** — not 60 times a
+second.
 
 ---
 
-## Del B — symbol, intervall, overlay, vannmerke og persistens
+## Part B — symbol, interval, overlay, watermark and persistence
 
-### B1. Kuraterte tabeller
+### B1. Curated tables
 
 ```c
 typedef struct { const wchar_t* api; const wchar_t* label; } SymbolDef;
 typedef struct { const wchar_t* api; const wchar_t* label; long long ms; } IntervalDef;
 ```
 
-Symboler: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`.
-Intervaller: `1m`, `5m`, `15m`, `1h`, `4h`, `1d` — merket `1m 5m 15m 1t 4t 1d`.
+Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`.
+Intervals: `1m`, `5m`, `15m`, `1h`, `4h`, `1d` — labeled `1m 5m 15m 1t 4t 1d`.
 
-Kuratert, ikke fritekst. Fast liste betyr at vi kjenner prisområdet og kan
-formatere ikon, header og prisakse riktig uten å gjette, og at ingen henting
-kan feile på et ukjent symbol.
+Curated, not free text. A fixed list means we know the price range and can
+format icon, header and price axis correctly without guessing, and that no
+fetch can fail on an unknown symbol.
 
-### B2. configGen — kappløpet som må løses
+### B2. configGen — the race that must be solved
 
-**Scenariet:** tråden er midt i en henting for BTC. Brukeren bytter til ETH.
-UI-tråden tømmer bufferet. BTC-svaret kommer tilbake og flettes inn i et
-buffer som nå tilhører ETH. Grafen viser BTC-priser under ETH-etikett.
+**The scenario:** the thread is in the middle of a fetch for BTC. The user
+switches to ETH. The UI thread empties the buffer. The BTC response comes back
+and is merged into a buffer that now belongs to ETH. The chart shows BTC
+prices under an ETH label.
 
-Dette er den mest alvorlige feilmuligheten i hele fase 2 — den gir stille,
-feil data i stedet for en synlig krasj.
+This is the most serious failure mode in all of phase 2 — it gives silent,
+wrong data instead of a visible crash.
 
-**Løsning:** en `configGen`-teller.
+**Solution:** a `configGen` counter.
 
 ```
-UI-tråden ved bytte (under lås):
-    symIdx/ivIdx = nytt
-    intervalMs   = tabelloppslag
+UI thread on a switch (under the lock):
+    symIdx/ivIdx = new
+    intervalMs   = table lookup
     configGen++
     candleCount = 0; viewStart = 0; viewCount = 0
     followLive = TRUE; lastPrice = 0
   → SetEvent(hWakeEvent)
 
-Arbeidertråden:
-    under lås:  gen = configGen; sym = symIdx; iv = ivIdx
-    uten lås:   bygg URL fra (sym, iv); HttpGet; ParseKlines
-    under lås:  if (configGen != gen) forkast; else MergeCandles
+Worker thread:
+    under the lock:  gen = configGen; sym = symIdx; iv = ivIdx
+    without it:      build URL from (sym, iv); HttpGet; ParseKlines
+    under the lock:  if (configGen != gen) discard; else MergeCandles
 ```
 
-Forkastingen skjer **ved fletting**, ikke ved henting — svaret kan ankomme
-når som helst underveis.
+The discard happens **at merge**, not at fetch — the response can arrive at
+any point along the way.
 
-### B3. intervalMs sprer seg
+### B3. intervalMs spreads
 
-`KLINE_MS` er en konstant i dag og brukes tre steder. Alle blir
+`KLINE_MS` is a constant today and is used in three places. All become
 `ctx->intervalMs`:
 
-1. Hull-sjekken i `MergeCandles` (`2 * KLINE_MS`)
-2. Seed-sjekken i `WorkerFetchKlines` (`5 * KLINE_MS`)
-3. Spenn-formateringen i headeren — `%dm`/`%dt` antar 1m-lys
+1. The gap check in `MergeCandles` (`2 * KLINE_MS`)
+2. The seed check in `WorkerFetchKlines` (`5 * KLINE_MS`)
+3. The span formatting in the header — `%dm`/`%dt` assumes 1m candles
 
-Spenn-formateringen generaliseres: totalt antall minutter er
-`vc * intervalMs / 60000`, formatert som minutter, timer eller døgn.
+The span formatting is generalized: the total number of minutes is
+`vc * intervalMs / 60000`, formatted as minutes, hours or days.
 
-### B4. Adaptivt tray-ikon
+### B4. Adaptive tray icon
 
-Ikonet antar BTC-skala i dag: `price / 1000.0` gir `75.8`. SOL på $150 ville
-gitt `0.2` — ubrukelig.
+The icon assumes BTC scale today: `price / 1000.0` gives `75.8`. SOL at $150
+would give `0.2` — useless.
 
-Divisor (1, 1000, 1 000 000) og antall desimaler velges slik at
-`IconTextWidth() <= 16`. Dette er nøyaktig teknikken loggen beskriver under
-feil #5: mål bredden på den **ferdig formaterte strengen**, ikke på en
-terskel.
+Divisor (1, 1000, 1 000 000) and number of decimals are chosen so that
+`IconTextWidth() <= 16`. This is exactly the technique the log describes under
+bug #5: measure the width of the **fully formatted string**, not against a
+threshold.
 
-### B5. Overlayet
+### B5. The overlay
 
-Tegnes **inne i popup-vinduets klientflate**. Ingen nytt HWND.
+Drawn **inside the popup window's client area**. No new HWND.
 
-Dette er det viktigste arkitekturvalget i del B. Uten et nytt vindu finnes
-det ingen aktiveringsendring, og vi går helt utenom territoriet der feil #1 og
-#2 levde. En `TrackPopupMenu` ville sendt `WA_INACTIVE` til panelet og
-trigget auto-skjul mens menyen sto åpen.
+This is the most important architecture choice in part B. Without a new
+window there is no activation change, and we stay entirely out of the
+territory where bugs #1 and #2 lived. A `TrackPopupMenu` would have sent
+`WA_INACTIVE` to the panel and triggered auto-hide while the menu was open.
 
-**Layout og treffdeteksjon deler én funksjon.** `OverlayLayout()` fyller et
-array av rektangler; både tegning og museklikk kaller den. Samme disiplin som
-`ChartGeometry` allerede følger, av nøyaktig samme grunn — loggen er tydelig
-på at to uavhengige utregninger av samme flate ender med å peke forskjellige
-steder.
+**Layout and hit testing share one function.** `OverlayLayout()` fills an
+array of rectangles; both drawing and mouse clicks call it. The same
+discipline `ChartGeometry` already follows, for exactly the same reason — the
+log is clear that two independent computations of the same surface end up
+pointing at different places.
 
-Interaksjon:
+Interaction:
 
-| Handling | Virkning |
+| Action | Effect |
 |---|---|
-| Høyreklikk i chart-flaten | åpner overlayet |
-| Klikk på valg | velger, lukker, trigger henting |
-| Klikk utenfor | lukker uten endring |
-| Hover | framhever raden |
-| ESC | lukker overlayet **før** det lukker panelet |
+| Right-click in the chart area | opens the overlay |
+| Click on an option | selects, closes, triggers a fetch |
+| Click outside | closes without change |
+| Hover | highlights the row |
+| ESC | closes the overlay **before** it closes the panel |
 
-Mens overlayet er åpent er chart-interaksjon (pan, zoom, crosshair) sperret.
+While the overlay is open, chart interaction (pan, zoom, crosshair) is
+blocked.
 
-Fade inn og ut via animasjonsklokka, med samme `Blend()` som resten av
-chromet. Paletten er `CLR_BG`/`CLR_BOX`/`CLR_BOXEDGE` — identisk med
-hover-boksen.
+Fade in and out via the animation timer, with the same `Blend()` as the rest
+of the chrome. The palette is `CLR_BG`/`CLR_BOX`/`CLR_BOXEDGE` — identical to
+the hover box.
 
-### B6. Dynamisk bakgrunnsvannmerke
+### B6. Dynamic background watermark
 
-Symbol og intervall preges inn i bakgrunnen med stor, ren typografi i en
-fargetone som ligger ~3 % over bakgrunnen. Uttrykket er hentet fra
-profesjonelle finansterminaler: teksten skal leses som en del av flaten, ikke
-som et lag oppå den.
+Symbol and interval are stamped into the background in large, clean
+typography in a tone that sits ~3 % above the background. The look is taken
+from professional financial terminals: the text should read as part of the
+surface, not as a layer on top of it.
 
 ```c
 #define CLR_WATERMARK  RGB(0x15, 0x19, 0x1F)   // #0D1117 + ~3 %
 ```
 
-`#0D1117` er (13, 17, 23); vannmerket er (21, 25, 31). Differansen på 8 nivåer
-er ~3,1 % av full skala — synlig nok til å lese, svakt nok til at
-stearinlysene og rutenettet beholder all kontrast.
+`#0D1117` is (13, 17, 23); the watermark is (21, 25, 31). The difference of 8
+levels is ~3.1 % of full scale — visible enough to read, faint enough that the
+candles and the grid keep all their contrast.
 
-**Innhold:** aktivt symbol som hovedlinje (`BTCUSDT`), intervallet under
-(`5m`). Begge leses fra samme `symIdx`/`ivIdx` som overlayet og headeren, så
-de kan aldri komme i utakt.
+**Content:** the active symbol as the main line (`BTCUSDT`), the interval
+below (`5m`). Both are read from the same `symIdx`/`ivIdx` as the overlay and
+the header, so they can never get out of step.
 
-**Plassering i tegnerekkefølgen:** umiddelbart etter at bakgrunnen er satt,
-før rutenett, stearinlys og akser. Grafen flyter dermed rent over teksten uten
-overlapping eller visuell støy.
+**Place in the drawing order:** immediately after the background is set,
+before grid, candles and axes. The chart thus flows cleanly over the text
+without overlap or visual noise.
 
-**Ytelse — cachet som bitmap, ikke tegnet på nytt per bilde.** En `DrawTextW`
-med stor font er ikke gratis; målt koster den typisk 0,05–0,30 ms, ikke
-0,005 ms. Løsningen er å slå sammen bakgrunn og vannmerke i én cachet
+**Performance — cached as a bitmap, not redrawn per frame.** A `DrawTextW`
+with a large font is not free; measured, it typically costs 0.05–0.30 ms, not
+0.005 ms. The solution is to combine background and watermark into one cached
 `HBITMAP`:
 
 ```
@@ -276,175 +281,179 @@ Per bilde:
     BitBlt(wmBmp) i stedet for FillRect(brBg)
 ```
 
-Dette **erstatter** dagens `FillRect` — det legger altså ikke til et steg, det
-bytter ut ett. Nettokostnaden er en `BitBlt` på ~380×300 mot en `FillRect` av
-samme flate, som er innenfor målestøy. Samme disiplin som GDI-cachen fra
-fase 1: bygg når inndata endrer seg, ikke per bilde.
+This **replaces** today's `FillRect` — so it does not add a step, it swaps one
+out. The net cost is a `BitBlt` of ~380×300 against a `FillRect` of the same
+area, which is within measurement noise. The same discipline as the GDI cache
+from phase 1: build when the inputs change, not per frame.
 
-Cachen invalideres av `WM_SIZE`, av konfigbytte, og ved oppstart.
+The cache is invalidated by `WM_SIZE`, by a config switch, and at startup.
 
-**GDI-regnskap:** +1 `HBITMAP`, +1 `HFONT`. Fase 1 endte på 31 håndtak; fase 2
-lander på ~33. Tallet skal være konstant etter oppstart — det er testen.
+**GDI accounting:** +1 `HBITMAP`, +1 `HFONT`. Phase 1 ended at 31 handles;
+phase 2 lands at ~33. The number must be constant after startup — that is the
+test.
 
-### B7. Persistens
+### B7. Persistence
 
 `HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
 `PanelWidth`, `PanelHeight`.
 
-Skrives ved endring og ved avslutning. Leses ved oppstart, med
-**bundet-sjekk** på indeksene — et registret som er redigert for hånd eller
-etterlatt av en nyere versjon med flere symboler skal ikke kunne indeksere
-utenfor tabellen.
+Written on change and on exit. Read at startup, with a **bounds check** on the
+indices — a registry that has been edited by hand or left behind by a newer
+version with more symbols must not be able to index outside the table.
 
-Feiler lesningen, faller vi tilbake på BTC/USDT 1m. Registret er aldri en
-forutsetning for at appen starter.
+If the read fails, we fall back to BTC/USDT 1m. The registry is never a
+precondition for the app starting.
 
-Ved oppstart fra registret settes `symIdx`/`ivIdx` **før** arbeidertråden
-startes, slik at første henting går mot riktig par og vannmerket er korrekt
-fra første bilde.
+When starting from the registry, `symIdx`/`ivIdx` are set **before** the
+worker thread is started, so that the first fetch goes to the right pair and
+the watermark is correct from the first frame.
 
 ---
 
-## Del C — view- og Y-akse-easing
+## Part C — view and Y-axis easing
 
-### C1. Hva som eases, og hva som ikke gjør det
+### C1. What is eased, and what is not
 
-| Handling | Oppførsel |
+| Action | Behavior |
 |---|---|
-| Hjul-panorering | eases |
-| Ctrl + hjul (zoom) | eases |
-| Symbol-/intervallbytte | ingen easing — bufferet er nytt |
-| **Dra-panorering** | **følger musa direkte** |
-| Y-akse ved nye data | eases |
-| Indeksforskyvning ved utkasting | ingen easing |
+| Wheel panning | eased |
+| Ctrl + wheel (zoom) | eased |
+| Symbol/interval switch | no easing — the buffer is new |
+| **Drag panning** | **follows the mouse directly** |
+| Y axis on new data | eased |
+| Index shift on eviction | no easing |
 
-Dra-panorering settes på både mål og visning samtidig. Eased dra føles treigt,
-ikke mykt — fingeren og grafen må henge sammen.
+Drag panning is set on both the target and the display at the same time. An
+eased drag feels sluggish, not smooth — the finger and the chart must stay
+together.
 
-### C2. Brøkdels-indekser i opptegningen
+### C2. Fractional indices in painting
 
-Dette — ikke easing-matematikken — er den reelle endringen i `DrawChart`.
+This — not the easing math — is the real change in `DrawChart`.
 
-Med `dispStart = 142.7` er det halve lys i begge kanter. Tegneløkka går fra
-`floor(dispStart)` til `ceil(dispStart + dispCount)`, med
+With `dispStart = 142.7` there are half candles at both edges. The drawing
+loop runs from `floor(dispStart)` to `ceil(dispStart + dispCount)`, with
 
 ```
 x = left + ((double)i - dispStart) / dispCount * cw
 ```
 
-og `IntersectClipRect` mot chart-flaten, slik at kantlysene ikke blør ut i
-prisaksen eller headeren. Klippregionen gjenopprettes før chromet tegnes.
+and `IntersectClipRect` against the chart area, so that the edge candles do
+not bleed into the price axis or the header. The clip region is restored
+before the chrome is drawn.
 
-Begge løkkene (kropper og veker) går fortsatt over synlige lys, ikke over hele
-historikken — ytelseskarakteristikken fra fase 1 er bevart.
+Both loops (bodies and wicks) still run over visible candles, not over the
+whole history — the performance characteristics from phase 1 are preserved.
 
-### C3. HitCandle må lese det samme
+### C3. HitCandle must read the same
 
-`DrawChart` og `HitCandle` må **begge** lese disp-verdiene. Leser den ene
-målet og den andre visningen, peker crosshairet på feil lys midt i
-animasjonen. Det er feil #7 fra loggen i ny drakt.
+`DrawChart` and `HitCandle` must **both** read the disp values. If one reads
+the target and the other the display, the crosshair points at the wrong
+candle in the middle of the animation. That is bug #7 from the log in new
+clothes.
 
-### C4. Indeksforskyvning ved utkasting
+### C4. Index shift on eviction
 
-`MergeCandles` teller opp `evictedTotal` med antall lys som faller ut i front
-når bufferet er fullt. UI-tråden holder sin egen `dispEvictedSeen`, og ved
-hver opptegning:
+`MergeCandles` adds to `evictedTotal` the number of candles that drop off the
+front when the buffer is full. The UI thread keeps its own `dispEvictedSeen`,
+and on every repaint:
 
 ```
 delta = evictedTotal - dispEvictedSeen
-dispStart     -= delta      // ingen easing
+dispStart     -= delta      // no easing
 hoverIdx      -= delta
 panAnchorView -= delta
 dispEvictedSeen = evictedTotal
 ```
 
-Uten dette hopper grafen ett lys til venstre hvert minutt så snart bufferet
-har nådd 1440.
+Without this the chart jumps one candle to the left every minute as soon as
+the buffer has reached 1440.
 
-Dette rydder samtidig opp i den dokumenterte begrensningen om at `hoverIdx` og
-`panAnchorView` henger ett lys etter til neste musebevegelse.
+This also cleans up the documented limitation that `hoverIdx` and
+`panAnchorView` lag one candle behind until the next mouse move.
 
 ---
 
-## Feilhåndtering
+## Error handling
 
-| Situasjon | Oppførsel |
+| Situation | Behavior |
 |---|---|
-| Nettverksfeil | backoff, stale-indikator, forrige data blir stående |
-| Nettet nede ved første åpning | `Ingen forbindelse - prover igjen om Ns` |
-| Svar ankommer etter konfigbytte | forkastes via `configGen` |
-| Ugyldig registerinnhold | bundet-sjekk, fall tilbake på BTC/USDT 1m |
-| Registret utilgjengelig | ignoreres, appen starter normalt |
-| Vannmerke-bitmap feiler | hopp over, fall tilbake på `FillRect` |
-| Buffer fullt (1440) | eldste faller ut, indekser forskyves synkront |
-| Overlay åpent ved konfigbytte | lukkes, chart-interaksjon gjenopptas |
+| Network error | backoff, stale indicator, previous data stays |
+| Network down at first open | `Ingen forbindelse - prover igjen om Ns` |
+| Response arrives after config switch | discarded via `configGen` |
+| Invalid registry content | bounds check, fall back to BTC/USDT 1m |
+| Registry unavailable | ignored, the app starts normally |
+| Watermark bitmap fails | skip, fall back to `FillRect` |
+| Buffer full (1440) | oldest drops off, indices shift synchronously |
+| Overlay open during config switch | closed, chart interaction resumes |
 
-**Aldri:** krasj, heng, eller data vist under feil etikett.
+**Never:** crash, hang, or data shown under the wrong label.
 
 ---
 
 ## Testing
 
-Teknikken fra fase 1 gjelder: trekk funksjonen ut av `ticker.c` med `sed` inn
-i en liten harness, slik at testene kjører mot **den faktiske koden**, ikke en
-kopi.
+The technique from phase 1 applies: pull the function out of `ticker.c` with
+`sed` into a small harness, so that the tests run against **the actual code**,
+not a copy.
 
-Enhetstestbart uten Win32:
+Unit-testable without Win32:
 
-| Enhet | Hva som verifiseres |
+| Unit | What is verified |
 |---|---|
-| Backoff-skjema | 3s, 6s, 12s, 24s, 48s, 60s, 60s; jitter innenfor ±12,5 %; nullstilling |
-| Easing-steg | konvergens, snap, klemming av `dt`, ingen oversving |
-| `configGen`-forkasting | svar fra forrige konfig flettes aldri inn |
-| Adaptiv ikonformatering | alle fire symbolers prisområde gir `IconTextWidth() <= 16` |
-| Spenn-formatering | alle seks intervaller × representative `vc` |
-| Overlay-layout | tegnerektangler og trefferektangler er identiske |
-| Indeksforskyvning | `dispStart`/`hoverIdx` følger `evictedTotal` eksakt |
-| `MergeCandles` | de seks eksisterende tilfellene, nå med variabel `intervalMs` |
+| Backoff schedule | 3s, 6s, 12s, 24s, 48s, 60s, 60s; jitter within ±12.5 %; reset |
+| Easing step | convergence, snap, clamping of `dt`, no overshoot |
+| `configGen` discard | a response from the previous config is never merged |
+| Adaptive icon formatting | all four symbols' price ranges give `IconTextWidth() <= 16` |
+| Span formatting | all six intervals × representative `vc` |
+| Overlay layout | drawing rectangles and hit rectangles are identical |
+| Index shift | `dispStart`/`hoverIdx` follow `evictedTotal` exactly |
+| `MergeCandles` | the six existing cases, now with variable `intervalMs` |
 
-Empirisk, per delleveranse:
+Empirically, per partial delivery:
 
-- `/W4` rent, x86.
-- GDI- og USER-håndtak flate gjennom pan, zoom, overlay-åpning og konfigbytte.
-  Forventet nivå etter fase 2: ~33, konstant.
-- Opptegning holder seg under 1,3 ms. Easing legger ~60 opptegninger i
-  sekundet **i bevegelse**, så taket per bilde er det som avgjør.
-- Vannmerket måles isolert: opptegning med og uten, samme utsnitt, samme
-  vindusstørrelse. Påstanden som skal etterprøves er at den cachede `BitBlt`
-  ikke er dyrere enn dagens `FillRect`.
-- Overlay- og vannmerkefarger måles med `GetPixel`, ikke med øyemål. Loggen
-  dokumenterer at øyemål på nedskalerte skjermbilder har gitt feil konklusjon
-  to ganger. Vannmerket på ~3 % kontrast er nøyaktig det tilfellet der øyemål
-  ikke kan brukes.
-- Backoff verifiseres ved å blokkere `api.binance.com` og logge faktiske
-  ventetider.
-
----
-
-## Rekkefølge
-
-Tre leveranser, hver med eget bygg, egen måling og egen commit.
-
-**A.** Animasjonsklokke + backoff + stale-indikator — minst, ingen avhengigheter
-**B.** Symbol/intervall + overlay + vannmerke + registret — bygger på klokka for fade
-**C.** View- og Y-akse-easing — sist, rører opptegningen mest
-
-Vannmerket hører til B fordi det leser samme `symIdx`/`ivIdx` som overlayet og
-lastes fra samme registeroppslag. Å bygge det separat ville betydd å innføre
-den tilstanden to ganger.
+- `/W4` clean, x86.
+- GDI and USER handles flat through pan, zoom, overlay opening and config
+  switch. Expected level after phase 2: ~33, constant.
+- Painting stays under 1.3 ms. Easing adds ~60 repaints a second **while
+  moving**, so the per-frame ceiling is what decides.
+- The watermark is measured in isolation: painting with and without, same
+  view, same window size. The claim to be checked is that the cached `BitBlt`
+  is no more expensive than today's `FillRect`.
+- Overlay and watermark colors are measured with `GetPixel`, not by eye. The
+  log documents that judging downscaled screenshots by eye has given the wrong
+  conclusion twice. The watermark at ~3 % contrast is exactly the case where
+  the eye cannot be used.
+- Backoff is verified by blocking `api.binance.com` and logging the actual
+  wait times.
 
 ---
 
-## Fallgruver som gjelder alt arbeid i denne fila
+## Order
 
-Fra `WORKLOG.md`, gjentatt fordi de har slått til før:
+Three deliveries, each with its own build, its own measurement and its own
+commit.
 
-1. **Stopp `ticker.exe` før du linker.** Ellers `LNK1104`.
-2. **Ingen forward-deklarasjoner i fila.** Nye hjelpefunksjoner må stå *før*
-   første bruk. Dette har slått til tre ganger.
-3. **Kun ASCII i C-kommentarer.** `æøå` gir `C4819`. Unicode i `L""`-strenger
-   er greit.
-4. **`lParam` i `WM_MOUSEWHEEL` er skjermkoordinater**, ikke klient.
-5. **Syntetiske museklikk er upålitelige for testing.** Flytt den ekte
-   pekeren og jiggle den.
-6. **`PostMessage` aldri inne i låsen.**
+**A.** Animation timer + backoff + stale indicator — smallest, no dependencies
+**B.** Symbol/interval + overlay + watermark + registry — builds on the timer for fade
+**C.** View and Y-axis easing — last, touches painting the most
+
+The watermark belongs to B because it reads the same `symIdx`/`ivIdx` as the
+overlay and is loaded from the same registry lookup. Building it separately
+would have meant introducing that state twice.
+
+---
+
+## Pitfalls that apply to all work in this file
+
+From `WORKLOG.md`, repeated because they have struck before:
+
+1. **Stop `ticker.exe` before you link.** Otherwise `LNK1104`.
+2. **No forward declarations in the file.** New helper functions must come
+   *before* their first use. This has struck three times.
+3. **ASCII only in C comments.** `æøå` gives `C4819`. Unicode in `L""`
+   strings is fine.
+4. **`lParam` in `WM_MOUSEWHEEL` is screen coordinates**, not client.
+5. **Synthetic mouse clicks are unreliable for testing.** Move the real
+   pointer and jiggle it.
+6. **`PostMessage` never inside the lock.**

@@ -1,73 +1,73 @@
-# TickC — arbeidslogg
+# TickC — work log
 
-Status per 22.09.2026. Skrevet for agenter som jobber videre på `tickc.c`
-(`ticker.c` til og med fase 29).
-Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
-del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
-indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
-er levert.** Deretter er panelet flyttet fra rammeløst popup til et vanlig
-OS-vindu, og så, i **fase 4**, tilbake til rammeløst — denne gangen med egne
-kontrollknapper og nativ `HTCAPTION`-flytting. **Fase 5** la til
-tilstandsavhengig gjenopprettingsglyf, inkrementell hover-opptegning og
-firevegspeker under panorering. **Fase 6** strammet klippingen av grafen til
-`rcChart` og flyttet gjenopprettingsglyfen til 2 px forskyvning. **Fase 7**
-måler headerteksten og hever minstestørrelsen til 400×250. **Fase 8** bytter
-`[ ↺ ]` mot `[ + ]`, som starter en ny instans, flytter nullstilling av zoom og
-panorering til dobbeltklikk, `R` og `ESC`, og fjerner single-instance-mutexen.
-**Fase 9** legger til `--desktop-mode`, der grafflaten ligger i skrivebordet
-bak ikonene som barn av WorkerW.
-**Fase 10** lar dobbeltbufferet leve mellom bildene: 5,1 ms mot 11,7 ms ved
-3840×1600, og 1,33 ms mot 1,59 ms ved 1280×720, med samme piksler.
-**Fase 11** deler flaten i graf, priskolonne og tidsbånd. Den legger til
-tidsakse, egen monospace-aksefont (11 px sifre) i #A0AAB8 og et vannmerke med
-alfa som følger vindusbredden.
-**Fokus-blink** fjerner den klassiske rammen som `DefWindowProc` tegnet oppå
-grafen ved hvert fokusbytte og tittelbytte. **Fase 12** bytter mellom panel og
-skrivebordsmodus fra tray-menyen mens prosessen kjører, og husker valget i
-registret. **Fase 13** legger «Start ved pålogging» i tray-menyen, med
-`Ticker` i `HKCU\…\Run`. **Fase 14** gjør skrivebordsflaten tekstfri og kant
-til kant: bare kurve, rutenett og vannmerke. **Fase 15** gir lysene 10 px luft
-mot prisaksen og lar den stiplede siste-pris-linja bygge bro over den.
-**Fase 16** setter ett skalert pris-stempel på skrivebordets høyre kant —
-flatens eneste tekst. **Fase 17** gir tray-menyen undermenyene «Symbol» og
-«Intervall», så skrivebordsmodus kan bytte uten å gå veien om panelet.
-**Fase 18** henter eldre lys når brukeren panorerer inn i veggen: bufferet
-fylles bakover til historikkens start eller til 6000 lys, uten at bildet
-flytter seg.
-**Fase 19** gir kontrollknappene tastatursnarveier — `Ctrl`+`N` for `[ + ]`,
-`Ctrl`+`M`, `F11` og `Ctrl`+`W` — gjennom samme sti som klikkene, og
-nullstiller `staleSecsShown` når forbindelsen er tilbake.
-**Fase 20** gjør grafen tastaturstyrt — piltaster, `PgUp`/`PgDn`,
-`Home`/`End` og `+`/`-` gjennom samme `PanView`/`ZoomView` som hjulet — og
-slipper panoreringen når et annet vindu tar capture (`WM_CAPTURECHANGED`).
-**Fase 21** legger volumstolper i de nederste 22 % av grafflaten, bak
-lysene, med skala som eases som prisaksen, og en `V`-rad i hover-boksen.
-**Fase 22** gjør headerens rad 2 til en verktøylinje: symbolpille (åpner
-overlayet), en pille per intervall og en `VOL`-bryter som eases, med `V` og
-`1`…`6` fra tastaturet og «Volumstolper» i tray-menyen.
-**Fase 23** gir prisvarsler: et klikk i priskolonnen setter en rav linje på
-den prisen, et klikk på merket fjerner den, og når prisen når nivået fyrer
-varselet én gang med etterglød, ballong og lyd — også med panelet lukket.
-Testbygget fikk **skrivende** probe-felt som injiserer en pris.
-**Fase 24** gjør inndataene sunne (parserne forkaster nan, inf, 0 og usunne
-lys) og vekker tråden etter dvale.
-**Fase 25** legger glidende snitt over lysene — SMA 20 og EMA 50, regnet av
-en stegmaskin uten egen tabell — med forklaring i grafens hjørne og en
-`MA`-bryter i verktøylinja, på `M` og i tray-menyen.
-**Fase 26** gir skrivebordsflaten egne overleggsvalg — volum og snitt er av
-der som standard, etter tilbakemelding fra bruk — og legger flaten på nytt
-ved `WM_DISPLAYCHANGE`.
-**Fase 27** («Bloomberg Essentials») legger dagens session over lysene: VWAP
-per UTC-døgn som en gyllen linje, dagens høy og lav som stiplede linjer med
-dempede aksemerker, og SMA, EMA og VWAP som rader i hover-boksen — alt regnet
-av `candles[]` under opptegning og alt bak indikatorbryteren, så
-skrivebordet er urørt. Bufferet bakfyller seg selv til døgnskiftet.
-**Fase 28** legger gårsdagens nivåer ved siden av: forrige UTC-døgns høy, lav
-og sluttkurs som tre kjøligere, stiplede linjer med dempede aksemerker, bak
-samme bryter — og bakfyllingen går nå til *forrige* døgnskifte.
-**Fase 29** gjør nivåene lesbare: merkelapper (HOD, LOD, PDC, PDH, PDL) ved
-linjenes venstre ende, og trådkorsets aksemerke får plass i kolonnens rang,
-så det ikke lenger kutter tallet under seg.
+Status as of 2026-09-22. Written for agents who continue work on `tickc.c`
+(`ticker.c` up to and including phase 29).
+Phase 1 is done. Phase 2 part A (animation timer, backoff, stale indicator),
+part B (symbol/interval, overlay, watermark, the registry) and part C (last-price
+indicator, scaled watermark, view and Y-axis easing) are done. **All of phase 2
+is delivered.** After that the panel was moved from a borderless popup to a regular
+OS window, and then, in **phase 4**, back to borderless — this time with its own
+control buttons and native `HTCAPTION` moving. **Phase 5** added a
+state-dependent restore glyph, incremental hover repaint and a
+four-way cursor during panning. **Phase 6** tightened the clipping of the chart to
+`rcChart` and moved the restore glyph to a 2 px offset. **Phase 7**
+measures the header text and raises the minimum size to 400×250. **Phase 8** swaps
+`[ ↺ ]` for `[ + ]`, which starts a new instance, moves resetting zoom and
+panning to double-click, `R` and `ESC`, and removes the single-instance mutex.
+**Phase 9** adds `--desktop-mode`, where the chart area sits in the desktop
+behind the icons as a child of WorkerW.
+**Phase 10** lets the double buffer live between frames: 5.1 ms vs 11.7 ms at
+3840×1600, and 1.33 ms vs 1.59 ms at 1280×720, with the same pixels.
+**Phase 11** splits the surface into chart, price column and time band. It adds a
+time axis, its own monospace axis font (11 px digits) in #A0AAB8 and a watermark with
+alpha that follows the window width.
+**Focus flash** removes the classic frame that `DefWindowProc` drew on top of
+the chart on every focus change and title change. **Phase 12** switches between panel and
+desktop mode from the tray menu while the process runs, and remembers the choice in
+the registry. **Phase 13** puts "Start at sign-in" in the tray menu, with
+`Ticker` in `HKCU\…\Run`. **Phase 14** makes the desktop surface text-free and edge
+to edge: only the curve, grid and watermark. **Phase 15** gives the candles 10 px of room
+toward the price axis and lets the dashed last-price line bridge it.
+**Phase 16** puts one scaled price stamp on the desktop's right edge —
+the surface's only text. **Phase 17** gives the tray menu the submenus "Symbol" and
+"Interval", so desktop mode can switch without going through the panel.
+**Phase 18** fetches older candles when the user pans into the wall: the buffer
+is filled backward to the start of the history or to 6000 candles, without the frame
+moving.
+**Phase 19** gives the control buttons keyboard shortcuts — `Ctrl`+`N` for `[ + ]`,
+`Ctrl`+`M`, `F11` and `Ctrl`+`W` — through the same path as the clicks, and
+resets `staleSecsShown` when the connection is back.
+**Phase 20** makes the chart keyboard-driven — arrow keys, `PgUp`/`PgDn`,
+`Home`/`End` and `+`/`-` through the same `PanView`/`ZoomView` as the wheel — and
+releases the panning when another window takes capture (`WM_CAPTURECHANGED`).
+**Phase 21** puts volume bars in the bottom 22 % of the chart area, behind
+the candles, with a scale that eases like the price axis, and a `V` row in the hover box.
+**Phase 22** turns row 2 of the header into a toolbar: a symbol pill (opens
+the overlay), one pill per interval and a `VOL` toggle that eases, with `V` and
+`1`…`6` from the keyboard and "Volume bars" in the tray menu.
+**Phase 23** adds price alerts: a click in the price column sets an amber line at
+that price, a click on the tag removes it, and when the price reaches the level the
+alert fires once with afterglow, balloon and sound — also with the panel closed.
+The test build got **writable** probe fields that inject a price.
+**Phase 24** makes the input sane (the parsers reject nan, inf, 0 and insane
+candles) and wakes the thread after sleep.
+**Phase 25** puts moving averages over the candles — SMA 20 and EMA 50, computed by
+a step machine without its own table — with a legend in the chart's corner and a
+`MA` toggle in the toolbar, on `M` and in the tray menu.
+**Phase 26** gives the desktop surface its own overlay choices — volume and averages are off
+there by default, after feedback from use — and re-places the surface
+on `WM_DISPLAYCHANGE`.
+**Phase 27** ("Bloomberg Essentials") puts today's session over the candles: VWAP
+per UTC day as a golden line, today's high and low as dashed lines with
+muted axis tags, and SMA, EMA and VWAP as rows in the hover box — all computed
+from `candles[]` during painting and all behind the indicator toggle, so
+the desktop is untouched. The buffer backfills itself to the day rollover.
+**Phase 28** adds yesterday's levels alongside: the previous UTC day's high, low
+and close as three cooler, dashed lines with muted axis tags, behind
+the same toggle — and the backfill now goes to the *previous* day rollover.
+**Phase 29** makes the levels readable: labels (HOD, LOD, PDC, PDH, PDL) at
+the lines' left end, and the crosshair's axis tag gets a place in the column's rank,
+so it no longer cuts the number below it.
 **Phase 30** renames the app to **TickC** ahead of the open-source release:
 `HKCU\Software\TickC`, Run value `TickC`, `TickC.exe`, `tickc.c` and
 `tickc.manifest`, with settings and autostart migrated on first start. From
@@ -77,7 +77,7 @@ section).
 status text, the alert balloon, `1h`/`4h`, ISO dates).
 **Phase 32** translates every comment in `tickc.c`, proven comment-only:
 the production exe is byte-identical apart from the link timestamp.
-Se **Vinduet** under. Planer:
+See **The window** below. Plans:
 `docs/plans/2026-09-16-borderless-window.md`,
 `docs/plans/2026-09-16-glyph-hover-cursor.md`,
 `docs/plans/2026-09-16-new-instance.md`,
@@ -85,1168 +85,1197 @@ Se **Vinduet** under. Planer:
 `docs/plans/2026-09-17-painting.md`,
 `docs/plans/2026-09-17-axes.md`,
 `docs/plans/2026-09-17-focus-flash.md`,
-`docs/plans/2026-09-17-mode-switching.md` og
-`docs/plans/2026-09-17-autostart.md` og
-`docs/plans/2026-09-17-ambient-mode.md` og
-`docs/plans/2026-09-17-price-line-offset.md` og
-`docs/plans/2026-09-17-desktop-stamp.md` og
-`docs/plans/2026-09-18-tray-symbol-interval.md` og
-`docs/plans/2026-09-18-history.md` og
-`docs/plans/2026-09-18-keyboard-shortcuts.md` og
-`docs/plans/2026-09-18-keyboard-navigation.md` og
-`docs/plans/2026-09-18-volume.md` og
-`docs/plans/2026-09-18-toolbar.md` og
-`docs/plans/2026-09-18-price-alerts.md` og
-`docs/plans/2026-09-18-robust-input.md` og
-`docs/plans/2026-09-19-indicators.md` og
-`docs/plans/2026-09-19-desktop-surface.md` og
-`docs/plans/2026-09-19-bloomberg-essentials.md` og
-`docs/plans/2026-09-19-yesterdays-levels.md` og
+`docs/plans/2026-09-17-mode-switching.md` and
+`docs/plans/2026-09-17-autostart.md` and
+`docs/plans/2026-09-17-ambient-mode.md` and
+`docs/plans/2026-09-17-price-line-offset.md` and
+`docs/plans/2026-09-17-desktop-stamp.md` and
+`docs/plans/2026-09-18-tray-symbol-interval.md` and
+`docs/plans/2026-09-18-history.md` and
+`docs/plans/2026-09-18-keyboard-shortcuts.md` and
+`docs/plans/2026-09-18-keyboard-navigation.md` and
+`docs/plans/2026-09-18-volume.md` and
+`docs/plans/2026-09-18-toolbar.md` and
+`docs/plans/2026-09-18-price-alerts.md` and
+`docs/plans/2026-09-18-robust-input.md` and
+`docs/plans/2026-09-19-indicators.md` and
+`docs/plans/2026-09-19-desktop-surface.md` and
+`docs/plans/2026-09-19-bloomberg-essentials.md` and
+`docs/plans/2026-09-19-yesterdays-levels.md` and
 `docs/plans/2026-09-19-readable-levels.md`. Design:
-`docs/specs/2026-09-16-phase2-design.md`. Planer med
-«Avvik under utførelse»:
-`docs/plans/2026-09-16-phase2-part-b.md` og `...-del-c.md`.
+`docs/specs/2026-09-16-phase2-design.md`. Plans with
+"Deviations during execution":
+`docs/plans/2026-09-16-phase2-part-b.md` and `...-del-c.md`.
 
-All kode ligger i **én fil**, `tickc.c` (~6700 linjer, English comments from phase 32). Ved siden av ligger
-`tickc.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
-utover Win32 og WinHTTP.
+All code lives in **one file**, `tickc.c` (~6700 lines, English comments from phase 32). Next to it is
+`tickc.manifest`, which the build embeds (phase 9). No external dependencies
+beyond Win32 and WinHTTP.
 
 ---
 
-## Bygg
+## Build
 
 ```
 "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars32.bat"
 cl /nologo /W4 /O2 tickc.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
 ```
 
-**Manifestet er ikke valgfritt** (fase 9). Uten `supportedOS` Windows 8+ blir
-skrivebordsmodusens flate usynlig. Bygget lykkes likevel, og vanlig modus ser
-lik ut, så feilen merkes ikke før `--desktop-mode` kjøres.
+**The manifest is not optional** (phase 9). Without `supportedOS` Windows 8+ the
+desktop mode surface becomes invisible. The build still succeeds, and panel mode looks
+the same, so the bug is not noticed until `--desktop-mode` is run.
 
-Bygger **rent på `/W4`** — hold det sånn. Målarkitektur er **x86** (matcher
-den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
-**stopp alle kjørende instanser før linking** — også duplikater startet med
-`[ + ]` — ellers feiler
+Builds **clean on `/W4`** — keep it that way. The target architecture is **x86** (matches
+the original exe). The process can run as several instances (phase 8), so
+**stop all running instances before linking** — including duplicates started with
+`[ + ]` — otherwise it fails with
 `LNK1104: cannot open file 'TickC.exe'`.
 
-Fotavtrykk: ~3,5 MB private bytes, 202 KB exe etter fase 30 (206 336 byte;
-205 824 etter fase 29, 204 800 etter fase 28,
-203 776 etter fase 27,
-199 680 etter fase 26, 199 168 etter fase 25, 195 584 etter fase 24;
-195 072 etter fase 23, 187 KB etter fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
-380×300 i fase 1 — dobbeltbufferet er 8× større.)
+Footprint: ~3.5 MB private bytes, 202 KB exe after phase 30 (206 336 bytes;
+205 824 after phase 29, 204 800 after phase 28,
+203 776 after phase 27,
+199 680 after phase 26, 199 168 after phase 25, 195 584 after phase 24;
+195 072 after phase 23, 187 KB after phase 22, ~164 KB in phase 9). (The panel is 1280×720 now, vs
+380×300 in phase 1 — the double buffer is 8× larger.)
 
-**`tickc.c` er også gyldig C++** (målt i fase 24): `cl /TP /W4 /O2` gir
-0 feil, 0 advarsler og en exe på byte-identisk størrelse til og med fase 29.
-Phase 30: the `/TP` build is 206 848 bytes, 512 more than the C build. Fila bygges fortsatt
-som C — et språkbytte alene gir ingenting — men døra står åpen den dagen en
-funksjon faktisk trenger en container. Se *Avviste forslag* for hva STL og
-nlohmann/json koster.
-
----
-
-## Hva appen gjør
-
-Tray-ikon som viser BTC/USDT-kurs som piksel-tegnede siffer. Venstreklikk
-åpner et rammeløst candlestick-panel med crosshair, zoom og panorering.
-Høyreklikk gir «Avslutt».
+**`tickc.c` is also valid C++** (measured in phase 24): `cl /TP /W4 /O2` gives
+0 errors, 0 warnings and an exe of byte-identical size up to and including phase 29.
+Phase 30: the `/TP` build is 206 848 bytes, 512 more than the C build. The file is still built
+as C — a language switch alone gains nothing — but the door is open the day a
+function actually needs a container. See *Rejected proposals* for what the STL and
+nlohmann/json cost.
 
 ---
 
-## Arkitektur
+## What the app does
 
-### Tråder
+A tray icon that shows the BTC/USDT price as pixel-drawn digits. Left-click
+opens a borderless candlestick panel with crosshair, zoom and panning.
+Right-click gives "Quit".
 
-| Tråd | Ansvar |
+---
+
+## Architecture
+
+### Threads
+
+| Thread | Responsibility |
 |---|---|
-| UI | Alle vinduer, all tegning, all inndata. **Rører aldri nettverket.** |
-| `NetworkThread` | Eier WinHTTP-håndtakene. Henter, parser, fletter. |
+| UI | All windows, all drawing, all input. **Never touches the network.** |
+| `NetworkThread` | Owns the WinHTTP handles. Fetches, parses, merges. |
 
-Arbeidertråden går i `WaitForMultipleObjects(hStopEvent, hWakeEvent, 3000)`.
-Den henter **uten lås**, tar så `CRITICAL_SECTION` kun rundt flettingen, og
-gjør `PostMessage(WM_APP_DATA)` **etter** at låsen er sluppet.
+The worker thread runs in `WaitForMultipleObjects(hStopEvent, hWakeEvent, 3000)`.
+It fetches **without the lock**, then takes the `CRITICAL_SECTION` only around the merge, and
+does `PostMessage(WM_APP_DATA)` **after** the lock is released.
 
-> Hvis du legger til noe her: `PostMessage` må aldri skje inne i låsen. UI-tråden
-> kan sitte og vente på den samme låsen i `WM_PAINT`.
+> If you add something here: `PostMessage` must never happen inside the lock. The UI thread
+> can be sitting waiting for the same lock in `WM_PAINT`.
 
-**Låsen dekker:** `candles[]`, `candleCount`, `viewStart`, `viewCount`,
-`followLive`, `lastPrice`, `hPopup`. Alt annet i `AppContext` er UI-eid.
+**The lock covers:** `candles[]`, `candleCount`, `viewStart`, `viewCount`,
+`followLive`, `lastPrice`, `hPopup`. Everything else in `AppContext` is UI-owned.
 
-### Datalag
+### Data layer
 
-- `candles[6000]` — fast statisk array, 288 KB (48 byte per lys med volum,
-  fase 21; 240 KB til og med fase 20). Fylles framover mens panelet
-  står åpent og bakover på forespørsel (fase 18). **Ingen malloc noe sted.**
-- Første henting seeder 300 lys (`limit=300`, ~50 KB). Deretter `limit=3` (~500 byte).
-- `MergeCandles()` fletter på `openTime`: samme tidsstempel **oppdaterer**
-  (lyset under forming endrer seg), nyere **legges til**, eldste faller ut ved taket.
-- Oppdages et tidshull (> 2 lysintervaller) nullstilles bufferet, slik at grafen
-  ikke tegner en sammenhengende kurve over dødtid.
-- **Alt fra nettet går gjennom en sunnhetssjekk** (fase 24): `PriceSane`
-  (`0 < v < 1e15`, usant for NaN) og `CandleSane` (OHLC sunne, `high ≥ low`,
-  open og close innenfor, volum `≥ 0`, `openTime > 0`). `ParseKlines` hopper
-  over usunne lys og lys hvis tid ikke er strengt stigende, og beholder
-  resten. `candles[]` og `lastPrice` holder derfor aldri NaN, inf eller 0 fra
-  et svar.
+- `candles[6000]` — fixed static array, 288 KB (48 bytes per candle with volume,
+  phase 21; 240 KB up to and including phase 20). Filled forward while the panel
+  is open and backward on request (phase 18). **No malloc anywhere.**
+- The first fetch seeds 300 candles (`limit=300`, ~50 KB). After that `limit=3` (~500 bytes).
+- `MergeCandles()` merges on `openTime`: the same timestamp **updates**
+  (the candle being formed changes), newer ones **are appended**, the oldest drop out at the cap.
+- If a time gap (> 2 candle intervals) is detected the buffer is reset, so the chart
+  does not draw a continuous curve across dead time.
+- **Everything from the network goes through a sanity check** (phase 24): `PriceSane`
+  (`0 < v < 1e15`, false for NaN) and `CandleSane` (OHLC sane, `high ≥ low`,
+  open and close within, volume `≥ 0`, `openTime > 0`). `ParseKlines` skips
+  insane candles and candles whose time is not strictly increasing, and keeps
+  the rest. `candles[]` and `lastPrice` therefore never hold NaN, inf or 0 from
+  a response.
 
-### Tegning
+### Drawing
 
-Dobbeltbuffret gjennom en minne-DC, `WM_ERASEBKGND` returnerer 1.
-Begge tegneloopene går over **`vc` (synlige lys)**, ikke hele historikken —
-tegnearbeidet er derfor uavhengig av hvor mye historikk som er lagret.
+Double-buffered through a memory DC, `WM_ERASEBKGND` returns 1.
+Both drawing loops run over **`vc` (visible candles)**, not the whole history —
+the drawing work is therefore independent of how much history is stored.
 
-GDI-objekter er bufret: elleve faste farger lages ved oppstart (ni til og
-med fase 20, pluss de to stolpepenslene fra fase 21), de blandede
-fade-fargene bare når `(chrome, closeHot)` endrer seg.
+GDI objects are cached: eleven fixed colors are created at startup (nine up to and
+including phase 20, plus the two bar brushes from phase 21), the blended
+fade colors only when `(chrome, closeHot)` changes.
 
-### Vinduet
+### The window
 
-Panelet er et **rammeløst vindu med egne kontrollknapper**:
-`WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`. Hele den
-ikke-klientaktige rammen fjernes i `WM_NCCALCSIZE`, så klientflaten er
-nøyaktig like stor som vindusrektangelet — målt 1280×720 mot 1280×720.
-Knapp i oppgavelinja, ikke alltid øverst.
+The panel is a **borderless window with its own control buttons**:
+`WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`. The whole
+non-client frame is removed in `WM_NCCALCSIZE`, so the client area is
+exactly as large as the window rectangle — measured 1280×720 vs 1280×720.
+A button in the taskbar, not always on top.
 
-> **Historikk, to omganger.** Fase 1 var rammeløs med et hover-chrome som
-> tonet inn. `c77b6eb` rev alt og gikk over til `WS_OVERLAPPEDWINDOW` med
-> OS-tittellinje. Denne omgangen går tilbake til rammeløst, men *ikke* til
-> fase 1-designet: knappene er alltid synlige, uten fade, og uten auto-skjul
-> på fokustap. Se «Fjernet i fase 3».
+> **History, two rounds.** Phase 1 was borderless with a hover chrome that
+> faded in. `c77b6eb` tore it all out and moved to `WS_OVERLAPPEDWINDOW` with an
+> OS title bar. This round goes back to borderless, but *not* to the
+> phase 1 design: the buttons are always visible, without fade, and without auto-hide
+> on focus loss. See "Removed in phase 3".
 
-#### Alt henger på `WM_NCHITTEST`
+#### Everything hangs on `WM_NCHITTEST`
 
-Uten OS-ramme er det vi som avgjør hva musa står på. Dette er det bærende
-grepet — knapper, flytting og skalering faller alle ut av én funksjon:
+Without an OS frame it is we who decide what the mouse is over. This is the key
+idea — buttons, moving and resizing all fall out of one function:
 
-| Sone | Retur | Hvem handler |
+| Zone | Return | Who acts |
 |---|---|---|
-| < 6 px fra en kant (`RESIZE_BORDER`) | `HTLEFT` … `HTBOTTOMRIGHT` | `DefWindowProc` skalerer |
-| Knappeboks i headeren | `HTCLIENT` | vi, i `WM_LBUTTONDOWN` |
-| Ellers i headeren (`y < 44`) | `HTCAPTION` | `DefWindowProc` flytter |
-| Resten | `HTCLIENT` | vi |
+| < 6 px from an edge (`RESIZE_BORDER`) | `HTLEFT` … `HTBOTTOMRIGHT` | `DefWindowProc` resizes |
+| Button box in the header | `HTCLIENT` | we do, in `WM_LBUTTONDOWN` |
+| Elsewhere in the header (`y < 44`) | `HTCAPTION` | `DefWindowProc` moves |
+| The rest | `HTCLIENT` | we do |
 
-**`HTCAPTION` er hele flyttemekanismen.** `DefWindowProc` genererer selv
-`WM_NCLBUTTONDOWN`/`HTCAPTION` og kjører OS-ets dra-løkke — vi skriver ingen
-dra-kode, og får Aero Snap, dobbeltklikk-maksimering og `Win`+piltast gratis.
-Alt tre er målt.
+**`HTCAPTION` is the whole moving mechanism.** `DefWindowProc` generates
+`WM_NCLBUTTONDOWN`/`HTCAPTION` itself and runs the OS's drag loop — we write no
+drag code, and get Aero Snap, double-click maximize and `Win`+arrow key for free.
+All three are measured.
 
-> **Rekkefølgen inne i headeren er ikke kosmetikk.** Et `HTCAPTION`-område får
-> *aldri* `WM_LBUTTONDOWN`. Returnerer vi `HTCAPTION` for hele headeren, er
-> knappene tegnet, men døde — og et klikk på krysset starter en
-> vindusflytting. Se fallgruve 21.
+> **The order inside the header is not cosmetic.** An `HTCAPTION` area
+> *never* gets `WM_LBUTTONDOWN`. If we return `HTCAPTION` for the whole header, the
+> buttons are drawn, but dead — and a click on the close cross starts a
+> window move. See pitfall 21.
 
-Kantene skaleres **ikke** når vinduet er maksimert: der ville et klikk 2 px
-fra skjermkanten startet en dra-skalering av noe som per definisjon fyller
-skjermen.
+The edges do **not** resize when the window is maximized: there a click 2 px
+from the screen edge would start a drag-resize of something that by definition fills
+the screen.
 
-#### Maksimering må oppgis manuelt
+#### Maximizing must be specified manually
 
-Et `WS_POPUP`-vindu maksimerer seg til hele **skjermen**, ikke til
-arbeidsområdet — og OS-et legger rammebredden utenpå. Målt før `WM_GETMINMAXINFO`
-fikk grensene: **−7,−7 3854×1614** mot `rcWork` **0,0 3840×1552**. Panelet
-dekket oppgavelinja med 55 px, og krysset lå 7 px utenfor skjermkanten.
+A `WS_POPUP` window maximizes to the whole **screen**, not to
+the work area — and the OS adds the frame width outside. Measured before `WM_GETMINMAXINFO`
+got the limits: **−7,−7 3854×1614** vs `rcWork` **0,0 3840×1552**. The panel
+covered the taskbar by 55 px, and the close cross was 7 px outside the screen edge.
 
-`WM_GETMINMAXINFO` setter derfor `ptMaxPosition` og `ptMaxSize` fra `rcWork`
-selv. `ptMaxPosition` er relativ til *skjermens* hjørne, ikke til skrivebordet.
-Etterpå treffer maksimert vindu `rcWork` eksakt.
+`WM_GETMINMAXINFO` therefore sets `ptMaxPosition` and `ptMaxSize` from `rcWork`
+itself. `ptMaxPosition` is relative to the *monitor's* corner, not to the desktop.
+Afterward a maximized window hits `rcWork` exactly.
 
-> **To grener er uverifisert, begge fordi maskinen har én skjerm.** Har du
-> flere, tar disse to sjekkene et minutt til sammen:
+> **Two branches are unverified, both because the machine has one monitor.** If you have
+> more, these two checks take a minute together:
 >
-> 1. **`ptMaxPosition` på sekundærskjerm.** `rcWork` starter i `0,0` her, så
->    subtraksjonen `rcWork − rcMonitor` var null og ble aldri satt på prøve.
->    Dra panelet til den andre skjermen og trykk `□`. Forventet: den
->    skjermens `rcWork` eksakt.
-> 2. **Vernet mot frakoblet skjerm.** Faller den gjenopprettede rekta utenfor
->    alle tilkoblede skjermer, skal `❐`-knappen sentrere vinduet i stedet for
->    å gjenopprette det ut i intet. Maksimer på den andre skjermen, koble den
->    fra, og trykk `❐`. Forventet: 1280×720 sentrert på den som er igjen.
+> 1. **`ptMaxPosition` on a secondary monitor.** `rcWork` starts at `0,0` here, so
+>    the subtraction `rcWork − rcMonitor` was zero and was never put to the test.
+>    Drag the panel to the other monitor and press `□`. Expected: that
+>    monitor's `rcWork` exactly.
+> 2. **The guard against a disconnected monitor.** If the restored rect falls outside
+>    all connected monitors, the `❐` button should center the window instead of
+>    restoring it into nowhere. Maximize on the other monitor, disconnect it,
+>    and press `❐`. Expected: 1280×720 centered on the one that remains.
 
-> `ptMaxTrackSize` settes **ikke**. Den ville klemt *manuell* skalering til én
-> skjerms arbeidsområde, så panelet ikke lenger kunne strekkes over to
-> skjermer. Det er maksimert størrelse som skal følge `rcWork`, ikke største
-> tillatte størrelse.
+> `ptMaxTrackSize` is **not** set. It would clamp *manual* resizing to one
+> monitor's work area, so the panel could no longer be stretched across two
+> monitors. It is the maximized size that should follow `rcWork`, not the largest
+> allowed size.
 
-`DWMWA_WINDOW_CORNER_PREFERENCE = DONOTROUND`: Windows 11 runder hjørnene på
-`WS_THICKFRAME`-vinduer også når rammen er fjernet, og radien klipper krysset.
+`DWMWA_WINDOW_CORNER_PREFERENCE = DONOTROUND`: Windows 11 rounds the corners of
+`WS_THICKFRAME` windows even when the frame is removed, and the radius clips the close cross.
 
-#### Kontrollknappene
+#### The control buttons
 
-Fire knapper oppe til høyre, 26×18 px hver, 2 px mellomrom, 8 px fra høyre
-kant. `ButtonLayout(W, out[4])` er **eneste sannhetskilde** — tegning,
-`WM_NCHITTEST`, hover og klikk leser alle den (fallgruve 14).
+Four buttons at the top right, 26×18 px each, 2 px apart, 8 px from the right
+edge. `ButtonLayout(W, out[4])` is the **single source of truth** — drawing,
+`WM_NCHITTEST`, hover and click all read it (pitfall 14).
 
-| Knapp | Handling |
+| Button | Action |
 |---|---|
-| `+` | `SpawnInstance` — ny prosess med samme symbol, intervall og størrelse, +30, +30 px (fase 8) |
+| `+` | `SpawnInstance` — a new process with the same symbol, interval and size, +30, +30 px (phase 8) |
 | `–` | `ShowWindow(SW_MINIMIZE)` |
-| `□` / `❑` | `SW_MAXIMIZE` / `SW_RESTORE` etter `IsZoomed`. **Glyfen folger tilstanden:** maksimert vindu viser to overlappende rektangler |
-| `×` | `WM_CLOSE` → skjuler til systemstatusfeltet |
+| `□` / `❑` | `SW_MAXIMIZE` / `SW_RESTORE` according to `IsZoomed`. **The glyph follows the state:** a maximized window shows two overlapping rectangles |
+| `×` | `WM_CLOSE` → hides to the notification area |
 
-**Gjenopprettingsglyfen tegnes som to rektangler, ikke fire streker.** Det
-bakre er en *apen* polylinje med fem punkter — kun de kantene som ikke ligger
-bak det fremre — saa vi slipper aa fylle det fremre ugjennomsiktig for aa
-skjule overlappet. To GDI-kall mot ett for `□`.
+**The restore glyph is drawn as two rectangles, not four strokes.** The
+back one is an *open* polyline with five points — only the edges that are not
+behind the front one — so we avoid filling the front one opaque to
+hide the overlap. Two GDI calls vs one for `□`.
 
-`zoomed` sendes inn i `DrawButtons` og caches **ikke** i `AppContext`:
-tilstanden eies av OS-et, og en kopi ville vaert enda en ting som kan komme ut
-av synk. `WM_SIZE` invaliderer hele vinduet ved maksimering, saa glyfen byttes
-av seg selv.
+`zoomed` is passed into `DrawButtons` and is **not** cached in `AppContext`:
+the OS owns the state, and a copy would be one more thing that can get out
+of sync. `WM_SIZE` invalidates the whole window on maximize, so the glyph switches
+by itself.
 
-**Gjenoppretting verner om geometrien.** Etter `SW_RESTORE` sjekkes at den
-gjenopprettede rekta fortsatt treffer en tilkoblet skjerm (`PlacementIsVisible`
-paa `GetWindowPlacement`-resultatet); ellers `ResetToDefaultView`. Samme sjekk
-som `PlacePopupInitially` gjor ved apning. `SaveWindowPlacement` kalles kun i
-maksimer-grenen — ved gjenoppretting er geometrien allerede lagret, og et kall
-der ville lagret den maksimerte.
+**Restoring guards the geometry.** After `SW_RESTORE` it checks that the
+restored rect still hits a connected monitor (`PlacementIsVisible`
+on the `GetWindowPlacement` result); otherwise `ResetToDefaultView`. The same check
+that `PlacePopupInitially` does on opening. `SaveWindowPlacement` is called only in
+the maximize branch — on restore the geometry is already saved, and a call
+there would have saved the maximized one.
 
-**Rene GDI-vektorer, ingen font.** En `DrawTextW` med et Unicode-tegn koster
-langt mer enn fire `LineTo`, og ville vært avhengig av at fonten *har* glyfen
-— samme problem som tray-ikonets manglende `k`.
+**Pure GDI vectors, no font.** A `DrawTextW` with a Unicode character costs
+far more than four `LineTo`, and would depend on the font *having* the glyph
+— the same problem as the tray icon's missing `k`.
 
-**Ingen fade.** Fargen skifter momentant på hover, og treffet henger på
-`btnHot`, ikke på noe fade-nivå (fallgruve 12). Hvile: glyf `#6E7681` på
-panelbakgrunn, ingen knappebakgrunn. Hover: `#161D27` bak `+ – □`, `#C02A3E`
-bak `×`, med hvit glyf.
+**No fade.** The color changes instantly on hover, and the hit depends on
+`btnHot`, not on any fade level (pitfall 12). At rest: glyph `#6E7681` on the
+panel background, no button background. Hover: `#161D27` behind `+ – □`, `#C02A3E`
+behind `×`, with a white glyph.
 
-**Tegnes fra `PaintPopup`, ikke fra `DrawChart`.** `DrawChart` returnerer
-tidlig når bufferet er tomt — altså mens det står «Laster data fra
-Binance...» og under hele en frakobling. Lå tegningen der, forsvant krysset
-nettopp når man vil lukke panelet. Samme grunn som `DrawOverlay` ligger der.
+**Drawn from `PaintPopup`, not from `DrawChart`.** `DrawChart` returns
+early when the buffer is empty — that is, while it says "Loading data from
+Binance..." and during an entire disconnect. Had the drawing been there, the close cross would vanish
+exactly when you want to close the panel. Same reason `DrawOverlay` is there.
 
-**Headerteksten krymper med `BTN_STRIP_W`** (118 px), ellers lå den
-høyrestilte prosenten rett under krysset.
+**The header text shrinks by `BTN_STRIP_W`** (118 px), otherwise the
+right-aligned percentage sat right under the close cross.
 
-#### Verktøylinja (fase 22)
+#### The toolbar (phase 22)
 
-Headerens rad 2 (y 28–42) er en verktøylinje der symbollinja sto som ren
-tekst: `[BTC/USDT ▾]  [1m][5m][15m][1t][4t][1d]  [VOL]`, venstrestilt fra
-`PAD_L`. `ToolbarLayout(W, out[TBAR_COUNT])` er **eneste sannhetskilde**,
-som `ButtonLayout`: tegning, `WM_NCHITTEST`, hover og klikk leser den.
-Bredder er **faste konstanter**, ikke målt tekst — `WM_NCHITTEST` har ingen
-DC. En `C_ASSERT` holder hele linja innenfor `HeaderRow2Limit` ved
-`POPUP_MIN_W`; under det skjules piller fra høyre, hele, aldri halve.
+Row 2 of the header (y 28–42) is a toolbar where the symbol line used to be plain
+text: `[BTC/USDT ▾]  [1m][5m][15m][1t][4t][1d]  [VOL]`, left-aligned from
+`PAD_L`. `ToolbarLayout(W, out[TBAR_COUNT])` is the **single source of truth**,
+like `ButtonLayout`: drawing, `WM_NCHITTEST`, hover and click read it.
+Widths are **fixed constants**, not measured text — `WM_NCHITTEST` has no
+DC. A `C_ASSERT` keeps the whole row within `HeaderRow2Limit` at
+`POPUP_MIN_W`; below that pills are hidden from the right, whole, never halved.
 
-| Pille | Handling |
+| Pill | Action |
 |---|---|
-| symbol `▾` | åpner overlayet (det samme som høyreklikk i grafen); aktiv mens det står åpent |
-| `1m` … `1d` | `ApplyConfigChoice` — samme sti som overlayet og tray-menyen; klikk på den aktive er en no-op |
-| `VOL` | `SetShowVolume` — **ikke** `ApplyConfigChoice`: bufferet skal ikke tømmes for et tegnevalg |
-| `MA` | `SetShowIndicators` (fase 25) — samme form. Eneste pille utenfor minstebredden: skjult under 426 px, `M` og tray-menyen virker uansett |
+| symbol `▾` | opens the overlay (the same as right-click in the chart); active while it is open |
+| `1m` … `1d` | `ApplyConfigChoice` — the same path as the overlay and the tray menu; a click on the active one is a no-op |
+| `VOL` | `SetShowVolume` — **not** `ApplyConfigChoice`: the buffer should not be emptied for a drawing choice |
+| `MA` | `SetShowIndicators` (phase 25) — same form. The only pill outside the minimum width: hidden below 426 px, `M` and the tray menu work regardless |
 
-Pillene er `HTCLIENT`, mellomrommene og resten av headeren `HTCAPTION`
-(fallgruve 21). `tbHot` følger `btnHot`s regler: satt etter
-`TrackMouseEvent`-armeringen, sperret med overlayet åpent og under
-panorering, nullstilt i `WM_MOUSELEAVE`. Ingen fade. Hvile er dempet tekst,
-hover `CLR_BOX`-flate, aktiv `CLR_BOX` med `CLR_BOXEDGE`-ramme. Ingen nye
-GDI-objekter. **Tegnes fra `PaintPopup`**, som knappene: rett etter et bytte
-er bufferet tomt, og `DrawChart` returnerer tidlig.
+The pills are `HTCLIENT`, the gaps and the rest of the header `HTCAPTION`
+(pitfall 21). `tbHot` follows `btnHot`'s rules: set after
+the `TrackMouseEvent` arming, blocked with the overlay open and during
+panning, reset in `WM_MOUSELEAVE`. No fade. At rest it is muted text,
+hover a `CLR_BOX` surface, active `CLR_BOX` with a `CLR_BOXEDGE` frame. No new
+GDI objects. **Drawn from `PaintPopup`**, like the buttons: right after a switch
+the buffer is empty, and `DrawChart` returns early.
 
-`showVol` er valget (registret, `ShowVolume`); `dispVolF` ∈ [0, 1] er
-visningen, eased i `WM_TIMER` som sjette verdi, uavhengig av om det finnes
-lys. Stolpehøyden ganges med den; ved 1,0 er faktoren eksakt. Er flaten
-ikke synlig når valget endres (tray-menyen med lukket panel), snapper den.
+`showVol` is the choice (the registry, `ShowVolume`); `dispVolF` ∈ [0, 1] is
+the display, eased in `WM_TIMER` as the sixth value, regardless of whether there are
+candles. The bar height is multiplied by it; at 1.0 the factor is exact. If the surface
+is not visible when the choice changes (the tray menu with the panel closed), it snaps.
 
-**Frakoblet-teksten** (`frakoblet Ns`) sto i symbollinja. Den tegnes nå til
-høyre for siste pille, fra `DrawChart` (helsefeltene leses under låsen), og
-bare når hele teksten får plass før `HeaderRow2Limit`.
+**The disconnected text** (`frakoblet Ns`) used to be in the symbol line. It is now drawn to
+the right of the last pill, from `DrawChart` (the health fields are read under the lock), and
+only when the whole text fits before `HeaderRow2Limit`.
 
-#### Prisvarsler (fase 23)
+#### Price alerts (phase 23)
 
-Priskolonnen (`x > edge`, `y ∈ [top, bottom]`) er varslenes flate. Den var
-en no-op for klikk til og med fase 22.
+The price column (`x > edge`, `y ∈ [top, bottom]`) is the alerts' surface. It was
+a no-op for clicks up to and including phase 22.
 
-| Handling | Oppførsel |
+| Action | Behavior |
 |---|---|
-| Peker i kolonnen, tom flate | hånd, **spøkelse**: dempet rav linje tvers over grafen og et *rammet* merke med den avrundede prisen. Grått når alle åtte plassene er brukt |
-| Klikk på tom flate | `AlertAdd` på `AlertPriceAtY(y)` — varselet settes, skrives til registret |
-| Peker på et merke | merket blir rødt som lukkeknappen (`alertHot`) — men ikke et *nysatt* merke før pekeren har forlatt det én gang (`alertFresh`) |
-| Klikk på et merke | `AlertRemove` — nærmeste merke innenfor `[y − 8, y + 8)`, flaten som er tegnet |
-| `A` med trådkors | varsel på trådkorsets pris; uten trådkors ingenting |
-| «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises; grått uten varsler |
+| Cursor in the column, empty space | hand, **ghost**: a muted amber line across the chart and a *framed* tag with the rounded price. Gray when all eight slots are used |
+| Click on empty space | `AlertAdd` at `AlertPriceAtY(y)` — the alert is set, written to the registry |
+| Cursor on a tag | the tag turns red like the close button (`alertHot`) — but not a *newly set* tag until the cursor has left it once (`alertFresh`) |
+| Click on a tag | `AlertRemove` — the nearest tag within `[y − 8, y + 8)`, the area that is drawn |
+| `A` with crosshair | alert at the crosshair's price; without a crosshair nothing |
+| "Clear price alerts (N)" in the tray menu | clears the alerts for the symbol shown; gray without alerts |
 
-**Siden lagres, ikke forrige pris.** `alerts[sym][i]` er en double med siden
-i fortegnet: `+nivå` ble satt over prisen og fyrer når prisen er ≥, `−nivå`
-under og fyrer når den er ≤. `AlertHit(now, signedLevel)` er en ren funksjon;
-`now ≤ 0` fyrer aldri (rett etter et symbolbytte er `lastPrice` 0). Et nivå
-som ble krysset mens appen sto av eller maskinen sov, fyrer derfor på første
-pris etterpå, og et symbolbytte har ingen «forrige pris» å sammenlikne feil.
+**The side is stored, not the previous price.** `alerts[sym][i]` is a double with the side
+in the sign: `+nivå` was set above the price and fires when the price is ≥, `−nivå`
+below and fires when it is ≤. `AlertHit(now, signedLevel)` is a pure function;
+`now ≤ 0` never fires (right after a symbol switch `lastPrice` is 0). A level
+that was crossed while the app was off or the machine was asleep therefore fires on the first
+price afterward, and a symbol switch has no "previous price" to compare wrongly.
 
-**Utløseren bor i `WM_APP_DATA`** (`CheckAlerts` etter `UpdateIcon`): det ene
-stedet hver ny pris passerer på UI-tråden — panelet åpent, lukket og i
-skrivebordsmodus. Alt varselrelatert er **UI-eid**; trådkontrakten er urørt.
-Et varsel fyrer **én gang** og fjernes. Bare gjeldende symbols varsler
-prøves — prisen vi har, er dets.
+**The trigger lives in `WM_APP_DATA`** (`CheckAlerts` after `UpdateIcon`): the one
+place every new price passes on the UI thread — panel open, closed and in
+desktop mode. Everything alert-related is **UI-owned**; the thread contract is untouched.
+An alert fires **once** and is removed. Only the current symbol's alerts
+are tested — the price we have is its.
 
-**Når det fyrer** (`FireAlert`): etterglød på nivået i full rav som toner ut
-(`alertFlashF` 1 → 0, `ALERT_TAU_FLASH`, sjuende easede verdi, bare når
-panelet er synlig), ballong fra tray-ikonet (`NIF_INFO`, `NIIF_NOSOUND`, fra
-en **kopi** av `nid` — `UpdateIcon` eier originalen) og
-`MessageBeep(MB_ICONASTERISK)`. Én lyd, og den kommer også når Windows holder
-ballongen tilbake.
+**When it fires** (`FireAlert`): afterglow on the level in full amber that fades out
+(`alertFlashF` 1 → 0, `ALERT_TAU_FLASH`, the seventh eased value, only when
+the panel is visible), a balloon from the tray icon (`NIF_INFO`, `NIIF_NOSOUND`, from
+a **copy** of `nid` — `UpdateIcon` owns the original) and
+`MessageBeep(MB_ICONASTERISK)`. One sound, and it comes even when Windows holds
+the balloon back.
 
-**Tegning og treff leser samme kilde** (fallgruve 14): `AlertY` og
-`AlertPriceAtY` leser `dispMin`/`dispMax` med samme avkutting som lysene.
-`AlertRound` runder til største tierpotens ≤ én piksel i pris, gulv 0,01
-(fallgruve 16). Linjene tegnes **bak lysene**, over stolpene, innenfor
-klippet; merkene på stempelets flate, og stempelet øverst. Rutenettetiketter
-under 16 px fra et merke tegnes ikke. `DC_PEN`/`DC_BRUSH` — **ingen nye
-GDI-objekter**. Skrivebordsmodus tegner linjene, ikke merkene.
+**Drawing and hit-testing read the same source** (pitfall 14): `AlertY` and
+`AlertPriceAtY` read `dispMin`/`dispMax` with the same clamping as the candles.
+`AlertRound` rounds to the largest power of ten ≤ one pixel in price, floor 0.01
+(pitfall 16). The lines are drawn **behind the candles**, above the bars, within
+the clip; the tags on the stamp's surface, and the stamp on top. Grid labels
+less than 16 px from a tag are not drawn. `DC_PEN`/`DC_BRUSH` — **no new
+GDI objects**. Desktop mode draws the lines, not the tags.
 
-**Dobbeltklikk-flaten er `[left, edge]`**, ikke `[left, W)` som til og med
-fase 22: i kolonnen er et raskt dobbeltklikk sett + fjern (fallgruve 38).
+**The double-click area is `[left, edge]`**, not `[left, W)` as up to and including
+phase 22: in the column a quick double-click is set + remove (pitfall 38).
 
-#### Hurtigsti for hover-opptegning
+#### The fast path for hover repaint
 
-Et hover-skifte invaliderer **kun knapperaden** (`ButtonStrip(W)`), ikke hele
-vinduet. `PaintPopup` har én gren for det: ligger hele `ps.rcPaint` innenfor
-stripa, bygges et 110×18-buffer og bare knappene tegnes — `DrawChart` og
-`DrawOverlay` hoppes over.
+A hover change invalidates **only the button row** (`ButtonStrip(W)`), not the whole
+window. `PaintPopup` has one branch for it: if the whole `ps.rcPaint` lies within
+the strip, a 110×18 buffer is built and only the buttons are drawn — `DrawChart` and
+`DrawOverlay` are skipped.
 
-> Uten grenen ville invalideringen ikke spart noe som helst utover den siste
-> blitten. GDI klipper den, men hele 1280×720-bufferet ville fortsatt blitt
-> bygget og grafen tegnet om. **Målt: 0,979 ms → 0,062 ms, altså 16×.**
+> Without the branch the invalidation would not have saved anything at all beyond the last
+> blit. GDI clips it, but the whole 1280×720 buffer would still have been
+> built and the chart redrawn. **Measured: 0.979 ms → 0.062 ms, that is 16×.**
 
-Bakgrunnen i stripa hentes fra **vannmerkebitmapen**, ikke fra `FillRect`. Da
-er den garantert identisk med det den trege stien ville lagt der, uten at vi
-trenger å vite at vannmerketeksten aldri når opp i headeren. `SetViewportOrgEx`
-lar `DrawButtons` fortsette å regne i vinduskoordinater, og nullstilles før
-blitten — ellers ville kildepunktet `(0,0)` blitt tolket logisk.
+The background in the strip is taken from the **watermark bitmap**, not from `FillRect`. Then
+it is guaranteed identical to what the slow path would have put there, without us
+needing to know that the watermark text never reaches up into the header. `SetViewportOrgEx`
+lets `DrawButtons` keep computing in window coordinates, and is reset before
+the blit — otherwise the source point `(0,0)` would have been interpreted logically.
 
-To unntak, begge målt:
+Two exceptions, both measured:
 
-| Tilfelle | Hvorfor | Hva som skjer |
+| Case | Why | What happens |
 |---|---|---|
-| Overlayet åpent | det dimmer **hele** klientflaten, headeren inkludert | betingelsen sjekker `!overlayOpen`, så vi tar den trege stien |
-| Animasjonsklokka går | dens `InvalidateRect(NULL)` unionerer med stripa | `rcPaint` blir hele flaten, og vi faller til den trege stien av oss selv |
+| The overlay open | it dims the **whole** client area, the header included | the condition checks `!overlayOpen`, so we take the slow path |
+| The animation timer is running | its `InvalidateRect(NULL)` unions with the strip | `rcPaint` becomes the whole surface, and we fall to the slow path by ourselves |
 
-**Hurtigstien dekker ikke alle hover-overganger.** Knapp → knapp og knapp →
-mellomrom går gjennom den. Knapp → *ledig headerflate* gjør det ikke: den går
-via `WM_MOUSELEAVE`, som nullstiller `hoverIdx` og `overlayHot` i samme
-melding — og de påvirker chart-flaten, så full opptegning er riktig der.
-`InvalidateRect(NULL)` står altså igjen i `WM_MOUSELEAVE` med vilje.
+**The fast path does not cover all hover transitions.** Button → button and button →
+gap go through it. Button → *free header space* does not: it goes
+via `WM_MOUSELEAVE`, which resets `hoverIdx` and `overlayHot` in the same
+message — and those affect the chart area, so a full repaint is correct there.
+`InvalidateRect(NULL)` is thus left in `WM_MOUSELEAVE` on purpose.
 
-#### Pekeren under panorering
+#### The cursor during panning
 
-`WM_SETCURSOR` er **delvis tilbake** — mot det «Fjernet i fase 3» sier. Den
-griper inn når `panning` er sann **og** treffsonen er `HTCLIENT`, og setter
-`IDC_SIZEALL`. Alt annet går videre med `break`, så `DefWindowProc` beholder
-sine seks skaleringspekere i kantene og vanlig pil i headeren.
+`WM_SETCURSOR` is **partly back** — contrary to what "Removed in phase 3" says. It
+steps in when `panning` is true **and** the hit zone is `HTCLIENT`, and sets
+`IDC_SIZEALL`. Everything else passes on with `break`, so `DefWindowProc` keeps
+its six resize cursors at the edges and the normal arrow in the header.
 
-> `IDC_SIZEALL`, ikke `IDC_HAND`. Sistnevnte er lenkepekeren og betyr «dette
-> kan klikkes», ikke «dette dras». Windows har ingen lukket-hånd blant
-> standardpekerne.
+> `IDC_SIZEALL`, not `IDC_HAND`. The latter is the link cursor and means "this
+> can be clicked", not "this is dragged". Windows has no closed hand among
+> the standard cursors.
 
-`SetCursor` kalles også direkte ved panoreringsstart og -slutt: `WM_SETCURSOR`
-fyrer først ved neste musebevegelse, så uten det viste første bilde av draget
-fortsatt pil. Pekerne bufres i `AppContext`; `LoadCursorW` gir et **delt**
-håndtak for standardpekere, så de telles ikke som våre og skal ikke gjennom
+`SetCursor` is also called directly at panning start and end: `WM_SETCURSOR`
+fires only on the next mouse move, so without it the first frame of the drag
+still showed the arrow. The cursors are cached in `AppContext`; `LoadCursorW` gives a **shared**
+handle for standard cursors, so they do not count as ours and must not go through
 `DestroyCursor`.
 
-#### Resten
+#### The rest
 
-| Handling | Oppførsel |
+| Action | Behavior |
 |---|---|
-| «Avslutt Ticker» i tray-menyen | avslutter programmet |
-| «Skrivebordsmodus» i tray-menyen | bytter mellom panel og skrivebordsflate; haken viser gjeldende modus, valget lagres (fase 12) |
-| Tray-klikk | fremme og aktivt → skjul; ellers vis, gjenopprett og gi fokus |
-| `Ctrl` + `0` / «Standardvisning» | sentrer 1280×720 på skjermen vinduet står på (grå i skrivebordsmodus) |
-| Dobbeltklikk på grafen | nullstiller zoom og panorering (eases). Til og med fase 22 også på prisaksen; den er varslenes nå (fase 23) |
-| `R` | nullstiller zoom og panorering (ikke mens overlayet er åpent) |
-| `ESC` | lagvis: lukk overlayet → nullstill utsnittet → skjul til systemstatusfeltet (duplikat: avslutt) |
-| Dobbeltklikk i ledig headerflate | maksimerer / gjenoppretter |
-| `Win` + `↑` / `↓` / `←` | maksimer / gjenopprett / snap — virker uten `WS_SYSMENU` |
-| `Ctrl` + `N` / `M` / `W`, `F11` | `[ + ]` / minimer / lukk / maksimer–gjenopprett — samme sti som knappene, sperret under panorering (fase 19) |
-| `Alt` + `F4` | lukk (skjul) via `DefWindowProc` → `WM_CLOSE` — virker uten `WS_SYSMENU`, målt |
-| `←` / `→` | ett hjulhakk bakover / framover (`vc / 8` lys), eases (fase 20) |
-| `PgUp` / `PgDn` | et helt utsnitt bakover / framover (fase 20) |
-| `Home` / `End` | eldste lys — veggen ber om historikk som et drag — / den levende kanten med `followLive` (fase 20) |
-| `+` / `-` (også numerisk, også med `Ctrl`) | ett zoomtrinn inn / ut om **midten** av utsnittet (fase 20) |
-| `V` | VOL-pillen: volumstolpene av/på, eased (fase 22) |
-| `1` … `6` | intervallpillene i rekkefølge, 1m … 1d (fase 22) |
-| «Volumstolper» i tray-menyen | bytter valget for **modusen prosessen står i**: panelets i panelmodus, skrivebordets i skrivebordsmodus (fase 22, per modus fra fase 26) |
-| `M` / `MA`-pillen / «Indikatorer» i tray-menyen | SMA 20, EMA 50, VWAP, dagens høy/lav og gårsdagens høy/lav/slutt av/på, tonet (fase 25; VWAP og høy/lav fra fase 27, gårsdagen fra fase 28, da tray-punktet byttet navn fra «Glidende snitt»). `Ctrl`+`M` er fortsatt minimer. Tray-punktet er per modus, som «Volumstolper» (fase 26) |
-| Klikk i priskolonnen / `A` | setter eller fjerner et prisvarsel — se *Prisvarsler* over (fase 23) |
-| «Fjern prisvarsler (N)» i tray-menyen | tømmer varslene for symbolet som vises (fase 23) |
-| Tapt capture midt i et drag | `WM_CAPTURECHANGED` slipper panoreringen og setter pekeren tilbake (fase 20) |
+| "Quit" in the tray menu | exits the program |
+| "Desktop mode" in the tray menu | switches between the panel and the desktop surface; the check mark shows the current mode, the choice is saved (phase 12) |
+| Tray click | in front and active → hide; otherwise show, restore and give focus |
+| `Ctrl` + `0` / "Default view" | centers 1280×720 on the monitor the window is on (gray in desktop mode) |
+| Double-click on the chart | resets zoom and panning (eased). Up to and including phase 22 also on the price axis; that belongs to the alerts now (phase 23) |
+| `R` | resets zoom and panning (not while the overlay is open) |
+| `ESC` | layered: close the overlay → reset the view → hide to the notification area (duplicate: exit) |
+| Double-click in free header space | maximizes / restores |
+| `Win` + `↑` / `↓` / `←` | maximize / restore / snap — works without `WS_SYSMENU` |
+| `Ctrl` + `N` / `M` / `W`, `F11` | `[ + ]` / minimize / close / maximize–restore — the same path as the buttons, blocked during panning (phase 19) |
+| `Alt` + `F4` | close (hide) via `DefWindowProc` → `WM_CLOSE` — works without `WS_SYSMENU`, measured |
+| `←` / `→` | one wheel notch backward / forward (`vc / 8` candles), eased (phase 20) |
+| `PgUp` / `PgDn` | a whole view backward / forward (phase 20) |
+| `Home` / `End` | oldest candle — the wall requests history like a drag — / the live edge with `followLive` (phase 20) |
+| `+` / `-` (also numeric keypad, also with `Ctrl`) | one zoom step in / out around the **middle** of the view (phase 20) |
+| `V` | the VOL pill: volume bars on/off, eased (phase 22) |
+| `1` … `6` | the interval pills in order, 1m … 1d (phase 22) |
+| "Volume bars" in the tray menu | switches the choice for **the mode the process is in**: the panel's in panel mode, the desktop's in desktop mode (phase 22, per mode from phase 26) |
+| `M` / the `MA` pill / "Indicators" in the tray menu | SMA 20, EMA 50, VWAP, today's high/low and yesterday's high/low/close on/off, faded (phase 25; VWAP and high/low from phase 27, yesterday from phase 28, when the tray item was renamed from "Glidende snitt" (Moving averages)). `Ctrl`+`M` is still minimize. The tray item is per mode, like "Volume bars" (phase 26) |
+| Click in the price column / `A` | sets or removes a price alert — see *Price alerts* above (phase 23) |
+| "Clear price alerts (N)" in the tray menu | clears the alerts for the symbol shown (phase 23) |
+| Lost capture in the middle of a drag | `WM_CAPTURECHANGED` releases the panning and restores the cursor (phase 20) |
 
-**Standardvisningen er DPI-skalert:** `MulDiv(1280, GetDpiForWindow(hwnd), 96)`,
-klemt til arbeidsområdet. Prosessen er fortsatt **DPI-uvitende**, så dette gir
-nøyaktig 1280×720 i dag — men det blir riktig automatisk dersom DPI-bevissthet
-senere skrus på. Se «Avviste forslag» for hvorfor den ikke er det.
+**The default view is DPI-scaled:** `MulDiv(1280, GetDpiForWindow(hwnd), 96)`,
+clamped to the work area. The process is still **DPI-unaware**, so this gives
+exactly 1280×720 today — but it becomes correct automatically if DPI awareness
+is turned on later. See "Rejected proposals" for why it is not.
 
-**`UpdatePopupTitle` er beholdt** selv uten tittellinje: tittelen er det
-oppgavelinja og `Alt`+`Tab` viser.
+**`UpdatePopupTitle` is kept** even without a title bar: the title is what
+the taskbar and `Alt`+`Tab` show.
 
-**`ForceForeground` er beholdt.** Feil #1 gjelder fortsatt: et tray-klikk gir
-ikke prosessen forgrunnsrett, og uten dette får vinduet aldri tastaturfokus —
-da når verken `ESC` eller `Ctrl`+`0` frem.
+**`ForceForeground` is kept.** Bug #1 still applies: a tray click does
+not give the process foreground rights, and without this the window never gets keyboard focus —
+then neither `ESC` nor `Ctrl`+`0` gets through.
 
-**Panelet eies ikke av hovedvinduet.** Eierskap ville fjernet knappen i
-oppgavelinja, men det betyr også at Windows ikke river det ned for oss:
-`WM_DESTROY` på hovedvinduet gjør det selv. Målt at knappen er der med panelet
-og borte når det skjules — `WS_EX_APPWINDOW` er ikke nødvendig.
+**The panel is not owned by the main window.** Ownership would have removed the button in
+the taskbar, but it also means Windows does not tear it down for us:
+`WM_DESTROY` on the main window does it itself. Measured that the button is there with the panel
+and gone when it is hidden — `WS_EX_APPWINDOW` is not needed.
 
-**Geometri i registret:** `PanelX`, `PanelY`, `PanelWidth`, `PanelHeight`,
-pluss `PanelHasPos` som skiller «ikke lagret» fra «lagret som 0,0».
-Koordinatene tolkes *signed* — en skjerm kan ligge til venstre for den
-primære. Lagret posisjon brukes bare hvis den fortsatt treffer en tilkoblet
-skjerm (`MonitorFromRect`), ellers sentreres vinduet. Lagringen går gjennom
-`GetWindowPlacement`, så et minimert eller maksimert vindu ikke husker en
-oppgavelinje-strimmel som «brukerens størrelse».
+**Geometry in the registry:** `PanelX`, `PanelY`, `PanelWidth`, `PanelHeight`,
+plus `PanelHasPos`, which distinguishes "not saved" from "saved as 0,0".
+The coordinates are interpreted as *signed* — a monitor can be to the left of the
+primary one. The saved position is used only if it still hits a connected
+monitor (`MonitorFromRect`), otherwise the window is centered. Saving goes through
+`GetWindowPlacement`, so a minimized or maximized window does not remember a
+taskbar strip as "the user's size".
 
-**`ResetToDefaultView` gjenoppretter både maksimert og minimert vindu først.**
-Et minimert vindu er fortsatt `WS_VISIBLE`, så `IsWindowVisible` er `TRUE` og
-tray-menyens «Standardvisning» hopper over `TogglePopup`; uten `IsIconic`-
-sjekken satte `SetWindowPos` bare den gjenopprettede geometrien mens vinduet
-ble stående minimert på −32000,−32000. Menypunktet gjorde altså ingenting
-synlig. Feilen var der fra før, men minimer-knappen gjør stien lett å nå.
+**`ResetToDefaultView` restores both a maximized and a minimized window first.**
+A minimized window is still `WS_VISIBLE`, so `IsWindowVisible` is `TRUE` and
+the tray menu's "Default view" skips `TogglePopup`; without the `IsIconic`
+check, `SetWindowPos` only set the restored geometry while the window
+stayed minimized at −32000,−32000. So the menu item did nothing
+visible. The bug was there before, but the minimize button makes the path easy to reach.
 
-### Animasjonsklokka
+### The animation timer
 
-Én timer (`TIMER_ANIM_ID`, 16 ms) driver alt tidsavhengig. Den er **tidsbasert,
-ikke stegbasert**: hver tikk måler faktisk forløpt tid mot `lastAnimTick` og
-interpolerer eksponentielt gjennom `AnimStep()`. `SetTimer(16)` fyrer i praksis
-hver ~15,6 ms og slås sammen under last — fast steglengde ville gitt ulik
-hastighet avhengig av systembelastning.
+One timer (`TIMER_ANIM_ID`, 16 ms) drives everything time-dependent. It is
+**time-based, not step-based**: each tick measures the actual elapsed time
+against `lastAnimTick` and interpolates exponentially through `AnimStep()`.
+`SetTimer(16)` in practice fires every ~15.6 ms and gets coalesced under load
+— a fixed step length would give different speeds depending on system load.
 
-Klokka **lever bare mens noe er i bevegelse**. `StartAnim()` er idempotent og
-nullstiller `lastAnimTick` kun når klokka faktisk var stanset; `WM_TIMER` dreper
-seg selv når alt har satt seg. I hvile går det ingen timer — verifisert, se
-målingene.
+The timer **lives only while something is moving**. `StartAnim()` is
+idempotent and resets `lastAnimTick` only when the timer was actually stopped;
+`WM_TIMER` kills itself once everything has settled. At rest no timer runs —
+verified, see the measurements.
 
-### Nettverkshelse
+### Network health
 
-Arbeidertråden teller sammenhengende feil i `netFailures` og venter
-`NetBackoffMs()` i stedet for faste 3 s. Ved tre sammenhengende feil slippes
-`hConnect`, slik at `HttpGet` bygger forbindelsen på nytt og DNS slås opp igjen
-— uten det henger vi fast på en IP som ikke lenger svarer.
+The worker thread counts consecutive failures in `netFailures` and waits
+`NetBackoffMs()` instead of a fixed 3 s. After three consecutive failures,
+`hConnect` is released, so that `HttpGet` rebuilds the connection and DNS is
+looked up again — without that we stay stuck on an IP that no longer answers.
 
-`lastOkTick` driver stale-tilstanden (`> 3 * TIMER_INTERVAL` = 9 s, altså to
-tapte sykluser, slik at én treg forespørsel ikke blinker indikatoren). Stale
-vises fire steder: dempet header-pris, sekundteller i undertittelen, `(frakoblet)`
-i tray-tipset og dempede siffer i ikonet.
+`lastOkTick` drives the stale state (`> 3 * TIMER_INTERVAL` = 9 s, i.e. two
+missed cycles, so that one slow request does not flash the indicator). Stale
+shows in four places: dimmed header price, a seconds counter in the subtitle,
+`(frakoblet)` in the tray tooltip, and dimmed digits in the icon.
 
-**Låsen dekker i tillegg:** `lastOkTick`, `nextRetryTick`, `netFailures`.
-`hConnect` eies av arbeidertråden alene og trenger ingen lås.
+**The lock also covers:** `lastOkTick`, `nextRetryTick`, `netFailures`.
+`hConnect` is owned by the worker thread alone and needs no lock.
 
-### Runtime-konfig: symbol og intervall
+### Runtime config: symbol and interval
 
-`SYMBOLS[]` og `INTERVALS[]` er kuraterte tabeller. Kuratert, ikke fritekst:
-en fast liste betyr at vi kjenner prisområdet, og at ingen henting kan feile
-på et ukjent symbol. `KLINE_MS` finnes ikke lenger — alle tre bruksstedene
-leser `ctx->intervalMs`.
+`SYMBOLS[]` and `INTERVALS[]` are curated tables. Curated, not free text: a
+fixed list means we know the price range, and that no fetch can fail on an
+unknown symbol. `KLINE_MS` no longer exists — all three places that used it
+read `ctx->intervalMs`.
 
-**`configGen` er det som hindrer stille feil data.** Scenariet: tråden er midt
-i en henting for BTC, brukeren bytter til ETH, UI-tråden tømmer bufferet, og
-BTC-svaret kommer tilbake og flettes inn i et buffer som nå tilhører ETH.
+**`configGen` is what prevents silently wrong data.** The scenario: the thread
+is in the middle of a fetch for BTC, the user switches to ETH, the UI thread
+empties the buffer, and the BTC response comes back and is merged into a
+buffer that now belongs to ETH.
 
-Arbeidertråden tar en kopi av `configGen` før hentingen og sammenligner **ved
-fletting**, ikke ved henting — svaret kan ankomme når som helst underveis.
-Sjekken står i **begge** hentefunksjonene. Prisen har nøyaktig samme kappløp og
-styrer tray-ikonet; designet nevnte bare lysene.
+The worker thread takes a copy of `configGen` before the fetch and compares
+**at merge time**, not at fetch time — the response can arrive at any point
+along the way. The check is in **both** fetch functions. The price has exactly
+the same race and drives the tray icon; the design only mentioned the candles.
 
-> Et forkastet svar returnerer `TRUE`. Det er ikke en nettverksfeil, og skal
-> ikke telle opp backoffen hver gang brukeren bytter symbol.
+> A discarded response returns `TRUE`. It is not a network failure, and must
+> not bump the backoff every time the user switches symbol.
 
-`ApplyConfigChoice` teller opp `configGen` og tømmer bufferet i **samme
-kritiske seksjon** som byttet.
+`ApplyConfigChoice` bumps `configGen` and empties the buffer in the **same
+critical section** as the switch.
 
-**Låsen dekker i tillegg:** `symIdx`, `ivIdx`, `intervalMs`, `configGen`.
+**The lock also covers:** `symIdx`, `ivIdx`, `intervalMs`, `configGen`.
 
-### Overlayet
+### The overlay
 
-Tegnes inne i panelets klientflate. **Ingen nytt HWND** — uten et nytt vindu
-finnes det ingen aktiveringsendring, og vi går helt utenom territoriet der
-feil #1 og #2 levde.
+Drawn inside the panel's client area. **No new HWND** — without a new window
+there is no activation change, and we stay entirely out of the territory where
+bug #1 and #2 lived.
 
-`OverlayLayout()` fyller ett array som **både** tegning og treffdeteksjon
-leser. Samme disiplin som `ChartGeometry`, av samme grunn (feil #7).
+`OverlayLayout()` fills one array that **both** drawing and hit testing read.
+Same discipline as `ChartGeometry`, for the same reason (bug #7).
 
-Kalles fra `PaintPopup`, ikke fra `DrawChart` — `DrawChart` returnerer tidlig
-når bufferet er tomt, som er nøyaktig tilstanden rett etter et konfigbytte.
+Called from `PaintPopup`, not from `DrawChart` — `DrawChart` returns early
+when the buffer is empty, which is exactly the state right after a config
+switch.
 
-Treffdeteksjonen henger på `overlayOpen` (logisk tilstand), aldri på
-`overlayF` (fade-nivå). Under uttoning er boksen fortsatt synlig, men klikk
-skal gå til grafen igjen.
+Hit testing hangs on `overlayOpen` (logical state), never on `overlayF` (fade
+level). During fade-out the box is still visible, but clicks must go to the
+chart again.
 
-### Vannmerket
+### The watermark
 
-Bakgrunn og vannmerke bakes sammen i én cachet `HBITMAP` som **erstatter**
-`FillRect`. Cachen invalideres av `WM_SIZE` og av konfigbytte, og river ned
-det gamle før den bygger nytt. Feiler bitmapen, faller `DrawChart` tilbake på
-`FillRect` — vannmerket er pynt og skal aldri hindre opptegning.
+Background and watermark are baked together into one cached `HBITMAP` that
+**replaces** `FillRect`. The cache is invalidated by `WM_SIZE` and by a config
+switch, and tears down the old one before building a new one. If the bitmap
+fails, `DrawChart` falls back to `FillRect` — the watermark is decoration and
+must never prevent painting.
 
-Fargen er hvit blandet inn med `WatermarkAlpha(W)` =
-`clamp(0,08 · √(W/1920), 0,04, 0,10)` (fase 11). Siden `W` alt er en del av
-cache-nøkkelen, koster alfaen ingenting per bilde.
+The color is white blended in with `WatermarkAlpha(W)` =
+`clamp(0,08 · √(W/1920), 0,04, 0,10)` (phase 11). Since `W` is already part of
+the cache key, the alpha costs nothing per frame.
 
-### Mål vs. visning — det bærende grepet i del C
+### Target vs. display — the key idea in part C
 
-`viewStart`/`viewCount` (int, låsebeskyttet) er **målet** og eies som før av
-begge tråder. Ved siden av ligger fire **rene UI-doubler** som ingen annen
-tråd rører:
+`viewStart`/`viewCount` (int, lock-protected) are **the target** and are owned
+by both threads as before. Next to them sit four **pure UI doubles** that no
+other thread touches:
 
-| Felt | Betydning |
+| Field | Meaning |
 |---|---|
-| `dispStart` | animert posisjon, kan være brøk |
-| `dispCount` | animert bredde, kan være brøk |
-| `dispMin` / `dispMax` | animert priskant |
+| `dispStart` | animated position, can be fractional |
+| `dispCount` | animated width, can be fractional |
+| `dispMin` / `dispMax` | animated price edge |
 
-Arbeidertråden skriver mål; UI-tråden eases mot det. **Derfor berører hele
-easingen ikke trådkontrakten** — `disp*` skal aldri inn i låsedomenet.
+The worker thread writes the target; the UI thread eases toward it.
+**That is why the whole easing does not touch the thread contract** — `disp*`
+must never enter the lock domain.
 
-**`DrawChart` og `HitCandle` må begge lese `disp*`.** Leser den ene målet og
-den andre visningen, peker crosshairet på feil lys midt i animasjonen. Det er
-feil #7 i ny drakt, og det er den ene regelen som ikke kan bøyes.
+**`DrawChart` and `HitCandle` must both read `disp*`.** If one reads the
+target and the other the display, the crosshair points at the wrong candle in
+the middle of the animation. That is bug #7 in new clothes, and it is the one
+rule that cannot be bent.
 
-Tegneløkka går fra `floor(dispStart)` til `ceil(dispStart + dispCount)` med
-`IntersectClipRect` mot chart-flaten, så kantlysene ikke blør ut i prisaksen.
-Klippingen gjenopprettes før aksetekstene og chromet tegnes. Løkka går
-fortsatt over **synlige** lys — `i1 - i0` er `dispCount + 1`, ikke
-`candleCount`.
+The drawing loop runs from `floor(dispStart)` to `ceil(dispStart + dispCount)`
+with `IntersectClipRect` against the chart area, so the edge candles do not
+bleed into the price axis. The clipping is restored before the axis text and
+the chrome are drawn. The loop still runs over **visible** candles —
+`i1 - i0` is `dispCount + 1`, not `candleCount`.
 
-**Snapping er en kvart piksel**, omregnet til den enheten som eases ved hver
-tikk — ikke et fast tall i lys eller dollar. Se målingene for hvorfor.
+**Snapping is a quarter pixel**, converted to the unit being eased on each
+tick — not a fixed number in candles or dollars. See the measurements for why.
 
-**Hva som eases og ikke:**
+**What is eased and what is not:**
 
-| Handling | Oppførsel |
+| Action | Behavior |
 |---|---|
-| Hjul-panorering, Ctrl+hjul | eases |
-| **Dra-panorering** | **X følger musa direkte**, Y eases |
-| Y-akse ved nye data | eases |
-| Symbol-/intervallbytte, panelåpning, buffer-reset | snapper (`dispValid = FALSE`) |
-| Indeksforskyvning ved utkasting og bakfylling | snapper (`ApplyFrontShift`) |
+| Wheel panning, Ctrl+wheel | eased |
+| **Drag panning** | **X follows the mouse directly**, Y eased |
+| Y axis on new data | eased |
+| Symbol/interval switch, panel open, buffer reset | snaps (`dispValid = FALSE`) |
+| Index shift on eviction and backfill | snaps (`ApplyFrontShift`) |
 
-`SyncDisp` markerer seg **ikke** som gyldig når bufferet er tomt. Gjorde den
-det, sto aksen på `[0, 1]` gjennom et symbolbytte og gled opp til det ekte
-spennet når dataene kom — se feil #15.
+`SyncDisp` does **not** mark itself valid when the buffer is empty. If it did,
+the axis would sit at `[0, 1]` through a symbol switch and glide up to the
+real range when the data arrived — see bug #15.
 
-### Siste-pris-indikatoren
+### The last-price indicator
 
-Stiplet linje fra siste lys til høyre kant, med et fylt, fargekodet stempel på
-prisaksen. Tegnes etter lysene og **før** den tidlige returen i
-crosshair-blokka, ellers ville den forsvunnet så snart musa var utenfor.
+A dashed line from the last candle to the right edge, with a filled,
+color-coded stamp on the price axis. Drawn after the candles and **before**
+the early return in the crosshair block, otherwise it would disappear as soon
+as the mouse was outside.
 
-Fargen følger `dP = P_t - P_t-1` — siste lukkekurs mot den forrige. Det er en
-annen regel enn lysenes egen (`close` mot `open` i *samme* lys), så de kan
-peke hver sin vei. Tilsiktet: linja svarer på «hvor står vi mot forrige
-lukking».
+The color follows `dP = P_t - P_t-1` — the last close against the previous
+one. That is a different rule from the candles' own (`close` against `open` in
+the *same* candle), so they can point in opposite directions. Intentional: the
+line answers "where are we against the previous close".
 
-Er prisen utenfor synlig område tegnes ingenting. Et stempel klemt mot kanten
-ville plassert prisen et sted den ikke er.
+If the price is outside the visible range, nothing is drawn. A stamp clamped
+to the edge would place the price somewhere it is not.
 
-### Vannmerkets fontstørrelse
+### The watermark's font size
 
-`klemt(chart-høyde / 5, 32, 120)`, og deretter **tilpasset bredden**: teksten
-måles med `GetTextExtentPoint32W` og høyden skaleres ned i samme forhold hvis
-den ikke får plass. Uten breddetilpasningen sto `BTCUSDT` klippet på smale
-paneler.
+`klemt(chart-høyde / 5, 32, 120)`, then **fitted to the width**: the text is
+measured with `GetTextExtentPoint32W` and the height is scaled down in the
+same ratio if it does not fit. Without the width fit, `BTCUSDT` was clipped on
+narrow panels.
 
-DPI-skaleringen gjelder **klemmegrensene**, ikke `H/5`. `g.ch` er allerede
-enhetspiksler, så den proporsjonale delen skalerer seg selv; ganger man `H/5`
-med DPI også, teller man skaleringen to ganger.
+DPI scaling applies to **the clamp limits**, not to `H/5`. `g.ch` is already
+device pixels, so the proportional part scales itself; if you multiply `H/5`
+by DPI as well, you count the scaling twice.
 
-Bygges i `EnsureWatermark`, som per definisjon bare kjører når
-`(W, H, symIdx, ivIdx)` endrer seg. Kostnaden per bilde er null.
+Built in `EnsureWatermark`, which by definition only runs when
+`(W, H, symIdx, ivIdx)` changes. The cost per frame is zero.
 
-### Registret
+### The registry
 
 `HKCU\Software\Ticker`, `REG_DWORD`: `SymbolIndex`, `IntervalIndex`,
 `PanelWidth`, `PanelHeight`, `PanelX`, `PanelY`, `PanelHasPos`,
-`DesktopMode` (fase 12), `ShowVolume` (fase 22) og `ShowIndicators` (fase 25)
-— de to siste standard 1 og **panelets** — og `ShowVolumeDesktop` og
-`ShowIndicatorsDesktop` (fase 26), standard 0 og **skrivebordsflatens**. Alle
-fire skrives av `SaveConfig` sammen med indeksene. Leses i `WinMain` **før `CreateThread`**, slik at
-første henting går mot riktig par. Indeksene er bundet sjekket. Enhver feilsti
-lander på BTC/USDT 1m.
+`DesktopMode` (phase 12), `ShowVolume` (phase 22) and `ShowIndicators`
+(phase 25) — the last two default 1 and **the panel's** — and
+`ShowVolumeDesktop` and `ShowIndicatorsDesktop` (phase 26), default 0 and **the
+desktop surface's**. All four are written by `SaveConfig` together with the
+indices. Read in `WinMain` **before `CreateThread`**, so that the first fetch
+goes to the right pair. The indices are bounds-checked. Every failure path
+lands on BTC/USDT 1m.
 
-Panelstørrelsen fanges i `WM_EXITSIZEMOVE`, ikke ved avslutning — se feil #11.
+The panel size is captured in `WM_EXITSIZEMOVE`, not at exit — see bug #11.
 
-`DesktopMode` skrives i det brukeren velger i tray-menyen, ikke i `WM_DESTROY`,
-som aldri kjører når prosessen drepes utenfra. Den leses bare når verken
-`--desktop-mode` eller `--dup` er gitt. Flagget vinner for den kjøringen, og
-et duplikat er alltid et panel og skriver aldri.
+`DesktopMode` is written the moment the user chooses in the tray menu, not in
+`WM_DESTROY`, which never runs when the process is killed from outside. It is
+read only when neither `--desktop-mode` nor `--dup` is given. The flag wins for
+that run, and a duplicate is always a panel and never writes.
 
-**Prisvarslene (fase 23)** er de eneste verdiene som ikke er `REG_DWORD`:
-`Alerts_BTCUSDT`, `Alerts_ETHUSDT` … — én `REG_BINARY` per symbol, doubler
-med siden i fortegnet. Navnet er API-symbolet, ikke indeksen, så en endret
-symboltabell aldri flytter et varsel til et annet symbol. `SaveAlerts`
-skriver i det et varsel settes, fjernes eller fyrer (som `DesktopMode`), og
-sletter verdien med siste varsel. `LoadAlerts` forkaster enkeltvis: feil
-type, lengde som ikke er et helt antall doubler, NaN, 0, ≥ 1e9 og alt over
-åtte. Et duplikat verken leser eller skriver dem.
+**The price alerts (phase 23)** are the only values that are not `REG_DWORD`:
+`Alerts_BTCUSDT`, `Alerts_ETHUSDT` … — one `REG_BINARY` per symbol, doubles
+with the side in the sign. The name is the API symbol, not the index, so a
+changed symbol table never moves an alert to another symbol. `SaveAlerts`
+writes the moment an alert is set, removed or fires (like `DesktopMode`), and
+deletes the value with the last alert. `LoadAlerts` discards one by one: wrong
+type, a length that is not a whole number of doubles, NaN, 0, ≥ 1e9 and
+anything past eight. A duplicate neither reads nor writes them.
 
-**Autostart (fase 13) ligger utenfor `Software\Ticker`:**
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, verdien `Ticker`,
-`REG_SZ`, stien til exe-en i anførselstegn. Den leses hver gang tray-menyen
-åpnes og skrives bare ved klikk. Appen leser den aldri ved oppstart. Nøkkelen
-er makroen `AUTOSTART_KEY`, så testbygg bør peke den til en egen nøkkel.
+**Autostart (phase 13) lives outside `Software\Ticker`:**
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, the value `Ticker`,
+`REG_SZ`, the path to the exe in quotes. It is read every time the tray menu
+opens and written only on click. The app never reads it at startup. The key is
+the macro `AUTOSTART_KEY`, so test builds should point it to a key of their
+own.
 
 ---
 
-## Sentrale konstanter
+## Key constants
 
-| Navn | Verdi | Betydning |
+| Name | Value | Meaning |
 |---|---|---|
-| `MAX_CANDLES` | 6000 | 4 dager på 1m, 16 år på 1d; var 1440 til fase 17 |
-| `SEED_COUNT` / `DEFAULT_VIEW` | 360 / 300 | 6 t frø og bakfyllingsbolk / standard utsnitt. 60 lys oppvarming, så EMA 50 er definert fra venstre kant (fase 25; var 300 / 300) |
-| `MIN_VIEW` | 8 | maks innzoom |
-| `ZOOM_STEP` | 1.2 | per hjulhakk |
-| `TIMER_INTERVAL` | 3000 | hentefrekvens (ms) |
-| `KLINE_MS` | 60000 | ett 1m-lys |
-| `REOPEN_GUARD_MS` | 250 | hindrer at lukkeklikk åpner igjen |
-| `SHOW_GRACE_MS` | 400 | ignorer fokustap rett etter åpning |
-| `s_httpBuf` | 98304 | ~1,6× margin mot ~60 KB svar (360 lys; var 1,94× mot 50,7 KB) |
-| `ANIM_INTERVAL` | 16 | animasjonsklokke (~60 fps) |
-| `ANIM_TAU_CHROME` | 55,0 | tidskonstant chrome-fade (ms) |
-| `ANIM_DT_MAX` | 100,0 | klemmer `dt`, lang pause gir ett hopp |
-| `NET_RETRY_MAX` | 60000 | tak for eksponentiell backoff (ms) |
-| `NET_RECONNECT_AT` | 3 | antall feil før `hConnect` slippes |
-| `STALE_AFTER` | 9000 | 3 × `TIMER_INTERVAL` = to tapte sykluser |
+| `MAX_CANDLES` | 6000 | 4 days at 1m, 16 years at 1d; was 1440 until phase 17 |
+| `SEED_COUNT` / `DEFAULT_VIEW` | 360 / 300 | 6 h seed and backfill batch / default view. 60 candles of warm-up, so EMA 50 is defined from the left edge (phase 25; was 300 / 300) |
+| `MIN_VIEW` | 8 | max zoom-in |
+| `ZOOM_STEP` | 1.2 | per wheel notch |
+| `TIMER_INTERVAL` | 3000 | fetch frequency (ms) |
+| `KLINE_MS` | 60000 | one 1m candle |
+| `REOPEN_GUARD_MS` | 250 | stops a close click from reopening |
+| `SHOW_GRACE_MS` | 400 | ignore focus loss right after opening |
+| `s_httpBuf` | 98304 | ~1.6× margin against a ~60 KB response (360 candles; was 1.94× against 50.7 KB) |
+| `ANIM_INTERVAL` | 16 | animation timer (~60 fps) |
+| `ANIM_TAU_CHROME` | 55.0 | time constant, chrome fade (ms) |
+| `ANIM_DT_MAX` | 100.0 | clamps `dt`, a long pause gives one jump |
+| `NET_RETRY_MAX` | 60000 | cap for exponential backoff (ms) |
+| `NET_RECONNECT_AT` | 3 | number of failures before `hConnect` is released |
+| `STALE_AFTER` | 9000 | 3 × `TIMER_INTERVAL` = two missed cycles |
 | `SYMBOL_COUNT` | 4 | BTC, ETH, SOL, BNB |
-| `INTERVAL_COUNT` | 6 | 1m, 5m, 15m, 1t, 4t, 1d |
-| `CLR_WM_INK` / `WM_ALPHA_*` | hvit / 0,08 · 0,04 · 0,10 | vannmerke, `WatermarkAlpha(W)`, nominelt ved 1920 px (fase 11; erstatter `CLR_WATERMARK` `#15191F`) |
-| `CLR_AXIS` | `#A0AAB8` | pris- og tidsetiketter, 8,05:1 mot `CLR_BG` |
-| `AXIS_Y_W` / `AXIS_PAD_R` / `PAD_R` | 76 / 8 / 84 | priskolonne (4 + 8 tegn × 9 px) / kantsikring / sum |
-| `PAD_B` | 18 | tidsaksens bånd |
-| `TIME_DX_MIN` / `TIME_LBL_GAP` | 80 / 12 | minste etikettavstand = max(80, bredde + 12) |
-| `OVL_ROW_H` / `OVL_COL_W` | 22 / 104 | overlay-rad og kolonnebredde |
-| `ANIM_TAU_VIEW` | 70,0 | tidskonstant view-easing (ms) |
-| `SNAP_PX` | 0,25 | snapp når det gjenstår under en kvart piksel |
-| `WM_FONT_DIV` / `MIN` / `MAX` | 5 / 32 / 120 | vannmerkets fonthøyde |
-| `CHART_TOP_MIN` | 32 | minste `rcChart.top`, sjekket med `#error` |
-| `POPUP_MIN_W` / `H` | 400 / 250 | minste størrelse, DPI-skalert i `WM_GETMINMAXINFO` |
-| `HDR_GAP` | 8 | minste luft mellom headertekster og mot knapperaden |
-| `VOL_FRAC` | 0,22 | volumstolpenes bånd, andel av grafflatens høyde (fase 21) |
-| `CLR_VOL_UP` / `CLR_VOL_DOWN` | `#09542D` / `#51212D` | stolpefarger, `CLR_UP`/`CLR_DOWN` blandet ~28 % mot `CLR_BG` |
-| `TBAR_TOP` / `TBAR_H` | 28 / 15 | verktøylinjas rad: y i [28, 43), under prisens grunnlinje og over grafflaten (fase 22) |
-| `TBAR_SYM_W` / `TBAR_IV_W` / `TBAR_VOL_W` | 74 / 28 / 32 | faste pillebredder; sum med luft 300 px, slutt på x = 310 mot grensen 312 ved 400 px |
-| `TBAR_GAP` / `TBAR_GROUP_GAP` | 2 / 8 | mellom intervallpiller / mellom gruppene |
-| `TBAR_IND_W` | 26 | `MA`-pillen (fase 25), x i [312, 338): utenfor minstebredden med vilje, skjult under 426 px |
-| `IND_SMA_PERIOD` / `IND_EMA_PERIOD` | 20 / 50 | glidende snitt på lukkekursen (fase 25). Prefiks `IND_`: `MA_*` tilhører `winuser.h` |
-| `CLR_SMA` / `CLR_EMA` | `#3D8FBF` / `#A072D0` | dempet stålblå / dempet fiolett, 1 px over lysene. Finnes ikke ellers i flaten, så en probe kan telle dem |
-| `IND_TAU_FADE` | 55,0 | `MA`-bryterens toning (= `ANIM_TAU_FADE`), snapp 0,02 |
-| `IND_BATCH` | 1024 | punkter per `Polyline`; bufferet er volumstolpenes `s_volPts` |
-| `ALERT_MAX` | 8 | prisvarsler per symbol, faste plasser, 256 byte i alt (fase 23) |
-| `CLR_ALERT` / `CLR_ALERT_LINE` | `#FFB020` / `#86601B` | rav: merke og etterglød / linja over dataflaten, blandet halvveis mot `CLR_BG`. Ikke blant de elleve faste fargene, så en probe kan telle dem |
-| `ALERT_HIT_PX` | 8 | halve merkehøyden: treffet er flaten som er tegnet |
-| `ALERT_TAU_FLASH` | 900,0 | tidskonstant for ettergløden når et varsel fyrer (ms), snapp 0,02 |
-| `ALERT_PRICE_MAX` | 1e9 | øvre grense for et nivå, vern mot et håndredigert register |
+| `INTERVAL_COUNT` | 6 | 1m, 5m, 15m, 1h, 4h, 1d |
+| `CLR_WM_INK` / `WM_ALPHA_*` | white / 0.08 · 0.04 · 0.10 | watermark, `WatermarkAlpha(W)`, nominal at 1920 px (phase 11; replaces `CLR_WATERMARK` `#15191F`) |
+| `CLR_AXIS` | `#A0AAB8` | price and time labels, 8.05:1 against `CLR_BG` |
+| `AXIS_Y_W` / `AXIS_PAD_R` / `PAD_R` | 76 / 8 / 84 | price column (4 + 8 chars × 9 px) / edge margin / sum |
+| `PAD_B` | 18 | the time axis band |
+| `TIME_DX_MIN` / `TIME_LBL_GAP` | 80 / 12 | minimum label spacing = max(80, width + 12) |
+| `OVL_ROW_H` / `OVL_COL_W` | 22 / 104 | overlay row and column width |
+| `ANIM_TAU_VIEW` | 70.0 | time constant, view easing (ms) |
+| `SNAP_PX` | 0.25 | snap when less than a quarter pixel remains |
+| `WM_FONT_DIV` / `MIN` / `MAX` | 5 / 32 / 120 | the watermark's font height |
+| `CHART_TOP_MIN` | 32 | minimum `rcChart.top`, checked with `#error` |
+| `POPUP_MIN_W` / `H` | 400 / 250 | minimum size, DPI-scaled in `WM_GETMINMAXINFO` |
+| `HDR_GAP` | 8 | minimum gap between header texts and to the button row |
+| `VOL_FRAC` | 0.22 | the volume bars' band, share of the chart area's height (phase 21) |
+| `CLR_VOL_UP` / `CLR_VOL_DOWN` | `#09542D` / `#51212D` | bar colors, `CLR_UP`/`CLR_DOWN` blended ~28 % toward `CLR_BG` |
+| `TBAR_TOP` / `TBAR_H` | 28 / 15 | the toolbar's row: y in [28, 43), below the price baseline and above the chart area (phase 22) |
+| `TBAR_SYM_W` / `TBAR_IV_W` / `TBAR_VOL_W` | 74 / 28 / 32 | fixed pill widths; sum with gaps 300 px, ending at x = 310 against the limit 312 at 400 px |
+| `TBAR_GAP` / `TBAR_GROUP_GAP` | 2 / 8 | between interval pills / between the groups |
+| `TBAR_IND_W` | 26 | the `MA` pill (phase 25), x in [312, 338): outside the minimum width on purpose, hidden below 426 px |
+| `IND_SMA_PERIOD` / `IND_EMA_PERIOD` | 20 / 50 | moving averages on the close (phase 25). Prefix `IND_`: `MA_*` belongs to `winuser.h` |
+| `CLR_SMA` / `CLR_EMA` | `#3D8FBF` / `#A072D0` | muted steel blue / muted violet, 1 px above the candles. Not found elsewhere on the surface, so a probe can count them |
+| `IND_TAU_FADE` | 55.0 | the `MA` toggle's fade (= `ANIM_TAU_FADE`), snap 0.02 |
+| `IND_BATCH` | 1024 | points per `Polyline`; the buffer is the volume bars' `s_volPts` |
+| `ALERT_MAX` | 8 | price alerts per symbol, fixed slots, 256 bytes in total (phase 23) |
+| `CLR_ALERT` / `CLR_ALERT_LINE` | `#FFB020` / `#86601B` | amber: tag and afterglow / the line over the data area, blended halfway toward `CLR_BG`. Not among the eleven fixed colors, so a probe can count them |
+| `ALERT_HIT_PX` | 8 | half the tag height: the hit area is the area that is drawn |
+| `ALERT_TAU_FLASH` | 900.0 | time constant for the afterglow when an alert fires (ms), snap 0.02 |
+| `ALERT_PRICE_MAX` | 1e9 | upper limit for a level, guard against a hand-edited registry |
 
 ---
 
-## Funksjoner, i den rekkefølgen de kom
+## Functions, in the order they arrived
 
-1. **GDI-graf i popup** — candlesticks, rutenett, prisakse, header.
-2. **Riktig tray-ikon** — font-tabellen var ødelagt fra start (se feil #3).
-3. **Én linje i ikonet** — 4×9-font, `75.8` i stedet for `75k`/`778`.
-4. **Crosshair + hover-boks** — tid og OHLC for lyset under musa.
-5. **Flyttbart / skalerbart panel** — `WS_THICKFRAME` + `WM_NCCALCSIZE`.
-6. **Hover-kontroller** — kryss, grip-prikker, ramme og resize-grip som toner
-   inn ved hover og er usynlige i hvile. **Fjernet i `c77b6eb`** — erstattet av
-   OS-rammen.
-7. **Ctrl + hjul = zoom**, ankret mot musepekeren.
-8. **Akkumulerende historikk + panorering** — hjul og dra.
-9. **Arbeidertråd + GDI-cache.**
-10. **Animasjonsklokke, eksponentiell backoff og stale-indikator** (fase 2 A).
-11. **Runtime-valg av symbol og intervall**, overlay, vannmerke og registret
-    (fase 2 B).
-12. **Siste-pris-indikator, skalert vannmerke, view- og Y-akse-easing**
-    (fase 2 C).
-13. **Nativ vindusramme**, standardvisning (`Ctrl`+`0`) og posisjonspersistens.
+1. **GDI chart in a popup** — candlesticks, grid, price axis, header.
+2. **Correct tray icon** — the font table was broken from the start (see
+   bug #3).
+3. **One line in the icon** — 4×9 font, `75.8` instead of `75k`/`778`.
+4. **Crosshair + hover box** — time and OHLC for the candle under the mouse.
+5. **Movable / resizable panel** — `WS_THICKFRAME` + `WM_NCCALCSIZE`.
+6. **Hover controls** — close cross, grip dots, frame and resize grip that fade
+   in on hover and are invisible at rest. **Removed in `c77b6eb`** — replaced by
+   the OS frame.
+7. **Ctrl + wheel = zoom**, anchored at the mouse pointer.
+8. **Accumulating history + panning** — wheel and drag.
+9. **Worker thread + GDI cache.**
+10. **Animation timer, exponential backoff and stale indicator** (phase 2 A).
+11. **Runtime choice of symbol and interval**, overlay, watermark and the
+    registry (phase 2 B).
+12. **Last-price indicator, scaled watermark, view and Y-axis easing**
+    (phase 2 C).
+13. **Native window frame**, default view (`Ctrl`+`0`) and position
+    persistence.
 
-### Fjernet i fase 3
+### Removed in phase 3
 
-Beskrivelsene over står fordi de forklarer *hvorfor* koden ble som den ble.
-Dette er hva som ikke lenger finnes, og hvor det ble borte:
+The descriptions above stay because they explain *why* the code turned out the
+way it did. This is what no longer exists, and where it went:
 
-| Hva | Hvorfor | Commit |
+| What | Why | Commit |
 |---|---|---|
-| Hover-chrome: kryss, grip-prikker, resize-grip, ramme, fade | OS-rammen har alt sammen | `c77b6eb` |
-| `EnsureChromeCache` og seks bufrede GDI-objekter | fulgte med chromet; GDI 35 → 29 | `c77b6eb` |
-| Auto-skjul på fokustap, `pinned`, `SHOW_GRACE_MS`, `REOPEN_GUARD_MS` | et vindu med tittellinje som forsvinner når man klikker i et annet vindu er ubrukelig | `c77b6eb` |
-| `inSizeMove` (feil #6) | brukt til dragrammens farge, som er borte | `c77b6eb` |
-| `WM_SETCURSOR` | `DefWindowProc` gjør jobben igjen | `c77b6eb` |
-| `CLR_WHITE`, `CLR_HDRHOT` | hadde bare chromet som bruker | `c77b6eb` |
+| Hover chrome: close cross, grip dots, resize grip, frame, fade | the OS frame has all of it | `c77b6eb` |
+| `EnsureChromeCache` and six cached GDI objects | went with the chrome; GDI 35 → 29 | `c77b6eb` |
+| Auto-hide on focus loss, `pinned`, `SHOW_GRACE_MS`, `REOPEN_GUARD_MS` | a window with a title bar that disappears when you click in another window is unusable | `c77b6eb` |
+| `inSizeMove` (bug #6) | used for the drag frame's color, which is gone | `c77b6eb` |
+| `WM_SETCURSOR` | `DefWindowProc` does the job again | `c77b6eb` |
+| `CLR_WHITE`, `CLR_HDRHOT` | the chrome was their only user | `c77b6eb` |
 
-Målingene av fade-fargene (`#0D1117 → #333D4B`) gjelder kode som ikke finnes
-lenger. De står igjen som metode: *mål pikselfarger, ikke øyemål* er fortsatt
-regelen — se fallgruve #7.
+The measurements of the fade colors (`#0D1117 → #333D4B`) apply to code that
+no longer exists. They remain as a method: *measure pixel colors, don't judge
+by eye* is still the rule — see pitfall #7.
 
-> **Tre av radene over kom tilbake i fase 4.** `WM_NCCALCSIZE` og
-> `WM_NCHITTEST` er nødvendige igjen så snart OS-rammen er borte, og
-> `CLR_CLOSEHOT` er farven bak krysset. `WM_SETCURSOR` er **delvis** tilbake
-> i fase 5 — kun under panorering, for å sette `IDC_SIZEALL`. Den er ikke
-> tilbake for headeren:
-> headeren trengte `IDC_SIZEALL` i fase 1 fordi hele vinduet var en dra-flate
-> med skjult chrome; nå er vanlig pil riktig, slik den er i en tittellinje.
-> Det som ikke kom tilbake er faden, auto-skjulet og de seks bufrede
-> chrome-objektene.
-
----
-
-## Feil som ble funnet og rettet
-
-Disse er verdt å kjenne til — flere var ikke synlige uten måling.
-
-**1. `SetForegroundWindow` ble nektet.** Windows' forgrunnslås gjorde at
-popupen ble vist men aldri aktivert, fikk `WA_INACTIVE` umiddelbart og skjulte
-seg selv. Løst med `AttachThreadInput` rundt byttet (`ForceForeground()`),
-pluss en nådeperiode på 400 ms i `WM_ACTIVATE`.
-
-**2. ESC virket ikke.** `WM_ACTIVATE` returnerte 0 også ved *aktivering*, så
-`DefWindowProc` — som setter tastaturfokus — kjørte aldri. `GetGUIThreadInfo`
-viste `hwndFocus = 0`. Nå faller aktiveringsgrenen gjennom til `DefWindowProc`.
-
-> Testfelle: `PostMessage(WM_KEYDOWN)` går utenom fokus og gir falsk positiv.
-> Bruk `keybd_event`.
-
-**3. Font-tabellen var ødelagt.** Alle siffer-verdiene var 19-bit, men koden
-leser 15 bit (`bitPos = 14 - (r*3+c)`). De øvre bitene falt utenfor, og ikonet
-tegnet støy. Ti av tolv glyfer var feil. Verdiene ble regnet på nytt fra
-tabellens egne kommentarer og verifisert ved å dekode dem tilbake.
-
-**4. 512-byte lesebuffer.** Ett `WinHttpReadData`-kall returnerer bare det som
-tilfeldigvis er buffret. Ekte klines-svar er 10–50 KB. Nå leses alt i løkke
-(`HttpGet()`).
-
-**5. `%.1f` rundet 99950–99999 opp til «100.0».** Terskelen `price >= 100000`
-fanget det ikke — det er den *formaterte strengen* som må få plass. Nå måles
-bredden med `IconTextWidth()` etter formatering.
-
-**6. Drag frøs hvert 3. sekund.** `WM_TIMER` fyrer også inne i den modale
-flytte-/resize-løkka. Løst med `inSizeMove`-flagget — mindre relevant etter
-tråden, men fortsatt riktig.
-
-**7. Crosshair pekte feil etter zoom.** `hoverIdx` er en *absolutt* indeks;
-zoomer man uten å flytte musa, flyttet utsnittet seg under en indeks som ikke
-ble oppdatert. Zoom og panorering regner nå om via `HitCandle()`.
-
-**8. WinHTTP-timeouts manglet.** Standard mottakstimeout er 30 s; ved avslutning
-venter vi bare 3 s på tråden og lukket sesjonen under den. Nå satt til 5 s.
-
-**9. Backoffen eskalerte aldri.** Nullstillingen av `netFailures` sto etter hele
-`WaitForMultipleObjects`-kallet, med bare en sjekk på `WAIT_OBJECT_0` (stopp)
-over seg. Den traff derfor også `WAIT_TIMEOUT` — altså hver eneste syklus.
-`netFailures` kom aldri høyere enn 1, ventetiden sto fast på ~6 s, og
-`hConnect` ble aldri sluppet fordi `failures == NET_RECONNECT_AT` aldri ble
-sant. Koden så riktig ut ved lesing; loggen viste `feil=1` i tjue sykluser på
-rad. Nullstillingen henger nå på `wr == WAIT_OBJECT_0 + 1` alene.
-
-> Dette er grunnen til at del A ble målt mot en faktisk blokkert linje og ikke
-> bare enhetstestet. `NetBackoffMs()` var grønn på alle sytten testene hele
-> tiden — feilen lå i *hvem som kalte den med hvilken teller*.
-
-**10. Animasjonsklokka gikk videre på et skjult panel.** Stale-grenen satte
-`settled = FALSE` for å holde sekundtelleren i live. Begge skjulestiene
-(`WM_ACTIVATE` og `TogglePopup`) dreper ikke timeren, så en frakoblet linje ga
-60 tikk i sekundet på et panel ingen så. Grenen er nå betinget av
-`IsWindowVisible(hwnd)`, og `TogglePopup` starter klokka igjen ved visning
-dersom vi er frakoblet — ellers sto telleren stille til neste `WM_APP_DATA`,
-som under backoff kan være et helt minutt unna.
-
-
-**11. Panelstørrelsen ble aldri lagret.** `SaveConfig` sto i `WM_DESTROY` og
-leste `GetWindowRect(hPopup)` der. Panelet **eies** av hovedvinduet og er
-allerede revet ned når `WM_DESTROY` når dit, så `GetWindowRect` hadde
-ingenting å lese og `PanelWidth` ble aldri skrevet. Størrelsen fanges nå i
-`WM_EXITSIZEMOVE` — når brukeren slipper.
-
-> Resonnementet i den første versjonen var «les fra vinduet selv, så kan de to
-> aldri komme i utakt». Riktig i prinsippet, feil i praksis: vinduet fantes
-> ikke lenger. Registret sto tomt; det var det som avslørte den.
-
-**12. Prisaksen antok BTC-skala.** `"%.0f"` på alle fem etikettene. SOL rundt
-97 dollar har et spenn under én dollar, så alle fem leste `97`. Desimalene
-velges nå fra *avstanden mellom etikettene* (`PriceDecimals`). Samme klasse
-feil som #5: formatet må følge tallet som faktisk skal vises.
-
-**13. `OverlayLayout` var ikke ren.** Radene bak `count` var stack-søppel, så
-to kall med samme inndata ga ulikt innhold. Ufarlig i dag — `OverlayHit` går
-bare til `count` — men enhetstesten «samme inn = samme ut» feilet, og det er
-en klasse feil verdt å lukke. Structen nullstilles nå.
-
-
-**14. Tray-ikonet ble hengende på forrige symbol.** `ApplyConfigChoice`
-nullstiller `lastPrice`, og `UpdateIcon` returnerer tidlig på `price <= 0.0`.
-Står panelet åpent henter tråden **bare lys** — og lysgrenen skrev aldri
-`lastPrice`. Etter et symbolbytte ble ikonet *og* verktøytipset derfor
-stående på forrige symbols pris og etikett så lenge panelet var åpent.
-
-> Målt: 15 s etter bytte til SOL leste ikonet fortsatt `75.9` — BTC — mens
-> panelet viste SOL. Nøyaktig den klassen designet forbyr: data under feil
-> etikett. Alle symbolbyttene i testingen ble gjort med panelet åpent og
-> uten å se på ikonet, så ingen av de tidligere målingene fanget den.
-> `WorkerFetchKlines` setter nå `lastPrice` fra det siste lysets `close`.
-
-
-**15. Y-aksen ville glidd opp fra null ved hvert symbolbytte.** `SyncDisp`
-markerte seg som gyldig også med tomt buffer, og satte da `dispMin`/`dispMax`
-til `[0, 1]`. Rett etter et bytte er bufferet nettopp tomt, så aksen ble
-stående *gyldig* på `[0, 1]` — og når de nye lysene kom, eases den opp til det
-ekte spennet. Altså en prisakse som glir opp fra null i et halvt sekund ved
-hvert bytte, som er nøyaktig det `SyncDisp` finnes for å hindre.
-
-> Fanget før det nådde brukeren, men først etter at koden var skrevet og
-> commitet. Målingen som avslørte det: logg `dispMin`/`dispMax` per bilde og
-> se på overgangen `candleCount` 0 → 300. Med tomt buffer blir vi nå stående
-> *ugyldige*, så første bilde med data snapper.
+> **Three of the rows above came back in phase 4.** `WM_NCCALCSIZE` and
+> `WM_NCHITTEST` are needed again as soon as the OS frame is gone, and
+> `CLR_CLOSEHOT` is the color behind the close cross. `WM_SETCURSOR` is
+> **partly** back in phase 5 — only during panning, to set `IDC_SIZEALL`. It is
+> not back for the header:
+> the header needed `IDC_SIZEALL` in phase 1 because the whole window was a
+> drag surface with hidden chrome; now the normal arrow is right, as it is in a
+> title bar. What did not come back is the fade, the auto-hide and the six
+> cached chrome objects.
 
 ---
 
-## Målinger
+## Bugs found and fixed
 
-### UI-latens (maks, målt med `SendMessageTimeout` mot UI-tråden)
+These are worth knowing about — several were not visible without measuring.
 
-| Versjon | Snitt | Maks | Pauser >50 ms |
+**1. `SetForegroundWindow` was refused.** Windows' foreground lock meant the
+popup was shown but never activated, got `WA_INACTIVE` immediately and hid
+itself. Fixed with `AttachThreadInput` around the switch (`ForceForeground()`),
+plus a 400 ms grace period in `WM_ACTIVATE`.
+
+**2. ESC did not work.** `WM_ACTIVATE` returned 0 on *activation* too, so
+`DefWindowProc` — which sets keyboard focus — never ran. `GetGUIThreadInfo`
+showed `hwndFocus = 0`. The activation branch now falls through to
+`DefWindowProc`.
+
+> Test trap: `PostMessage(WM_KEYDOWN)` bypasses focus and gives a false
+> positive. Use `keybd_event`.
+
+**3. The font table was broken.** All the digit values were 19-bit, but the
+code reads 15 bits (`bitPos = 14 - (r*3+c)`). The upper bits fell outside, and
+the icon drew noise. Ten of twelve glyphs were wrong. The values were
+recomputed from the table's own comments and verified by decoding them back.
+
+**4. 512-byte read buffer.** One `WinHttpReadData` call returns only what
+happens to be buffered. Real klines responses are 10–50 KB. Everything is now
+read in a loop (`HttpGet()`).
+
+**5. `%.1f` rounded 99950–99999 up to "100.0".** The threshold
+`price >= 100000` did not catch it — it is the *formatted string* that has to
+fit. The width is now measured with `IconTextWidth()` after formatting.
+
+**6. Dragging froze every 3 seconds.** `WM_TIMER` also fires inside the modal
+move/resize loop. Fixed with the `inSizeMove` flag — less relevant after the
+thread, but still correct.
+
+**7. The crosshair pointed wrong after zoom.** `hoverIdx` is an *absolute*
+index; if you zoom without moving the mouse, the view moved under an index
+that was not updated. Zoom and panning now recompute via `HitCandle()`.
+
+**8. WinHTTP timeouts were missing.** The default receive timeout is 30 s; at
+exit we wait only 3 s for the thread and closed the session under it. Now set
+to 5 s.
+
+**9. The backoff never escalated.** The reset of `netFailures` sat after the
+whole `WaitForMultipleObjects` call, with only a check on `WAIT_OBJECT_0`
+(stop) above it. It therefore also hit `WAIT_TIMEOUT` — that is, every single
+cycle. `netFailures` never got higher than 1, the wait was stuck at ~6 s, and
+`hConnect` was never released because `failures == NET_RECONNECT_AT` never
+became true. The code looked right when read; the log showed `feil=1` for
+twenty cycles in a row. The reset now hangs on `wr == WAIT_OBJECT_0 + 1`
+alone.
+
+> This is why part A was measured against an actually blocked line and not
+> just unit tested. `NetBackoffMs()` was green on all seventeen tests the
+> whole time — the bug was in *who called it with which counter*.
+
+**10. The animation timer kept running on a hidden panel.** The stale branch
+set `settled = FALSE` to keep the seconds counter alive. Neither hide path
+(`WM_ACTIVATE` and `TogglePopup`) kills the timer, so a disconnected line gave
+60 ticks a second on a panel nobody saw. The branch is now conditional on
+`IsWindowVisible(hwnd)`, and `TogglePopup` restarts the timer on show if we
+are offline — otherwise the counter stood still until the next `WM_APP_DATA`,
+which during backoff can be a whole minute away.
+
+
+**11. The panel size was never saved.** `SaveConfig` sat in `WM_DESTROY` and
+read `GetWindowRect(hPopup)` there. The panel is **owned** by the main window
+and is already torn down when `WM_DESTROY` gets there, so `GetWindowRect` had
+nothing to read and `PanelWidth` was never written. The size is now captured
+in `WM_EXITSIZEMOVE` — when the user lets go.
+
+> The reasoning in the first version was "read from the window itself, then
+> the two can never get out of sync". Right in principle, wrong in practice:
+> the window no longer existed. The registry was empty; that is what gave it
+> away.
+
+**12. The price axis assumed BTC scale.** `"%.0f"` on all five labels. SOL at
+around 97 dollars has a range under one dollar, so all five read `97`. The
+decimals are now chosen from *the spacing between the labels*
+(`PriceDecimals`). Same class of bug as #5: the format must follow the number
+that is actually shown.
+
+**13. `OverlayLayout` was not pure.** The rows past `count` were stack
+garbage, so two calls with the same input gave different content. Harmless
+today — `OverlayHit` only goes up to `count` — but the unit test "same in =
+same out" failed, and it is a class of bug worth closing. The struct is now
+zeroed.
+
+
+**14. The tray icon got stuck on the previous symbol.** `ApplyConfigChoice`
+resets `lastPrice`, and `UpdateIcon` returns early on `price <= 0.0`. When the
+panel is open the thread fetches **only candles** — and the candle branch
+never wrote `lastPrice`. After a symbol switch the icon *and* the tooltip
+therefore stayed on the previous symbol's price and label for as long as the
+panel was open.
+
+> Measured: 15 s after switching to SOL the icon still read `75.9` — BTC —
+> while the panel showed SOL. Exactly the class the design forbids: data
+> under the wrong label. All the symbol switches in testing were done with
+> the panel open and without looking at the icon, so none of the earlier
+> measurements caught it. `WorkerFetchKlines` now sets `lastPrice` from the
+> last candle's `close`.
+
+
+**15. The Y axis would have glided up from zero on every symbol switch.**
+`SyncDisp` marked itself valid even with an empty buffer, and then set
+`dispMin`/`dispMax` to `[0, 1]`. Right after a switch the buffer is empty, so
+the axis stayed *valid* at `[0, 1]` — and when the new candles arrived, it
+eased up to the real range. In other words, a price axis that glides up from
+zero for half a second on every switch, which is exactly what `SyncDisp`
+exists to prevent.
+
+> Caught before it reached the user, but only after the code was written and
+> committed. The measurement that revealed it: log `dispMin`/`dispMax` per
+> frame and look at the transition `candleCount` 0 → 300. With an empty buffer
+> we now stay *invalid*, so the first frame with data snaps.
+
+---
+
+## Measurements
+
+### UI latency (max, measured with `SendMessageTimeout` against the UI thread)
+
+| Version | Mean | Max | Stalls >50 ms |
 |---|---|---|---|
-| 300 lys, full henting hvert 3. s | 648 ms | 929 ms | 4–5 per 13 s |
-| Inkrementell henting (`limit=3`) | 486 ms | — | — |
-| Fjernet dobbelt priskall | 233 ms | 247 ms | — |
-| **Arbeidertråd** | — | **2,1–4,2 ms** | **ingen** |
+| 300 candles, full fetch every 3 s | 648 ms | 929 ms | 4–5 per 13 s |
+| Incremental fetch (`limit=3`) | 486 ms | — | — |
+| Removed double price call | 233 ms | 247 ms | — |
+| **Worker thread** | — | **2.1–4.2 ms** | **none** |
 
-Nettverkskallet var 130× dyrere enn hele opptegningen. Tråden var hele gevinsten.
+The network call was 130× more expensive than the whole repaint. The thread
+was the whole gain.
 
-### Opptegning
+### Painting
 
-| | Netto per opptegning |
+| | Net per repaint |
 |---|---|
-| Før GDI-cache | 1,796 ms |
-| Etter GDI-cache | **1,255 ms** (−30 %) |
-| Fase 21, før volumstolper (1280×720, 300 lys, median 172 bilder) | 1,44 ms |
-| Fase 21, med volumstolper (`PolyPolygon` i bolker) | **1,56 ms** (+0,12 ms; `FillRect` per lys ga 1,84) |
-| Fase 22, før verktøylinja (rød kjøring, median 177 bilder) | 1,48 ms |
-| Fase 22, med verktøylinja (to kjøringer, 171 og 168 bilder) | **1,61 / 1,52 ms** (p90 1,75 / 1,70 mot 1,62) |
-| Fase 23, uten varsler (to kjøringer, median av 150 tvungne bilder) | 1,89 / 1,94 ms |
-| Fase 23, med **åtte** varsler i utsnittet | **2,01 / 2,11 ms** (+0,11 / +0,17 ms) |
+| Before GDI cache | 1.796 ms |
+| After GDI cache | **1.255 ms** (−30 %) |
+| Phase 21, before volume bars (1280×720, 300 candles, median of 172 frames) | 1.44 ms |
+| Phase 21, with volume bars (`PolyPolygon` in batches) | **1.56 ms** (+0.12 ms; `FillRect` per candle gave 1.84) |
+| Phase 22, before the toolbar (red run, median of 177 frames) | 1.48 ms |
+| Phase 22, with the toolbar (two runs, 171 and 168 frames) | **1.61 / 1.52 ms** (p90 1.75 / 1.70 against 1.62) |
+| Phase 23, without alerts (two runs, median of 150 forced frames) | 1.89 / 1.94 ms |
+| Phase 23, with **eight** alerts in the view | **2.01 / 2.11 ms** (+0.11 / +0.17 ms) |
 
-Zoomet helt ut er *raskere* (1,5 ms) fordi lysene da er 1 px brede.
-Tallene fra fase 21 og 22 er målt med QPC rundt den trege stien i `PaintPopup`
-i testbygget (probe-felt 15), ikke med `PrintWindow` i flukt (fallgruve 37).
-Fase 23 tvinger bildene med `RedrawWindow(RDW_UPDATENOW)` fra proben i
-stedet for å vente på animasjonsklokka; grunnlinja er derfor ikke
-sammenliknbar med fase 22 (rød kjøring, samme metode: 1,73 ms) — bare
-differansen innen samme kjøring er det.
+Fully zoomed out is *faster* (1.5 ms) because the candles are then 1 px wide.
+The numbers from phase 21 and 22 are measured with QPC around the slow path in
+`PaintPopup` in the test build (probe field 15), not with `PrintWindow` in
+flight (pitfall 37). Phase 23 forces the frames with
+`RedrawWindow(RDW_UPDATENOW)` from the probe instead of waiting for the
+animation timer; the baseline is therefore not comparable with phase 22 (red
+run, same method: 1.73 ms) — only the difference within the same run is.
 
-### Enhetstester på ekte kode
+### Unit tests on real code
 
-Teknikken som ble brukt: trekk funksjonen ut av `ticker.c` med `sed` inn i en
-liten harness, så testene kjører mot **den faktiske koden**, ikke en kopi.
+The technique used: extract the function from `ticker.c` with `sed` into a
+small harness, so the tests run against **the actual code**, not a copy.
 
-- `ParseKlines` mot ekte Binance-svar: **300/300 lys, 0 avvik** mot `ConvertFrom-Json`.
-- `MergeCandles`, 6 tilfeller, alle grønne: frø på 300 · 200 påfølgende hentinger
-  (→ 500 sammenhengende lys) · dobbel henting uten duplikat · lys under forming
-  oppdatert i stedet for lagt til · tak på 1440 med eldste ut · tidshull nullstiller.
-- Zoom-ankring analytisk: største avvik **0,50 lys** (ren avrunding).
+- `ParseKlines` against a real Binance response: **300/300 candles, 0
+  mismatches** against `ConvertFrom-Json`.
+- `MergeCandles`, 6 cases, all green: seed of 300 · 200 consecutive fetches
+  (→ 500 contiguous candles) · double fetch without duplicate · candle still
+  forming updated instead of appended · cap at 1440 with the oldest out · time
+  gap resets.
+- Zoom anchoring, analytically: largest deviation **0.50 candles** (pure
+  rounding).
 
-### Empirisk verifisert
+### Verified empirically
 
-- **Zoom-ankring:** samme lys (`01:35`, identiske OHLC) lå under musa både før og
-  etter 5 hakk, mens spenn gikk 5t → 2t og Y-aksen strammet seg inn.
-- **Hover-boks mot fasit:** `02:39`, O 75872.21 / H 75915.49 / L 75872.20 /
-  C 75915.45 — eksakt treff mot uavhengig hentede Binance-data.
-- **Pekere i alle ni soner:** header `IDC_SIZEALL` (må tvinges — `DefWindowProc`
-  gir vanlig pil for `HTCAPTION`), kanter `IDC_SIZEWE`/`SIZENS`/`SIZENWSE`/`SIZENESW`
-  (disse ordner `DefWindowProc` selv).
-- **Hvile vs. hover:** rammepiksel `#0D1117` (ren bakgrunn) i hvile, `#333D4B` ved
-  hover, med målt fade `#0D1117 → #171D25 → #222934 → #27303B → #333D4B`.
-- **Stresstest:** 15 965 pan/zoom/tegne-operasjoner på 20 s samtidig med ~7
-  fletteoperasjoner fra tråden. Ingen vranglås.
-- **Lekkasjer:** GDI og USER flate gjennom alle tester. GDI står konstant på **31**
-  (opp fra 18 — tilsiktet, objektene holdes nå permanent i stedet for å opprettes
-  16 ganger per bilde).
-- **Avslutning:** 134–228 ms, ingen etterlatt prosess.
+- **Zoom anchoring:** the same candle (`01:35`, identical OHLC) sat under the
+  mouse both before and after 5 notches, while the span went 5h → 2h and the Y
+  axis tightened.
+- **Hover box against ground truth:** `02:39`, O 75872.21 / H 75915.49 /
+  L 75872.20 / C 75915.45 — exact match against independently fetched Binance
+  data.
+- **Cursors in all nine zones:** header `IDC_SIZEALL` (must be forced —
+  `DefWindowProc` gives the normal arrow for `HTCAPTION`), edges
+  `IDC_SIZEWE`/`SIZENS`/`SIZENWSE`/`SIZENESW` (`DefWindowProc` handles these
+  itself).
+- **Rest vs. hover:** frame pixel `#0D1117` (plain background) at rest,
+  `#333D4B` on hover, with the measured fade
+  `#0D1117 → #171D25 → #222934 → #27303B → #333D4B`.
+- **Stress test:** 15 965 pan/zoom/draw operations in 20 s concurrently with ~7
+  merge operations from the thread. No deadlock.
+- **Leaks:** GDI and USER flat through all tests. GDI stays constant at **31**
+  (up from 18 — intentional, the objects are now held permanently instead of
+  being created 16 times per frame).
+- **Exit:** 134–228 ms, no leftover process.
 
-### Fase 2 del A
+### Phase 2 part A
 
-Enhetstester mot kode trukket ut av `ticker.c` med `sed` — **17/17 grønne**:
+Unit tests against code extracted from `ticker.c` with `sed` — **17/17
+green**:
 
-| Enhet | Hva som ble verifisert |
+| Unit | What was verified |
 |---|---|
-| `NetBackoffMs` | skjema 3/6/12/24/48/60/60/60 s, jitter innenfor ±12,5 %, aldri over taket, `failures` 8–40 uten overflow |
-| `AnimStep` | konvergens med snap, ingen oversving, `dt == 2 × dt/2` (rammeratefri), `dt` klemt til 100 ms, `dt = 0` er no-op, ~90 % av veien på 130 ms |
+| `NetBackoffMs` | schedule 3/6/12/24/48/60/60/60 s, jitter within ±12.5 %, never above the cap, `failures` 8–40 without overflow |
+| `AnimStep` | convergence with snap, no overshoot, `dt == 2 × dt/2` (frame-rate independent), `dt` clamped to 100 ms, `dt = 0` is a no-op, ~90 % of the way in 130 ms |
 
-Backoff målt mot en faktisk blokkert linje (`api.binance.com` blokkert, først
-via hosts, så via brannmurregel mot den oppslåtte IP-en):
+Backoff measured against an actually blocked line (`api.binance.com` blocked,
+first via hosts, then via a firewall rule against the resolved IP):
 
-| Feil nr. | Ventetid målt | Forventet ±12,5 % | `hConnect` |
+| Failure no. | Wait measured | Expected ±12.5 % | `hConnect` |
 |---|---|---|---|
-| 1 | 6 491 ms | 5 250–6 750 | beholdt |
-| 2 | 10 770 ms | 10 500–13 500 | beholdt |
-| 3 | 21 470 ms | 21 000–27 000 | **sluppet** |
-| 4 | 52 541 ms | 42 000–54 000 | ny |
-| 5 | 52 617 ms | 52 500–60 000 (klemt) | ny |
-| 6 | 59 264 ms | 52 500–60 000 | ny |
-| 7 | 60 000 ms | tak | ny |
+| 1 | 6 491 ms | 5 250–6 750 | kept |
+| 2 | 10 770 ms | 10 500–13 500 | kept |
+| 3 | 21 470 ms | 21 000–27 000 | **released** |
+| 4 | 52 541 ms | 42 000–54 000 | new |
+| 5 | 52 617 ms | 52 500–60 000 (clamped) | new |
+| 6 | 59 264 ms | 52 500–60 000 | new |
+| 7 | 60 000 ms | cap | new |
 
-Ved taket er jitteren ensidig — klemmingen kutter alt over 60 000 ms. Ved
-gjenopprettet linje: `feil=0` og 3 s-kadens tilbake på første vellykkede kall.
+At the cap the jitter is one-sided — the clamping cuts everything above
+60 000 ms. When the line is restored: `feil=0` and the 3 s cadence back on the
+first successful call.
 
-**Animasjonsklokka i hvile.** Egen teller på `WM_TIMER` logget sammen med
-nettverkssyklusene:
+**The animation timer at rest.** A separate counter on `WM_TIMER`, logged
+together with the network cycles:
 
-| Tilstand | Tikk |
+| State | Ticks |
 |---|---|
-| Panel åpnet, alt satt seg | 14, deretter flat |
-| Panel åpent + frakoblet | 624 → 1 527 (~35 tikk/s, driver sekundtelleren) |
-| **Panel skjult + frakoblet, 54 s** | **2 124 → 2 124 (null bevegelse)** |
-| Linje gjenopprettet | 2 124, fortsatt flat |
+| Panel opened, everything settled | 14, then flat |
+| Panel open + offline | 624 → 1 527 (~35 ticks/s, drives the seconds counter) |
+| **Panel hidden + offline, 54 s** | **2 124 → 2 124 (zero movement)** |
+| Line restored | 2 124, still flat |
 
-- **Fotavtrykk etter del A:** GDI 30 før panelet åpnes, 31 etter — samme nivå som
-  fase 1. USER 14. Private bytes 3,98–4,04 MB. CPU i hvile 312 ms per 30 s
-  (~1 %), som er hentingen hvert 3. sekund, ikke klokka.
-- **`/W4` rent, x86** (PE-maskintype `0x14C`, verifisert på den bygde exe-en).
+- **Footprint after part A:** GDI 30 before the panel opens, 31 after — same
+  level as phase 1. USER 14. Private bytes 3.98–4.04 MB. CPU at rest 312 ms per
+  30 s (~1 %), which is the fetch every 3 seconds, not the timer.
+- **`/W4` clean, x86** (PE machine type `0x14C`, verified on the built exe).
 
-### Fase 2 del B
+### Phase 2 part B
 
-Enhetstester: **24/24** i `test_b`, pluss del A sine **17/17** — begge kjørt
-mot kode trukket ut av gjeldende `ticker.c`.
+Unit tests: **24/24** in `test_b`, plus part A's **17/17** — both run
+against code extracted from the current `ticker.c`.
 
-| Enhet | Hva som ble verifisert |
+| Unit | What was verified |
 |---|---|
-| `FormatSpan` | alle seks intervaller × representative `vc`, inkludert `vc = 0` og døgnovergang |
-| `FormatIconPrice` | femten prisområder fra $0,85 til $12,5 M gir alle `IconTextWidth() <= 16` |
-| `OverlayLayout` | ren funksjon, ingen overlapp, alt innenfor panelet, hjørner og midtpunkt treffer riktig rad, holder på minimumsstørrelse |
-| `PriceDecimals` | fem etiketter er alltid innbyrdes forskjellige, seks spennklasser |
+| `FormatSpan` | all six intervals × representative `vc`, including `vc = 0` and the day rollover |
+| `FormatIconPrice` | fifteen price ranges from $0.85 to $12.5 M all give `IconTextWidth() <= 16` |
+| `OverlayLayout` | pure function, no overlap, everything inside the panel, corners and midpoint hit the right row, holds at minimum size |
+| `PriceDecimals` | five labels are always mutually distinct, six span classes |
 
-**Kappløpet (`configGen`).** Målt på et instrumentert bygg som logger hver
-forkasting, med 80–100 raske symbolbytter:
+**The race (`configGen`).** Measured on an instrumented build that logs every
+discard, with 80–100 rapid symbol switches:
 
-| Gren | Forkastinger | Eksempel |
+| Branch | Discards | Example |
 |---|---|---|
-| Lys | 30 | `gen=1 naa=3` — to bytter rakk å skje under én henting |
-| Pris | 56 | `gen=1 naa=2 pris=2407.47` — en **ETH**-pris som ankom etter byttet |
+| Candles | 30 | `gen=1 naa=3` — two switches managed to happen during one fetch |
+| Price | 56 | `gen=1 naa=2 pris=2407.47` — an **ETH** price that arrived after the switch |
 
-Prisgrenen måtte tvinges fram i testbygget (tråden henter lys så lenge panelet
-er åpent). Loggen er det konkrete beviset for feilen designet ville sluppet
-gjennom: uten sjekken hadde `lastPrice = 2407.47` blitt skrevet og tray-ikonet
-vist ETH-prisen under et annet symbol.
+The price branch had to be forced in the test build (the thread fetches candles as long as the panel
+is open). The log is the concrete proof of the bug the design would have let
+through: without the check, `lastPrice = 2407.47` would have been written and the tray icon
+would have shown the ETH price under another symbol.
 
-**Vannmerket, målt med `GetPixel` — ikke med øyet:**
+**The watermark, measured with `GetPixel` — not by eye:**
 
-| Farge | Hva | Antall piksler |
+| Color | What | Pixel count |
 |---|---|---|
-| `#0D1117` | ren bakgrunn | 2481 |
-| `#15191F` | vannmerket | 318 |
+| `#0D1117` | plain background | 2481 |
+| `#15191F` | the watermark | 318 |
 
-Nøyaktig `CLR_WATERMARK`. 8 nivåers differanse = 3,1 % av full skala.
+Exactly `CLR_WATERMARK`. A difference of 8 levels = 3.1 % of full scale.
 
-**Opptegning, `BitBlt` mot `FillRect`.** Vekselvis annethvert bilde — samme
-data, samme vindu, samme utsnitt, 306 par:
+**Painting, `BitBlt` vs. `FillRect`.** Alternating every other frame — same
+data, same window, same view, 306 pairs:
 
-| | Median | Snitt |
+| | Median | Mean |
 |---|---|---|
-| `BitBlt` (med vannmerke) | 0,341 ms | 0,355 ms |
-| `FillRect` (uten) | 0,312 ms | 0,332 ms |
+| `BitBlt` (with watermark) | 0.341 ms | 0.355 ms |
+| `FillRect` (without) | 0.312 ms | 0.332 ms |
 
-Parvis differanse **+0,0226 ms**, 95 % KI `[0,0062, 0,0390]`, t = 2,70.
+Paired difference **+0.0226 ms**, 95 % CI `[0,0062, 0,0390]`, t = 2.70.
 
-> Designet påsto at den cachede `BitBlt` «ikke er dyrere enn dagens
-> `FillRect`». Det stemmer ikke — den er målbart dyrere. Differansen er
-> reell, men liten: 0,023 ms av en opptegning på 0,34 ms, mot 0,05–0,30 ms
-> for å tegne teksten på nytt hvert bilde. Cachen er fortsatt riktig valg;
-> påstanden var for sterk.
+> The design claimed that the cached `BitBlt` "is no more expensive than the current
+> `FillRect`". That is not true — it is measurably more expensive. The difference is
+> real but small: 0.023 ms of a 0.34 ms repaint, versus 0.05–0.30 ms
+> to redraw the text every frame. The cache is still the right choice;
+> the claim was too strong.
 
-**Håndtak.** GDI 33 gjennom 30 overlay-åpninger og 20 resizer; 35 etter at
-vannmerket er bygget (+1 `HBITMAP`, +1 `HFONT`, som designet forutsa), og
-deretter flat gjennom 16 symbolbytter. USER 14 i ro — 15 mens
-animasjonsklokka går, fordi **en timer er et USER-objekt**.
+**Handles.** GDI 33 through 30 overlay openings and 20 resizes; 35 after
+the watermark is built (+1 `HBITMAP`, +1 `HFONT`, as the design predicted), and
+then flat through 16 symbol switches. USER 14 at rest — 15 while
+the animation timer runs, because **a timer is a USER object**.
 
-**Registret, tur-retur på ekte kjøring.** Valgt SOL + 520×380, avsluttet,
-startet på nytt: tray-ikonet leste `97.5` **før panelet ble åpnet** — altså
-gikk første henting til SOL. Panelet åpnet på 520×380 med vannmerket
+**The registry, round trip on a real run.** Selected SOL + 520×380, quit,
+restarted: the tray icon read `97.5` **before the panel was opened** — so
+the first fetch went to SOL. The panel opened at 520×380 with the watermark
 `SOLUSDT` / `1m`.
 
-| Feilsti | Resultat |
+| Error path | Result |
 |---|---|
-| `SymbolIndex=99`, `IntervalIndex=0x7FFFFFFF` | BTC/USDT 1m, ingen krasj |
-| `SymbolIndex` som `REG_SZ` | BTC/USDT 1m, ingen krasj |
-| Ingen nøkkel | BTC/USDT 1m, ingen krasj |
+| `SymbolIndex=99`, `IntervalIndex=0x7FFFFFFF` | BTC/USDT 1m, no crash |
+| `SymbolIndex` as `REG_SZ` | BTC/USDT 1m, no crash |
+| No key | BTC/USDT 1m, no crash |
 
-### Fase 2 del C
+### Phase 2 part C
 
-Enhetstester: **55/55** totalt (17 del A + 24 del B + 14 del C), alle kjørt mot
-kode trukket ut av gjeldende `ticker.c`.
+Unit tests: **55/55** in total (17 part A + 24 part B + 14 part C), all run against
+code extracted from the current `ticker.c`.
 
-**Hvorfor snappet er en kvart piksel og ikke et fast tall.** Målt i harnessen:
+**Why the snap is a quarter pixel and not a fixed number.** Measured in the harness:
 
-| Terskel | Panorering 300 lys | SOL-spenn (1,5 $) | BTC-spenn (3000 $) |
+| Threshold | Panning 300 candles | SOL span ($1.5) | BTC span ($3000) |
 |---|---|---|---|
-| Fast 0,01 lys | 46 tikk (736 ms) | — | — |
-| Fast 0,5 dollar | — | 5 tikk | 39 tikk |
-| **Kvart piksel** | **33 tikk (528 ms)** | **32 tikk** | **32 tikk** |
+| Fixed 0.01 candle | 46 ticks (736 ms) | — | — |
+| Fixed 0.5 dollar | — | 5 ticks | 39 ticks |
+| **Quarter pixel** | **33 ticks (528 ms)** | **32 ticks** | **32 ticks** |
 
-Den faste terskelen i pris er ikke bare treg, den er ubrukelig: 0,5 dollar er
-en tredel av SOLs hele spenn og under en tusendel av BTCs. `tau` er 70, ikke
-110 som planen foreslo — 110 ga en hale på over et sekund.
+The fixed price threshold is not just slow, it is useless: 0.5 dollar is
+a third of SOL's whole span and under a thousandth of BTC's. `tau` is 70, not
+110 as the plan proposed — 110 gave a tail of over a second.
 
-**Crosshair mot tegning, midt i animasjonen.** Instrumentert bygg som logger
-hvilket lys `HitCandle` mente, og hvilket tegneløkkas egen formel gir for
-samme X:
-
-| | |
-|---|---|
-| Samsvar | **163 av 163, 0 avvik** |
-| Herav bilder midt i animasjonen | **43** (`dCount` 9,912 → 9,864 → … → 8,000) |
-
-**Opptegning under animasjon**, drevet med hjul-panorering:
+**Crosshair vs. drawing, mid-animation.** Instrumented build that logs
+which candle `HitCandle` picked, and which one the draw loop's own formula gives for
+the same X:
 
 | | |
 |---|---|
-| Median | 0,462 ms |
-| p95 | 0,637 ms |
-| Maks | 0,864 ms |
-| **Bilder over 1,3 ms** | **0 av 581** |
-| Bilder med brøkdels-`dispStart` | 415 av 581 |
+| Agreement | **163 of 163, 0 mismatches** |
+| Of which frames mid-animation | **43** (`dCount` 9.912 → 9.864 → … → 8.000) |
 
-**Siste-pris-indikatoren**, målt med og uten blokka annethvert bilde,
-351 par:
+**Painting during animation**, driven by wheel panning:
 
-| | Median | Snitt |
+| | |
+|---|---|
+| Median | 0.462 ms |
+| p95 | 0.637 ms |
+| Max | 0.864 ms |
+| **Frames over 1.3 ms** | **0 of 581** |
+| Frames with fractional `dispStart` | 415 of 581 |
+
+**The last-price indicator**, measured with and without the block every other frame,
+351 pairs:
+
+| | Median | Mean |
 |---|---|---|
-| Med | 0,2713 ms | 0,2828 ms |
-| Uten | 0,2489 ms | 0,2628 ms |
+| With | 0.2713 ms | 0.2828 ms |
+| Without | 0.2489 ms | 0.2628 ms |
 
-Parvis **+0,0195 ms**, 95 % KI `[0,0134, 0,0255]`, t = 6,28. Spesifikasjonen
-anslo «under 0,001 ms» — det faktiske tallet er rundt tjue ganger høyere, og
-det meste er `DrawTextW` for stempelteksten. Fortsatt uproblematisk.
+Paired **+0.0195 ms**, 95 % CI `[0,0134, 0,0255]`, t = 6.28. The specification
+estimated "under 0.001 ms" — the actual number is about twenty times higher, and
+most of it is `DrawTextW` for the stamp text. Still unproblematic.
 
-Stempelet målt med `GetPixel`: 16 px høyt i eksakt `CLR_DOWN` `#FF4966`,
-teksten med kjerne i eksakt `CLR_BG` `#0D1117` og 13 % dekning.
+The stamp measured with `GetPixel`: 16 px tall in exact `CLR_DOWN` `#FF4966`,
+the text with its core in exact `CLR_BG` `#0D1117` and 13 % coverage.
 
-**Symbolbytte og Y-aksen.** Bytte SOL → BNB: `candleCount` går 302 → 0 → 300,
-og **første bilde med data har allerede riktig akse** (713,46–714,77). Ingen
-mellomverdier.
+**Symbol switch and the Y axis.** Switch SOL → BNB: `candleCount` goes 302 → 0 → 300,
+and **the first frame with data already has the right axis** (713.46–714.77). No
+intermediate values.
 
-**Zoom-ankring etter easing:** samme lys (indeks 297) under pekeren før og
-etter fem hakk pluss settling.
+**Zoom anchoring after easing:** the same candle (index 297) under the pointer before and
+after five notches plus settling.
 
-**Håndtak:** GDI **35**, USER 14. Del C legger ikke til GDI-objekter; C1 gjorde
-det (to stiplede penner, 33 → 35), og vannmerkefonten bygges om ved hver
-størrelsesendring uten å lekke — verifisert flat gjennom 20 resizer.
+**Handles:** GDI **35**, USER 14. Part C adds no GDI objects; C1 did
+(two dashed pens, 33 → 35), and the watermark font is rebuilt on every
+size change without leaking — verified flat through 20 resizes.
 
-### Fase 3 — nativt vindu
+### Phase 3 — native window
 
-Alt målt på et ekte vindu på 3840×1600:
+All measured on a real window at 3840×1600:
 
-| Handling | Resultat |
+| Action | Result |
 |---|---|
-| Første åpning, tomt register | sentrert `1730,626` 380×300 |
+| First open, empty registry | centered `1730,626` 380×300 |
 | `SC_MAXIMIZE` | `-8,-8` 3856×1568, `IsZoomed` |
-| `SC_RESTORE` | tilbake til `1730,626` 380×300 |
-| `SC_MINIMIZE` + tray-klikk | minimert, så gjenopprettet |
-| `Ctrl`+`0` (**ekte** tastetrykk) | `120,90` 700×520 → `1730,626` 380×300 |
-| Tray-menyens «Standardvisning» | samme |
-| `WM_CLOSE` | skjult; `X=450 Y=320 W=560 H=420` i registret |
-| Omstart | gjenåpnet på `450,320` 560×420 |
-| Avslutning via tray-menyen | 0 etterlatte vinduer fra gammel PID |
-| Ekte `ESC` | skjuler vinduet |
-| `GetGUIThreadInfo` | `hwndActive == hwndFocus ==` panelet — feil #2 er ikke tilbake |
+| `SC_RESTORE` | back to `1730,626` 380×300 |
+| `SC_MINIMIZE` + tray click | minimized, then restored |
+| `Ctrl`+`0` (**real** keystroke) | `120,90` 700×520 → `1730,626` 380×300 |
+| The tray menu's "Default view" | same |
+| `WM_CLOSE` | hidden; `X=450 Y=320 W=560 H=420` in the registry |
+| Restart | reopened at `450,320` 560×420 |
+| Quit via the tray menu | 0 leftover windows from the old PID |
+| Real `ESC` | hides the window |
+| `GetGUIThreadInfo` | `hwndActive == hwndFocus ==` the panel — bug #2 is not back |
 
-**Håndtak: GDI 35 → 29.** De seks bufrede chrome-objektene er borte. USER 14.
+**Handles: GDI 35 → 29.** The six cached chrome objects are gone. USER 14.
 
-> Ytelsen i `WM_PAINT` er uendret — ingenting er lagt til i tegneløkka, og
-> `DrawChrome` er fjernet fra den. Spesifikasjonens «0,000 ms» er riktig for
-> *denne* endringen, i motsetning til anslagene for siste-pris-linja og
+> Performance in `WM_PAINT` is unchanged — nothing is added to the draw loop, and
+> `DrawChrome` is removed from it. The specification's "0.000 ms" is right for
+> *this* change, unlike the estimates for the last-price line and
 > `BitBlt`.
 
 ---
 
-### Fase 4 — rammeløst vindu med egne kontrollknapper
+### Phase 4 — borderless window with its own control buttons
 
-**Knappetegningen** (`QueryPerformanceCounter` rundt *kun* `DrawButtons`, i et
-instrumentert bygg med eget mutexnavn og egen vindusklasse — fallgruve 10).
-Over 1500 opptegninger per runde, drevet av kontinuerlig zoom:
+**The button drawing** (`QueryPerformanceCounter` around *only* `DrawButtons`, in an
+instrumented build with its own mutex name and its own window class — pitfall 10).
+Over 1500 repaints per round, driven by continuous zoom:
 
-| Runde | Min | Median | Snitt | Maks |
+| Round | Min | Median | Mean | Max |
 |---|---|---|---|---|
-| Peker vekk (99 %-tilfellet) | 0,0126 ms | **0,0153 ms** | 0,0158 ms | 0,1014 ms |
-| Peker på en knapp (`FillRect` med) | 0,0119 ms | **0,0139 ms** | 0,0143 ms | 0,0873 ms |
+| Pointer away (the 99 % case) | 0.0126 ms | **0.0153 ms** | 0.0158 ms | 0.1014 ms |
+| Pointer on a button (`FillRect` included) | 0.0119 ms | **0.0139 ms** | 0.0143 ms | 0.0873 ms |
 
-QPC-parets egen kostnad ble målt til under 0,00001 ms (raskeste av 1000 tomme
-par) og er altså ikke en faktor.
+The QPC pair's own cost was measured at under 0.00001 ms (fastest of 1000 empty
+pairs) and is therefore not a factor.
 
-> **Mandatets budsjett var < 0,003 ms. Det holdes ikke — målt er ~0,015 ms,
-> altså fem ganger over.** 3 µs tilsvarer to til fire GDI-kall på en minne-DC;
-> de fire knappene er rundt ti, pluss en `FillRect` ved hover. Tallet står som
-> det er i stedet for å rundes bort.
+> **The mandate's budget was < 0.003 ms. It is not met — measured is ~0.015 ms,
+> that is five times over.** 3 µs corresponds to two to four GDI calls on a memory DC;
+> the four buttons are about ten, plus a `FillRect` on hover. The number stands as
+> it is instead of being rounded away.
 >
-> I sammenheng: en hel opptegning ved 1280×720 tar **0,853 ms** (median),
-> så knappene er **1,8 %** av den. Reserveveien — forhåndstegnet rad som
-> `BitBlt` — står under «Avviste forslag» med begrunnelse.
+> In context: a full repaint at 1280×720 takes **0.853 ms** (median),
+> so the buttons are **1.8 %** of it. The fallback — a pre-drawn row as
+> `BitBlt` — is under "Rejected proposals" with the reasoning.
 
-**Hele `PaintPopup` ved 1280×720**, samme metode som tabellen over:
+**The whole `PaintPopup` at 1280×720**, same method as the table above:
 
-| | Min | Median | Snitt | Maks |
+| | Min | Median | Mean | Max |
 |---|---|---|---|---|
-| `PaintPopup`, 1280×720 | 0,5367 ms | 0,8527 ms | 0,8988 ms | 5,9505 ms |
+| `PaintPopup`, 1280×720 | 0.5367 ms | 0.8527 ms | 0.8988 ms | 5.9505 ms |
 
-Ikke sammenliknbart med de 1,255 ms lenger oppe: den målingen var på et
-380×300-panel. Flaten er her 8× større, og opptegningen er likevel raskere,
-fordi utsnittet er det samme antallet lys fordelt over flere piksler.
+Not comparable with the 1.255 ms further up: that measurement was on a
+380×300 panel. The surface here is 8× larger, and the repaint is still faster,
+because the view is the same number of candles spread over more pixels.
 
-**Håndtak: GDI 27 → 31** for de fire nye objektene (tre penner og en rød
-lukkebakgrunn; hover-bakgrunnen gjenbruker `brBox`). Målt på samme bygg før og
-etter, ikke antatt. Loggens tidligere 29 gjaldt bygget med OS-ramme —
-rammefjerningen tok den 29 → 27. USER 14, uendret.
+**Handles: GDI 27 → 31** for the four new objects (three pens and a red
+close background; the hover background reuses `brBox`). Measured on the same build before and
+after, not assumed. The log's earlier 29 applied to the build with the OS frame —
+removing the frame took it 29 → 27. USER 14, unchanged.
 
-**Stresstest:** 2 × 20 s, ~3,1 millioner operasjoner per runde, med ~79 000
-ekte musejiggler *på* krysset, så hover-stien med `FillRect` var med i lasten.
-Ingen vranglås. Håndtak 31/14 før og etter begge rundene; se fallgruve 27 om
-hvorfor de står på 34/15 *under* kjøring.
+**Stress test:** 2 × 20 s, ~3.1 million operations per round, with ~79 000
+real mouse jiggles *on* the close cross, so the hover path with `FillRect` was part of the load.
+No deadlock. Handles 31/14 before and after both rounds; see pitfall 27 on
+why they sit at 34/15 *while* running.
 
-**Firkantede hjørner:** alle fire 8×8-blokker i hjørnene er ren
-`#0D1117`, lest med `CopyFromScreen` — DWM-runding er en komposittoreffekt
-og finnes *ikke* i `PrintWindow`-utdata, så den må leses fra skjermen.
-`DWMWCP_DONOTROUND` virker altså.
+**Square corners:** all four 8×8 blocks in the corners are pure
+`#0D1117`, read with `CopyFromScreen` — DWM rounding is a compositor effect
+and does *not* exist in `PrintWindow` output, so it must be read from the screen.
+So `DWMWCP_DONOTROUND` works.
 
-> Første måling viste lyse piksler i de to venstre hjørnene. Det var ikke
-> avrunding — en kvartsirkel rammer alle fire likt — men et annet vindu som
-> lå oppe over panelet. Panelet er ikke `WS_EX_TOPMOST`. `BringWindowToTop`
-> først, så måle.
+> The first measurement showed light pixels in the two left corners. That was not
+> rounding — a quarter circle hits all four equally — but another window that
+> lay on top of the panel. The panel is not `WS_EX_TOPMOST`. `BringWindowToTop`
+> first, then measure.
 
-**Hover slukkes under panorering.** Chart-flaten holder museknappen via
-`SetCapture`, så en dra-bevegelse som passerer over headeren ville ellers
-tent krysset rødt midt i panoreringen — uten at det gikk an å klikke det.
-Målt `#0D1117` under draget og `#C02A3E` så snart knappen slippes.
+**Hover goes off during panning.** The chart surface holds the mouse button via
+`SetCapture`, so a drag that passes over the header would otherwise
+light the close cross red mid-pan — without it being possible to click it.
+Measured `#0D1117` during the drag and `#C02A3E` as soon as the button is released.
 
-**Treffsoner:** 22/22, både normalt og maksimert, spørt direkte med
-`SendMessage(WM_NCHITTEST)`. Grensene er pikselnøyaktige: `y=5` gir `HTTOP`
-og `y=6` gir `HTCLIENT` — knapperaden begynner nøyaktig der `RESIZE_BORDER`
-slutter.
+**Hit zones:** 22/22, both normal and maximized, queried directly with
+`SendMessage(WM_NCHITTEST)`. The boundaries are pixel-exact: `y=5` gives `HTTOP`
+and `y=6` gives `HTCLIENT` — the button row begins exactly where `RESIZE_BORDER`
+ends.
 
 ---
 
-### Fase 5 — glyf, inkrementell hover og pan-cursor
+### Phase 5 — glyph, incremental hover and pan cursor
 
-**Hover-opptegning**, malt i et instrumentert bygg som logger hvilken gren i
-`PaintPopup` som ble tatt, og `rcPaint` med:
+**Hover painting**, measured in an instrumented build that logs which branch in
+`PaintPopup` was taken, and `rcPaint` too:
 
-| Gren | `rcPaint` | Min | Median | Snitt | Maks |
+| Branch | `rcPaint` | Min | Median | Mean | Max |
 |---|---|---|---|---|---|
-| `STRIP` (kun hover) | `1162,6,1272,24` | 0,0376 ms | **0,0616 ms** | 0,0654 ms | 0,1544 ms |
-| `full` (hover under animasjon) | `0,0,1280,720` | 0,6487 ms | 0,9787 ms | 1,0639 ms | 6,3758 ms |
+| `STRIP` (hover only) | `1162,6,1272,24` | 0.0376 ms | **0.0616 ms** | 0.0654 ms | 0.1544 ms |
+| `full` (hover during animation) | `0,0,1280,720` | 0.6487 ms | 0.9787 ms | 1.0639 ms | 6.3758 ms |
 
-`rcPaint` er **nøyaktig** knapperaden ved 1280 bred: `W−118, 6, W−8, 24`.
-Hover-opptegningen er altså **16× billigere** enn før. Den andre raden er
-beviset på at animasjonsunionen virker: med klokka i gang blir `rcPaint` hele
-klientflaten, og vi faller til den trege stien av oss selv.
+`rcPaint` is **exactly** the button row at 1280 wide: `W−118, 6, W−8, 24`.
+Hover painting is thus **16× cheaper** than before. The second row is
+the proof that the animation union works: with the timer running, `rcPaint` becomes the whole
+client area, and we fall to the slow path on our own.
 
-**Hurtigstien gir piksel-identisk resultat, i begge vindustilstander.** Hele
-knapperaden (110×18 = 1980 piksler) lest etter en tvunget full opptegning,
-deretter 24–32 hurtigsti-opptegninger, så lest igjen: **0 avvik av 1980** både
-ved 1280×720 (stripe `1162..1272`) og maksimert ved 3840×1552 (stripe
-`3722..3832`, der vannmerkebitmapen nettopp er bygget om). En hurtigsti som
-tegner *nesten* likt er verre enn ingen.
+**The fast path gives a pixel-identical result, in both window states.** The whole
+button row (110×18 = 1980 pixels) read after a forced full repaint,
+then 24–32 fast-path repaints, then read again: **0 mismatches of 1980** both
+at 1280×720 (strip `1162..1272`) and maximized at 3840×1552 (strip
+`3722..3832`, where the watermark bitmap has just been rebuilt). A fast path that
+draws *almost* the same is worse than none.
 
-Og hurtigstien tegner riktig glyf: hover på minimer-knappen mens vinduet er
-maksimert ga `❐` i maksimer-knappen, ikke `□`, med minimer lyst opp i
+And the fast path draws the right glyph: hover on the minimize button while the window is
+maximized gave `❐` in the maximize button, not `□`, with minimize lit up in
 `#161D27`.
 
-**Glyfen**, som pikselrutenett rundt knappesenteret `(W−49, 15)`:
+**The glyph**, as a pixel grid around the button center `(W−49, 15)`:
 
 ```
      normal                   maksimert
@@ -1265,1634 +1294,1678 @@ maksimert ga `❐` i maksimer-knappen, ikke `□`, med minimer lyst opp i
    .............           .............
 ```
 
-> Rutenettet over er etter fase 6: to 7×7-rektangler forskjøvet **2 px**.
-> Fase 5 tegnet to 6×6 forskjøvet 3 px.
+> The grid above is after phase 6: two 7×7 rectangles offset by **2 px**.
+> Phase 5 drew two 6×6 offset by 3 px.
 
-Ingen streker gjennom det fremre rektangelet: det bakre tegnes som en åpen
-polylinje, ikke som et helt rektangel.
+No lines through the front rectangle: the back one is drawn as an open
+polyline, not as a full rectangle.
 
-Verifisert både med `SC_MAXIMIZE`/`SC_RESTORE` og med ekte museklikk.
+Verified both with `SC_MAXIMIZE`/`SC_RESTORE` and with real mouse clicks.
 
-**Pekeren**, malt med `GetCursorInfo`, 11/11: `IDC_ARROW` i hvile,
-`IDC_SIZEALL` midt i draget, `IDC_ARROW` etter slipp, og alle seks
-skaleringspekere i kantene urort.
+**The pointer**, measured with `GetCursorInfo`, 11/11: `IDC_ARROW` at rest,
+`IDC_SIZEALL` mid-drag, `IDC_ARROW` after release, and all six
+resize pointers at the edges untouched.
 
-**Budsjetter.** GDI 31 / USER 14 i hvile, uendret — også etter en 20 s
-stresstest med ~3,2 millioner operasjoner og ~79 000 ekte musejiggler *på* en
-knapp, som er hurtigstiens tyngste last. Private bytes 3,53 MB, exe 164 KB,
-`/W4` rent, x86. Alt uendret fra før omgangen.
+**Budgets.** GDI 31 / USER 14 at rest, unchanged — also after a 20 s
+stress test with ~3.2 million operations and ~79 000 real mouse jiggles *on* a
+button, which is the fast path's heaviest load. Private bytes 3.53 MB, exe 164 KB,
+`/W4` clean, x86. All unchanged from before the round.
 
-**Regresjon:** 28/28 enhetstester, 22/22 treffsoner, fire knappeklikk med ekte
-mus, 11/11 hover-farger, panorering, zoom, crosshair, overlay, ESC, tray,
-skalering — alle grønne.
+**Regression:** 28/28 unit tests, 22/22 hit zones, four button clicks with a real
+mouse, 11/11 hover colors, panning, zoom, crosshair, overlay, ESC, tray,
+resizing — all green.
 
-### Fase 6 — klipping av grafen og glyfpolering
+### Phase 6 — clipping the chart and polishing the glyph
 
-Mandatet kom fra et skjermbilde i maksimert tilstand: lys som blør inn i
-Y-aksemargen eller headeren, en utydelig `❐`, og krav om minst 32 px
-klaring over grafen.
+The mandate came from a screenshot in the maximized state: candles bleeding into
+the Y axis margin or the header, an unclear `❐`, and a requirement of at least 32 px
+clearance above the chart.
 
-**Blødningen var ekte, men 1 px, og bare mens grafen beveger seg.** Et
-stillbilde med `PrintWindow` ved 3840×1552 viste ingenting. Den ble funnet
-med en stressprobe: postet `WM_MOUSEWHEEL` (panorering og Ctrl-zoom), fanget
-med `PrintWindow` 15/30/45/90 ms etter hvert hakk, altså midt i easingen der
-`dStart` er brøk og halve lys ligger i kantene. Hvert bilde skannes for
-eksakt `CLR_UP`/`CLR_DOWN` i fem regioner utenfor `rcChart`: kolonnen
-`x = right`, aksemargen `x > right` (utenom stempelradene), båndet
-`y ∈ [31, 44)`, alt under `bottom` og venstre marg.
+**The bleed was real, but 1 px, and only while the chart is moving.** A
+still frame with `PrintWindow` at 3840×1552 showed nothing. It was found
+with a stress probe: posted `WM_MOUSEWHEEL` (panning and Ctrl zoom), captured
+with `PrintWindow` 15/30/45/90 ms after each notch, that is mid-easing where
+`dStart` is fractional and half candles lie at the edges. Each frame is scanned for
+exact `CLR_UP`/`CLR_DOWN` in five regions outside `rcChart`: the column
+`x = right`, the axis margin `x > right` (excluding the stamp rows), the band
+`y ∈ [31, 44)`, everything below `bottom`, and the left margin.
 
-| Bygg | Tilstand | Bilder | Bilder med lyspiksler utenfor | Piksler |
+| Build | State | Frames | Frames with candle pixels outside | Pixels |
 |---|---|---|---|---|
-| før | 3840×1552 | 240 | **21** — alle i kolonnen `x = right` | 1819 |
-| etter | 3840×1552 | 240 + 480 | **0** | 0 |
-| etter | 1030×581 | 480 | **0** | 0 |
+| before | 3840×1552 | 240 | **21** — all in the column `x = right` | 1819 |
+| after | 3840×1552 | 240 + 480 | **0** | 0 |
+| after | 1030×581 | 480 | **0** | 0 |
 
-Årsaken var `IntersectClipRect(..., right + 1, bottom + 1)`. Kolonnen
-`x = right` hører til aksemargen — rutenettet slutter på `right − 1` — men
-klippet slapp lyskropper gjennom der. Topp- og bunnbåndet var aldri berørt.
+The cause was `IntersectClipRect(..., right + 1, bottom + 1)`. The column
+`x = right` belongs to the axis margin — the grid ends at `right − 1` — but
+the clip let candle bodies through there. The top and bottom bands were never affected.
 
-**Endret i `DrawChart`:**
-- `RECT rcChart = { left, top, right, bottom + 1 }` settes med
-  `IntersectClipRect` **før rutenettet**, ikke bare før lysene.
-- Høyre kant er eksklusiv. Bunnen er **inklusiv** med vilje: rutenettlinje
-  `i = 4` og veken til laveste pris ligger begge på `y = bottom`, og et
-  `[top, bottom)`-klipp ville visket ut den nederste linja.
-- Prisetikettene er skilt ut i en egen løkke etter `SelectClipRgn(NULL)`.
-  Lå de igjen i rutenettløkka, ville klippet tatt dem.
+**Changed in `DrawChart`:**
+- `RECT rcChart = { left, top, right, bottom + 1 }` is set with
+  `IntersectClipRect` **before the grid**, not just before the candles.
+- The right edge is exclusive. The bottom is **inclusive** on purpose: grid line
+  `i = 4` and the wick of the lowest price both lie at `y = bottom`, and a
+  `[top, bottom)` clip would have erased the bottom line.
+- The price labels are split out into their own loop after `SelectClipRgn(NULL)`.
+  Had they stayed in the grid loop, the clip would have cut them.
 
-**Endret i `DrawButtons`:** knappeflaten fylles **alltid** før vektorene —
-`brBg` i hvile, `brBox`/`brClose` på hover. Pennene var allerede kosmetiske
-1 px `PS_SOLID` (`CreatePen(PS_SOLID, 1, …)`) og er urørt. Gjenopprettings-
-glyfen er to 7×7-rektangler forskjøvet 2 px innenfor samme 9×9-fotavtrykk,
-fortsatt med det bakre som åpen polylinje. Se rutenettet under Fase 5.
+**Changed in `DrawButtons`:** the button area is **always** filled before the vectors —
+`brBg` at rest, `brBox`/`brClose` on hover. The pens were already cosmetic
+1 px `PS_SOLID` (`CreatePen(PS_SOLID, 1, …)`) and are untouched. The restore
+glyph is two 7×7 rectangles offset by 2 px within the same 9×9 footprint,
+still with the back one as an open polyline. See the grid under Phase 5.
 
-**Topp-klaring:** `rcChart.top = HEADER_H = 44` oppfylte allerede kravet.
-Det er nå sikret ved kompilering: `CHART_TOP_MIN 32` og
+**Top clearance:** `rcChart.top = HEADER_H = 44` already met the requirement.
+It is now enforced at compile time: `CHART_TOP_MIN 32` and
 `#if HEADER_H < CHART_TOP_MIN #error`.
 
-**Hurtigstien er fortsatt piksel-identisk** etter at `FillRect` kom inn i den
-delte `DrawButtons`: knapperaden lest fra skjermen etter en tvunget full
-opptegning, så etter 24 hover-inn/hover-ut: **0 avvik av 1980** i begge
-tilstander, med hover faktisk opplyst 4/4 maksimert. Gjenopprettet lyste den
-bare 1/4 og 3/4 — brukeren var aktiv ved maskinen under målingen og flyttet
-både peker og vindu, så den raden er svakere bevis enn den maksimerte.
+**The fast path is still pixel-identical** after `FillRect` came into the
+shared `DrawButtons`: the button row read from the screen after a forced full
+repaint, then after 24 hover-in/hover-out: **0 mismatches of 1980** in both
+states, with hover actually lit 4/4 maximized. Restored, it lit
+only 1/4 and 3/4 — the user was active at the machine during the measurement and moved
+both pointer and window, so that row is weaker evidence than the maximized one.
 
-`/W4` rent, x86, 168 KB exe.
+`/W4` clean, x86, 168 KB exe.
 
-### Fase 7 — målt header-layout og minstestørrelse 400×250
+### Phase 7 — measured header layout and minimum size 400×250
 
-**Feilen, målt før endringen.** Ved 300×200 smeltet pris og prosent sammen
-til én blekkflate: `$75534.98-0.27%  (5t 1m)`. De delte ett rektangel,
-venstre- og høyrestilt, og `DrawTextW` klipper mot rektangelet, ikke mot
-naboteksten. Blekkklynger i raden y 6–27, med sammenslåing under 8 px:
-`[11-173]` der det skulle vært to.
+**The bug, measured before the change.** At 300×200, price and percentage merged
+into one patch of ink: `$75534.98-0.27%  (5t 1m)`. They shared one rectangle,
+left- and right-aligned, and `DrawTextW` clips against the rectangle, not against
+the neighboring text. Ink clusters in the row y 6–27, with merging under 8 px:
+`[11-173]` where there should have been two.
 
-**Endret i `DrawChart`.** Hver headertekst måles med
-`GetTextExtentPoint32W` på den ferdig formaterte strengen i sin egen font.
-Kollisjonsregelen er den rene funksjonen
-`HeaderFits(rightBound, leftBound) = rightBound < leftBound − HDR_GAP`, med
+**Changed in `DrawChart`.** Each header text is measured with
+`GetTextExtentPoint32W` on the fully formatted string in its own font.
+The collision rule is the pure function
+`HeaderFits(rightBound, leftBound) = rightBound < leftBound − HDR_GAP`, with
 `HDR_GAP` = 8.
-- **Rad 1:** prisen står til venstre, med høyre grense `PAD_L + bredde`.
-  Prosenten står til høyre og slutter ved `ButtonStrip().left − 8`. Den
-  prøves i tre trinn: hel (`−0,27 %  (5t 1m)`), kort (`−0,27 %`) og skjult.
-  Den klippes aldri midt i et tall. Den korte formen måles bare når den hele
-  ikke får plass. Prisens rektangel slutter også ved knapperaden.
-- **Rad 2:** symbollinja begrenses mot prisaksens øverste etikett
-  (`right + 4 − 8`), ikke mot knappene, som slutter på y = 24. Den får
-  `DT_END_ELLIPSIS` når den målte bredden ikke får plass.
-- `BTN_STRIP_W` er fjernet. Knapperadens kant leses fra `ButtonStrip`.
+- **Row 1:** the price sits on the left, with right bound `PAD_L + bredde`.
+  The percentage sits on the right and ends at `ButtonStrip().left − 8`. It
+  is tried in three steps: full (`−0,27 %  (5t 1m)`), short (`−0,27 %`) and hidden.
+  It is never cut in the middle of a number. The short form is only measured when the full one
+  does not fit. The price's rectangle also ends at the button row.
+- **Row 2:** the symbol line is bounded by the price axis's top label
+  (`right + 4 − 8`), not by the buttons, which end at y = 24. It gets
+  `DT_END_ELLIPSIS` when the measured width does not fit.
+- `BTN_STRIP_W` is removed. The button row's edge is read from `ButtonStrip`.
 
 **`WM_GETMINMAXINFO`:** `ptMinTrackSize` =
-`MulDiv(400|250, GetDpiForWindow, 96)`. `SetWindowPos` håndhever den også:
-et forsøk på 300×200 ga **400×250**. Et lagret register med mindre størrelse
-klemmes derfor av seg selv.
+`MulDiv(400|250, GetDpiForWindow, 96)`. `SetWindowPos` enforces it too:
+an attempt at 300×200 gave **400×250**. A saved registry with a smaller size
+is therefore clamped on its own.
 
-**Verifisert i testbygg** (fallgruve 10: eget mutexnavn, egne klasser, egen
-registernøkkel), kjørt av `PrintWindow`:
+**Verified in a test build** (pitfall 10: its own mutex name, its own classes, its own
+registry key), driven by `PrintWindow`:
 
-| Størrelse | Rad 1, blekkklynger | Prosent | Klippestress |
+| Size | Row 1, ink clusters | Percentage | Clip stress |
 |---|---|---|---|
-| 1280×720 | pris `11-103`, prosent `1093-1153`, knapper fra `1171` | hel | 0/80 |
-| 3840×1552 | pris `11-102`, prosent `3634-3713`, knapper fra `3731` | hel | 0/80 |
-| 400×250 | pris `11-102`, prosent `218-273`, knapper fra `291` | hel | 0/80 |
-| 300×200 forsøkt | klemt til 400×250 | hel | 0/80 |
+| 1280×720 | price `11-103`, percentage `1093-1153`, buttons from `1171` | full | 0/80 |
+| 3840×1552 | price `11-102`, percentage `3634-3713`, buttons from `3731` | full | 0/80 |
+| 400×250 | price `11-102`, percentage `218-273`, buttons from `291` | full | 0/80 |
+| 300×200 attempted | clamped to 400×250 | full | 0/80 |
 
-Trinnene kan ikke nås over 400 px. De ble derfor kjørt i et eget bygg med
+The steps cannot be reached above 400 px. They were therefore run in a separate build with
 `POPUP_MIN_W` 200:
 
-| Bredde | Pris | Prosent | Luft til neste |
+| Width | Price | Percentage | Gap to next |
 |---|---|---|---|
-| 340 | `11-100` | hel `153-213` | 52 / 17 px |
-| 310 | `11-100` | hel `117-183` | 16 / 17 px |
-| 280 | `11-103` | **kort** `120-153` | 16 / 17 px |
-| 250 | `11-103` | **skjult** | 37 px til knappene |
+| 340 | `11-100` | full `153-213` | 52 / 17 px |
+| 310 | `11-100` | full `117-183` | 16 / 17 px |
+| 280 | `11-103` | **short** `120-153` | 16 / 17 px |
+| 250 | `11-103` | **hidden** | 37 px to the buttons |
 
-**Opptegning.** QPC rundt `DrawChart` og hele den trege stien, og rundt
-header-blokka alene. Samme markører i gammel og ny kode. To gjennomløp, med
-gammel og ny vekselvis, drevet kun av hjulhakk uten samtidig skjermfangst.
-Tallene er fra andre gjennomløp:
+**Painting.** QPC around `DrawChart` and the whole slow path, and around
+the header block alone. The same markers in old and new code. Two passes, with
+old and new alternating, driven only by wheel notches with no simultaneous screen capture.
+The numbers are from the second pass:
 
-| | Header, median | Hele bildet, median | p95 |
+| | Header, median | Whole frame, median | p95 |
 |---|---|---|---|
-| før, 1280×720 | 124 µs | 0,820 ms | 1,275 ms |
-| **etter, 1280×720** | **192 µs** | **0,871 ms** | 1,404 ms |
-| før, 3840×1552 | 129 µs | 9,281 ms | 10,667 ms |
-| **etter, 3840×1552** | **221 µs** | **9,988 ms** | 10,800 ms |
-| før, 400×250 | 115 µs | 0,952 ms | 1,243 ms |
-| **etter, 400×250** | **187 µs** | **1,011 ms** | 1,328 ms |
+| before, 1280×720 | 124 µs | 0.820 ms | 1.275 ms |
+| **after, 1280×720** | **192 µs** | **0.871 ms** | 1.404 ms |
+| before, 3840×1552 | 129 µs | 9.281 ms | 10.667 ms |
+| **after, 3840×1552** | **221 µs** | **9.988 ms** | 10.800 ms |
+| before, 400×250 | 115 µs | 0.952 ms | 1.243 ms |
+| **after, 400×250** | **187 µs** | **1.011 ms** | 1.328 ms |
 
-> **Mandatets budsjett var < 0,46 ms. Det holdes ikke, og det holdt heller
-> ikke før endringen.** Header-layouten koster **~70 µs** ekstra, hovedsakelig
-> tre `GetTextExtentPoint32W`. Hele bildet var allerede 0,82 ms ved 1280×720
-> og 9,3 ms maksimert. I første gjennomløp, før den korte målingen ble lat,
-> var header-tillegget ~95 µs. Maksimert varierer hele bildet med ±0,7 ms
-> mellom gjennomløp, så den raden viser ikke header-tillegget.
+> **The mandate's budget was < 0.46 ms. It is not met, and it was not met
+> before the change either.** The header layout costs **~70 µs** extra, mainly
+> three `GetTextExtentPoint32W`. The whole frame was already 0.82 ms at 1280×720
+> and 9.3 ms maximized. In the first pass, before the short measurement was made lazy,
+> the header overhead was ~95 µs. Maximized, the whole frame varies by ±0.7 ms
+> between passes, so that row does not show the header overhead.
 
-`/W4` rent, x86, 169 KB exe.
+`/W4` clean, x86, 169 KB exe.
 
-### Fase 8 — `[ + ]`, flere instanser og nullstilling på dobbeltklikk
+### Phase 8 — `[ + ]`, multiple instances and reset on double-click
 
-Plan og avklarte tolkninger: `docs/plans/2026-09-16-new-instance.md`.
+Plan and settled interpretations: `docs/plans/2026-09-16-new-instance.md`.
 
-**`[ ↺ ]` er borte.** Den satte *vindusgeometrien* tilbake — det gjør
-`Ctrl`+`0` og tray-menyen fortsatt. Plassen er overtatt av `[ + ]` i samme
-enum-posisjon (`BTN_RESET` → `BTN_NEW`), så `ButtonLayout`, `ButtonHit`,
-`ButtonStrip`, `WM_NCHITTEST` og hover leser de samme fire rektanglene som
-før. Glyfen er et 7×7 plusstegn, to `LineTo` med eksklusivt sluttpunkt
-(`cx−3 → cx+4`), mot `Arc` og tre streker før.
+**`[ ↺ ]` is gone.** It reset the *window geometry* — `Ctrl`+`0` and the
+tray menu still do that. Its place is taken by `[ + ]` in the same
+enum position (`BTN_RESET` → `BTN_NEW`), so `ButtonLayout`, `ButtonHit`,
+`ButtonStrip`, `WM_NCHITTEST` and hover read the same four rectangles as
+before. The glyph is a 7×7 plus sign, two `LineTo` with an exclusive end point
+(`cx−3 → cx+4`), versus `Arc` and three strokes before.
 
-**Nullstilling av zoom og panorering** er `ResetView`: de siste 300 lysene,
-festet til høyre kant, `followLive`. Den rører ikke `dispValid`, så utsnittet
-eases tilbake som ved hjulzoom. `TogglePopup` bruker samme funksjon og setter
-`dispValid = FALSE` selv, for snap ved åpning. Tre veier inn:
+**Resetting zoom and panning** is `ResetView`: the last 300 candles,
+pinned to the right edge, `followLive`. It does not touch `dispValid`, so the view
+eases back as with wheel zoom. `TogglePopup` uses the same function and sets
+`dispValid = FALSE` itself, for a snap on open. Three ways in:
 
-- **Dobbeltklikk** i `[g.left, W) × [g.top, g.bottom]` — grafen og aksemargen.
-  Krever `CS_DBLCLKS` på `BTCPopupClass`. Alt annet — knappene, og hele panelet
-  mens overlayet er åpent — faller gjennom til `WM_LBUTTONDOWN`, så andre klikk
-  i et raskt dobbeltklikk på `–`/`□`/`×` oppfører seg som før. Knappeklikket
-  er derfor trukket ut i `OnButtonClick`. Ledig headerflate er `HTCAPTION` og
-  maksimerer fortsatt.
-- **`R`**, ikke mens overlayet er åpent.
-- **`ESC`, lagvis:** overlay åpent → lukk. Ellers, `!ViewIsDefault` →
-  nullstill. Ellers → `HidePanel`.
+- **Double-click** in `[g.left, W) × [g.top, g.bottom]` — the chart and the axis margin.
+  Requires `CS_DBLCLKS` on `BTCPopupClass`. Everything else — the buttons, and the whole panel
+  while the overlay is open — falls through to `WM_LBUTTONDOWN`, so the second click
+  of a quick double-click on `–`/`□`/`×` behaves as before. The button click
+  is therefore extracted into `OnButtonClick`. Free header space is `HTCAPTION` and
+  still maximizes.
+- **`R`**, not while the overlay is open.
+- **`ESC`, layered:** overlay open → close. Otherwise, `!ViewIsDefault` →
+  reset. Otherwise → `HidePanel`.
 
-**Flere instanser.** Mutexen er fjernet. `SpawnInstance` leser
-`GetWindowRect` (eller `rcNormalPosition` når maksimert), legger til 30 px og
-starter `ticker.exe --dup x y w h sym iv` med `CreateProcessW`. Kommandolinja
-ligger i et skrivbart buffer. Går vinduet ut over arbeidsområdets høyre eller
-nedre kant, kaskaderer det tilbake til hjørnet — ellers ville knapperaden
-etter noen klikk havnet utenfor skjermen. Barnet validerer argumentene med
-samme grenser som `LoadConfig`, setter `g_isDuplicate` og åpner panelet selv
-etter at låsen og hendelsene finnes. Et **duplikat** skriver ingenting til
-registret (`SaveConfig` og `SaveGeometry` returnerer tidlig) og avslutter
-prosessen via tray-menyens egen sti når panelet lukkes (`HidePanel`).
+**Multiple instances.** The mutex is removed. `SpawnInstance` reads
+`GetWindowRect` (or `rcNormalPosition` when maximized), adds 30 px and
+starts `ticker.exe --dup x y w h sym iv` with `CreateProcessW`. The command line
+lives in a writable buffer. If the window goes past the work area's right or
+bottom edge, it cascades back to the corner — otherwise the button row would
+end up off screen after a few clicks. The child validates the arguments with
+the same bounds as `LoadConfig`, sets `g_isDuplicate` and opens the panel itself
+once the lock and the events exist. A **duplicate** writes nothing to
+the registry (`SaveConfig` and `SaveGeometry` return early) and exits
+the process via the tray menu's own path when the panel is closed (`HidePanel`).
 
-**Avvik under utførelse: første åpning viste 8 lys, ikke 300.** Funnet fordi
-proben brukte nyåpnet panel som fasit. `TogglePopup` setter `viewCount = 0`
-når bufferet er tomt, og `MergeCandles` kalte `ClampView`, som klemmer 0 opp
-til `MIN_VIEW` = 8, *før* `WorkerFetchKlines` rakk sin egen «0 →
-`DEFAULT_VIEW`». Gammelt bygg (`75da78c`) viste også «(8m)» ved første
-åpning, og det samme gjaldt etter symbolbytte. Feilen er fra fase 1, men hvert
-duplikat åpner nettopp før det har data. Rettet i `MergeCandles`: når
-utsnittet følger live og ikke er satt, blir det standardutsnittet der, før
-klemmingen. Egen commit.
+**Deviation during execution: the first open showed 8 candles, not 300.** Found because
+the probe used a freshly opened panel as the reference. `TogglePopup` sets `viewCount = 0`
+when the buffer is empty, and `MergeCandles` called `ClampView`, which clamps 0 up
+to `MIN_VIEW` = 8, *before* `WorkerFetchKlines` got to its own "0 →
+`DEFAULT_VIEW`". The old build (`75da78c`) also showed "(8m)" on first
+open, and the same applied after a symbol switch. The bug is from phase 1, but every
+duplicate opens precisely before it has data. Fixed in `MergeCandles`: when
+the view follows live and is not set, it becomes the default view there, before
+the clamping. Separate commit.
 
-**Verifisert** med en probe som driver den ekte pekeren og leser med
-`PrintWindow`, med panelet satt `HWND_TOPMOST` (fallgruve 30). Tre fulle
-gjennomløp: 26/31 (før rettelsen av 8-lys-feilen, med feil fasit), 30/31 og
-29/31. Alle røde i de to siste er hover-bilder som kom for sent i normal
-tilstand rett etter åpning — se latensmålingen under tabellen. Hver påstand er
-grønn i minst ett fullt gjennomløp, og de omstridte er kjørt isolert:
+**Verified** with a probe that drives the real pointer and reads with
+`PrintWindow`, with the panel set `HWND_TOPMOST` (pitfall 30). Three full
+passes: 26/31 (before the fix for the 8-candle bug, with a wrong reference), 30/31 and
+29/31. All reds in the last two are hover frames that arrived too late in the normal
+state right after opening — see the latency measurement below the table. Every claim is
+green in at least one full pass, and the disputed ones were run in isolation:
 
-| Test | Resultat |
+| Test | Result |
 |---|---|
-| Hover på hver kantpiksel av alle fire knapper, og én utenfor hver kant | 32/32 normal (1037×678), 32/32 maksimert (3840×1552) |
-| Hurtigsti mot full opptegning, 5 hover-tilstander × 6 runder | **0 avvik** i 30 par (1980 px hver) |
-| Glyf i hvile og hover | 13 piksler, eksakt symmetrisk 7×7, begge tilstander |
-| Ekte dobbeltklikk på grafen / på prisaksen, `R`, `ESC` lag 2 | utsnittet tilbake, **0,00 %** avvik mot fasit (zoomet: 6,45 %) |
-| `ESC` lag 1 / lag 3 | lukker overlay og beholder zoom / skjuler panelet |
-| `WM_LBUTTONDBLCLK` på `–` | minimerer fortsatt |
-| Ekte dobbeltklikk i ledig header | maksimerer fortsatt |
-| Ekte klikk på `[ + ]` | ny prosess med synlig panel på **~285 ms**, nøyaktig +30, +30, samme størrelse, i forgrunnen |
-| `×` i duplikatet | prosessen avsluttes, registret **uendret**, hovedinstansen lever |
-| `[ + ]` nær nedre høyre hjørne | duplikatet havner i arbeidsområdets hjørne (0, 0) |
-| `ESC` i standardvisning i et duplikat | prosessen avsluttes |
-| Håndtak i hvile | GDI 31 / USER 14, som gammelt bygg målt på samme måte |
+| Hover on every edge pixel of all four buttons, and one outside each edge | 32/32 normal (1037×678), 32/32 maximized (3840×1552) |
+| Fast path vs. full repaint, 5 hover states × 6 rounds | **0 mismatches** in 30 pairs (1980 px each) |
+| Glyph at rest and on hover | 13 pixels, exactly symmetric 7×7, both states |
+| Real double-click on the chart / on the price axis, `R`, `ESC` layer 2 | view back, **0.00 %** deviation from the reference (zoomed: 6.45 %) |
+| `ESC` layer 1 / layer 3 | closes the overlay and keeps the zoom / hides the panel |
+| `WM_LBUTTONDBLCLK` on `–` | still minimizes |
+| Real double-click in free header space | still maximizes |
+| Real click on `[ + ]` | new process with visible panel in **~285 ms**, exactly +30, +30, same size, in the foreground |
+| `×` in the duplicate | the process exits, the registry **unchanged**, the main instance lives on |
+| `[ + ]` near the bottom right corner | the duplicate lands in the work area's corner (0, 0) |
+| `ESC` in the default view in a duplicate | the process exits |
+| Handles at rest | GDI 31 / USER 14, same as the old build measured the same way |
 
-> **De røde var forsinkelse, ikke tegnefeil.** Hurtigsti-sammenlikningen
-> avvek to ganger med nøyaktig 468 px = én hel knapp: de to bildene hadde
-> ulik hover-tilstand, ikke ulike piksler. Isolert, med tilstanden sjekket i
-> begge bildene, ga samme test 0 avvik i 30 par (fallgruve 31). Glyftesten i
-> hover feilet én gang av samme grunn.
+> **The reds were delay, not drawing bugs.** The fast-path comparison
+> differed twice by exactly 468 px = one whole button: the two frames had
+> different hover states, not different pixels. In isolation, with the state checked in
+> both frames, the same test gave 0 mismatches in 30 pairs (pitfall 31). The glyph test on
+> hover failed once for the same reason.
 >
-> **Latens fra `SetCursorPos` til riktig hover-bilde**, 40 skifter per
-> kjøring, gammelt og nytt bygg vekselvis, 2,5 s etter åpning:
+> **Latency from `SetCursorPos` to the correct hover frame**, 40 changes per
+> run, old and new build alternating, 2.5 s after opening:
 >
-> | Bygg | Median | Utfall (> 100 ms) |
+> | Build | Median | Outliers (> 100 ms) |
 > |---|---|---|
-> | gammelt (`75da78c`) | 24 ms | **6 av 40**, alle ~2 s, feil tilstand ved tidsgrensen |
-> | nytt | 29 ms | 0 |
-> | gammelt | 25 ms | 0 |
-> | nytt | 24 ms | 1 av 40, 1,76 s, riktig til slutt |
+> | old (`75da78c`) | 24 ms | **6 of 40**, all ~2 s, wrong state at the timeout |
+> | new | 29 ms | 0 |
+> | old | 25 ms | 0 |
+> | new | 24 ms | 1 of 40, 1.76 s, right in the end |
 >
-> Utfallene finnes i begge bygg og er ikke innført i fase 8. Årsaken er ikke
-> undersøkt. Kandidater er `PrintWindow`/DWM og at den ekte pekeren konkurrerer
-> med `TrackMouseEvent` (fallgruve 35).
+> The outliers exist in both builds and were not introduced in phase 8. The cause has not been
+> investigated. Candidates are `PrintWindow`/DWM and the real pointer competing
+> with `TrackMouseEvent` (pitfall 35).
 
-**Opptegning.** QPC rundt `DrawButtons` i begge stier, rundt hele
-hurtigstien (DC, bitmap, blit og knapper, uten `BeginPaint`/`EndPaint`) og
-rundt headerteksten i `DrawChart`. Samme markører satt inn med skript i
-gammel (`75da78c`) og ny kode. Tre runder, gammel og ny vekselvis, 1037×678,
-hver runde 5 s hover-jiggling og 5 s `RedrawWindow`, ingen skjermfangst
-underveis:
+**Painting.** QPC around `DrawButtons` in both paths, around the whole
+fast path (DC, bitmap, blit and buttons, without `BeginPaint`/`EndPaint`) and
+around the header text in `DrawChart`. The same markers inserted by script in
+old (`75da78c`) and new code. Three rounds, old and new alternating, 1037×678,
+each round 5 s of hover jiggling and 5 s of `RedrawWindow`, no screen capture
+along the way:
 
-| | Før, median | **Etter, median** | Etter, min | Etter, p90 |
+| | Before, median | **After, median** | After, min | After, p90 |
 |---|---|---|---|---|
-| `DrawButtons`, hover-hurtigsti | 0,0292 ms | **0,0210 ms** | 0,0124 ms | 0,0237 ms |
-| `DrawButtons`, full opptegning | 0,0252 ms | **0,0168 ms** | 0,0115 ms | 0,0252 ms |
-| Hurtigsti totalt | 0,0958 ms | **0,0835 ms** | 0,0419 ms | 0,0968 ms |
-| Headertekst | 0,1686 ms | 0,1402 ms | 0,0743 ms | 0,2129 ms |
-| **Hele headeren** (tekst + knapper, samme bilde) | 0,1956 ms | **0,1586 ms** | 0,0896 ms | 0,2295 ms |
+| `DrawButtons`, hover fast path | 0.0292 ms | **0.0210 ms** | 0.0124 ms | 0.0237 ms |
+| `DrawButtons`, full repaint | 0.0252 ms | **0.0168 ms** | 0.0115 ms | 0.0252 ms |
+| Fast path total | 0.0958 ms | **0.0835 ms** | 0.0419 ms | 0.0968 ms |
+| Header text | 0.1686 ms | 0.1402 ms | 0.0743 ms | 0.2129 ms |
+| **The whole header** (text + buttons, same frame) | 0.1956 ms | **0.1586 ms** | 0.0896 ms | 0.2295 ms |
 
-> **Mandatets budsjett var < 0,02 ms for hele headeren. Det holdes ikke, og
-> det holdt heller ikke før endringen.** Bare vektortegningen alene ligger
-> rundt budsjettet: median 0,017–0,021 ms. Plusstegnet sparte ~8 µs mot
-> sirkelpilen, konsekvent i alle tre runder. Headerteksten er uendret kode;
-> forskjellen i den raden er støy mellom runder (rundemedianer 107–239 µs).
-> Hurtigstien domineres av `CreateCompatibleDC`/`CreateCompatibleBitmap` og
-> blitten, ikke av knappene. Se «Forhåndstegnet knapperad» under
-> *Avviste forslag* for hva et bokstavelig budsjett ville krevd.
+> **The mandate's budget was < 0.02 ms for the whole header. It is not met, and
+> it was not met before the change either.** The vector drawing alone sits
+> around the budget: median 0.017–0.021 ms. The plus sign saved ~8 µs versus
+> the circular arrow, consistently in all three rounds. The header text is unchanged code;
+> the difference in that row is noise between rounds (round medians 107–239 µs).
+> The fast path is dominated by `CreateCompatibleDC`/`CreateCompatibleBitmap` and
+> the blit, not by the buttons. See "Pre-drawn button row" under
+> *Rejected proposals* for what a literal budget would have required.
 
-`/W4` rent, x86, 174 KB exe.
+`/W4` clean, x86, 174 KB exe.
 
-### Fase 9 — skrivebordsmodus (`--desktop-mode`)
+### Phase 9 — desktop mode (`--desktop-mode`)
 
-Plan, forundersøkelse og avvik:
-`docs/plans/2026-09-17-desktop-mode.md`. Utviklet på
-grenen `desktop-mode` (tre commits) og flettet inn med `--no-ff`.
+Plan, preliminary investigation and deviations:
+`docs/plans/2026-09-17-desktop-mode.md`. Developed on
+the branch `desktop-mode` (three commits) and merged with `--no-ff`.
 
-**Hva den gjør.** `ticker.exe --desktop-mode` (eneste argument) starter uten
-panel i systemstatusfeltet og legger grafflaten inn i skrivebordet: barn av
-WorkerW, under `SHELLDLL_DefView` (ikonene), over hele primærskjermen. Musa og
-tastaturet går til skrivebordet. Samme `BTCPopupClass`, `PopupProc` og
-`PaintPopup` som panelet. Bare opprettelsen er annerledes:
+**What it does.** `ticker.exe --desktop-mode` (the only argument) starts without
+a panel in the notification area and puts the chart area into the desktop: a
+child of WorkerW, below `SHELLDLL_DefView` (the icons), covering the whole
+primary monitor. Mouse and keyboard go to the desktop. Same `BTCPopupClass`,
+`PopupProc` and `PaintPopup` as the panel. Only the creation differs:
 
-- `TogglePopup` lager vinduet med `WS_POPUP` alene og kaller
-  `AttachToDesktop` *før* `hPopup` publiseres. Ingen `SquareCorners`,
-  `PlacePopupInitially` eller `ForceForeground`. `SW_SHOWNA`.
-- `FindDesktopWorkerW` sender `0x052C` (`0xD,1` og `0,0`) med
-  `SendMessageTimeoutW`, 1 s og `SMTO_ABORTIFHUNG`. Den tar WorkerW som
-  barn av Progman (24H2), og ellers den klassiske søsken-WorkerW via
+- `TogglePopup` creates the window with `WS_POPUP` alone and calls
+  `AttachToDesktop` *before* `hPopup` is published. No `SquareCorners`,
+  `PlacePopupInitially` or `ForceForeground`. `SW_SHOWNA`.
+- `FindDesktopWorkerW` sends `0x052C` (`0xD,1` and `0,0`) with
+  `SendMessageTimeoutW`, 1 s and `SMTO_ABORTIFHUNG`. It takes the WorkerW that
+  is a child of Progman (24H2), and otherwise the classic sibling WorkerW via
   `EnumWindows`.
-- `AttachToDesktop`: `WS_POPUP` → `WS_CHILD`, `SetParent`, **deretter**
-  `WS_EX_LAYERED | WS_EX_TRANSPARENT` og `SetLayeredWindowAttributes(255,
-  LWA_ALPHA)`, og til slutt `SetWindowPos(HWND_BOTTOM)` med
-  `SM_CXSCREEN`×`SM_CYSCREEN`. Origo regnes om med `MapWindowPoints`.
-- `WM_NCHITTEST` → `HTTRANSPARENT`. `DrawButtons` hoppes over.
-- `SaveGeometry` skriver ingenting. Tray: venstreklikk gjør ingenting, og
-  menyen har bare «Avslutt Ticker».
-- `WM_NCDESTROY` i `PopupProc` nuller `hPopup` og `animRunning` hvis flaten
-  forsvinner uten at vi ba om det, og starter `TIMER_EMBED_ID` (250 ms).
-  `TaskbarCreated` legger ikonet inn igjen (i begge modi) og bygger flaten på
-  nytt, men bare hvis den ikke allerede sitter i dagens WorkerW.
+- `AttachToDesktop`: `WS_POPUP` → `WS_CHILD`, `SetParent`, **then**
+  `WS_EX_LAYERED | WS_EX_TRANSPARENT` and `SetLayeredWindowAttributes(255,
+  LWA_ALPHA)`, and finally `SetWindowPos(HWND_BOTTOM)` with
+  `SM_CXSCREEN`×`SM_CYSCREEN`. The origin is converted with `MapWindowPoints`.
+- `WM_NCHITTEST` → `HTTRANSPARENT`. `DrawButtons` is skipped.
+- `SaveGeometry` writes nothing. Tray: left-click does nothing, and the
+  menu has only "Quit".
+- `WM_NCDESTROY` in `PopupProc` clears `hPopup` and `animRunning` if the surface
+  disappears without us asking for it, and starts `TIMER_EMBED_ID` (250 ms).
+  `TaskbarCreated` adds the icon again (in both modes) and rebuilds the
+  surface, but only if it is not already sitting in the current WorkerW.
 
-**Manifestet er det som gjør flaten synlig.** Forundersøkelsen står i
-planen. Kort fortalt: på 26100 blir et vanlig GDI-barn av WorkerW (eller
-Progman) aldri synlig, fordi Progman har `WS_EX_NOREDIRECTIONBITMAP`. Et
-lagdelt barn blir synlig, men bare når **begge** disse er oppfylt:
-`supportedOS` Windows 8+ i manifestet (uten det er exstilen 0), og
-`SetLayeredWindowAttributes` kalt *etter* `SetParent`. `WS_EX_LAYERED` er altså
-ikke et valg mellom to måter å slippe musa gjennom. Uten den vises ingenting.
+**The manifest is what makes the surface visible.** The preliminary
+investigation is in the plan. In short: on 26100 a plain GDI child of WorkerW
+(or Progman) never becomes visible, because Progman has
+`WS_EX_NOREDIRECTIONBITMAP`. A layered child becomes visible, but only when
+**both** of these hold: `supportedOS` Windows 8+ in the manifest (without it the
+ex-style is 0), and `SetLayeredWindowAttributes` called *after* `SetParent`.
+So `WS_EX_LAYERED` is not a choice between two ways of letting the mouse
+through. Without it nothing is shown.
 
-**Shell-treet, verifisert** med en probe som leser vindustreet fra utsiden
-(`EnumChildWindows`, `GetParent`, `GetWindow`, `GetWindowLong`,
+**The shell tree, verified** with a probe that reads the window tree from the
+outside (`EnumChildWindows`, `GetParent`, `GetWindow`, `GetWindowLong`,
 `GetLayeredWindowAttributes`, `WindowFromPoint`):
 
-| Kontroll | Resultat |
+| Check | Result |
 |---|---|
-| Forelder | `WorkerW` (Explorer-pid) |
-| WorkerW sin forelder / flatens rot | Progman / Progman |
-| Z-orden i Progman | `SHELLDLL_DefView` > `WorkerW` |
-| Z-orden i WorkerW | flaten er siste barn (`HWND_BOTTOM`) |
-| Stil / exstil | `0x54000000` (`WS_CHILD`, ingen `WS_POPUP`/`WS_THICKFRAME`) / `0x00080020` (`LAYERED`, `TRANSPARENT`) |
-| Lag | alfa 255, `LWA_ALPHA` |
-| Rekt | 0,0 3840×1600 = `SM_CXSCREEN`×`SM_CYSCREEN` |
-| Synlige toppnivåvinduer (knapp i oppgavelinja) | 0 |
-| `WindowFromPoint` på 27 synlige skrivebordspunkter | 27× `SysListView32`, **0** treff på flaten |
-| `WM_NCHITTEST` på header, kryss, venstre kant og graf | −1/−1/−1/−1 (`HTTRANSPARENT`) |
-| Knapperaden | én farge, ingen glyfer |
-| Skjermbilde | lysene synlige mellom og bak ikonene, pris øverst til venstre |
-| Avslutt via tray-stien | prosessen borte, tapetet tilbake, ingen rester |
-| Ekte omstart av Explorer (etter `1dbc75f`) | ny flate i ny WorkerW etter **566 ms**, stående, 14/14 grønne, tray-ikonet tilbake (`Shell_NotifyIconGetRect` = `S_OK`) |
+| Parent | `WorkerW` (Explorer pid) |
+| WorkerW's parent / the surface's root | Progman / Progman |
+| Z-order in Progman | `SHELLDLL_DefView` > `WorkerW` |
+| Z-order in WorkerW | the surface is the last child (`HWND_BOTTOM`) |
+| Style / ex-style | `0x54000000` (`WS_CHILD`, no `WS_POPUP`/`WS_THICKFRAME`) / `0x00080020` (`LAYERED`, `TRANSPARENT`) |
+| Layer | alpha 255, `LWA_ALPHA` |
+| Rect | 0,0 3840×1600 = `SM_CXSCREEN`×`SM_CYSCREEN` |
+| Visible top-level windows (button on the taskbar) | 0 |
+| `WindowFromPoint` on 27 visible desktop points | 27× `SysListView32`, **0** hits on the surface |
+| `WM_NCHITTEST` on header, close cross, left edge and chart | −1/−1/−1/−1 (`HTTRANSPARENT`) |
+| The button row | one color, no glyphs |
+| Screenshot | candles visible between and behind the icons, price at top left |
+| Quit via the tray path | process gone, wallpaper back, no leftovers |
+| Real Explorer restart (after `1dbc75f`) | new surface in new WorkerW after **566 ms**, stays, 14/14 green, tray icon back (`Shell_NotifyIconGetRect` = `S_OK`) |
 
-**Omstart av Explorer**, kjørt med brukerens klarsignal: `Stop-Process -Force`
-på explorer.exe mens `--desktop-mode` kjørte, og `AutoRestartShell = 1` startet
-den igjen. En probe fulgte vindustreet hvert 100. ms:
+**Explorer restart**, run with the user's go-ahead: `Stop-Process -Force`
+on explorer.exe while `--desktop-mode` was running, and `AutoRestartShell = 1`
+started it again. A probe followed the window tree every 100 ms:
 
-| Tid | 1. kjøring (`56b67b1`, retry 1 s) | 2. kjøring (`2e43190`, retry 1 s) | 3. kjøring (`1dbc75f`, retry 250 ms) |
+| Time | 1st run (`56b67b1`, retry 1 s) | 2nd run (`2e43190`, retry 1 s) | 3rd run (`1dbc75f`, retry 250 ms) |
 |---|---|---|---|
-| ~20 ms | gammel flate **borte** (`IsWindow` usann), prosessen lever | samme | samme |
-| ~160 ms | ny explorer.exe | samme | samme |
-| 285–480 ms | ny Progman | samme | samme |
-| 285 ms | — | — | ny flate laget, venter på `0x052C` |
-| 566 ms | — | — | **flaten i ny WorkerW, står** |
-| ~1,1 s | ny flate i ny WorkerW (timeren) | ny flate i ny WorkerW, står | — |
-| ~1,66 s | flaten **revet ned igjen** | — | — |
-| ~2,68 s | ny flate igjen | — | — |
+| ~20 ms | old surface **gone** (`IsWindow` false), process alive | same | same |
+| ~160 ms | new explorer.exe | same | same |
+| 285–480 ms | new Progman | same | same |
+| 285 ms | — | — | new surface created, waiting on `0x052C` |
+| 566 ms | — | — | **surface in new WorkerW, stays** |
+| ~1.1 s | new surface in new WorkerW (the timer) | new surface in new WorkerW, stays | — |
+| ~1.66 s | surface **torn down again** | — | — |
+| ~2.68 s | new surface again | — | — |
 
-> 3. kjøring: `SendMessageTimeoutW` til en helt ny Progman brukte ~280 ms før
-> WorkerW fantes. UI-tråden står så lenge, innenfor taket på 1 s. Vinduet er
-> ikke synlig før det sitter i WorkerW.
+> 3rd run: `SendMessageTimeoutW` to a brand-new Progman took ~280 ms before
+> WorkerW existed. The UI thread stalls that long, within the 1 s cap. The
+> window is not visible until it sits in WorkerW.
 
-**Vanlig modus ved omstart av Explorer** (hovedinstans med åpent panel,
-`Shell_NotifyIconGetRect` for ikonet):
+**Panel mode during an Explorer restart** (main instance with the panel open,
+`Shell_NotifyIconGetRect` for the icon):
 
-| Bygg | Prosess | Panel | Tray-ikon før → etter |
+| Build | Process | Panel | Tray icon before → after |
 |---|---|---|---|
-| master `084f724` | lever | lever | `S_OK` → **`E_FAIL`, for godt** |
-| master `bc9e409` | lever | lever | `S_OK` → `S_OK` |
+| master `084f724` | alive | alive | `S_OK` → **`E_FAIL`, for good** |
+| master `bc9e409` | alive | alive | `S_OK` → `S_OK` |
 
-> Et bygg fra før fase 9 **dør ikke** når Explorer startes på nytt, men det
-> mister tray-ikonet, og dermed «Avslutt Ticker». Brukerens instans (pid 30852)
-> var borte etter første omstart, og hendelsesloggen viser ingen krasj. Siden
-> gammelt bygg overlevde omstarten i testen, ble den trolig avsluttet på annen
-> måte, men det er ikke bevist. UI Automation fant ikke ikonet til en ny
-> hovedinstans selv *før* omstart. Bruk `Shell_NotifyIconGetRect`.
+> A build from before phase 9 **does not die** when Explorer restarts, but it
+> loses the tray icon, and with it "Quit". The user's instance (pid 30852)
+> was gone after the first restart, and the event log shows no crash. Since
+> the old build survived the restart in the test, it was probably ended some
+> other way, but that is not proven. UI Automation did not find the icon of a
+> new main instance even *before* a restart. Use `Shell_NotifyIconGetRect`.
 
-> **Windows river ned et barn fra en annen prosess når forelderen dør.**
-> `WM_NCDESTROY` er altså stien som faktisk brukes, og timeren bygget flaten på
-> nytt før `TaskbarCreated` kom. I første kjøring rev `TaskbarCreated` ned den
-> ferske flaten, og skrivebordet sto uten graf i ett sekund til. Rettet i
-> `2e43190` (egen gren, `desktop-mode-explorer-restart`): flaten rives nå bare
-> ned hvis forelderen ikke er dagens WorkerW. Etter omstarten fant
-> UI Automation `BTC/USDT: $76274.09` i `Shell_TrayWnd`, der ingen annen
-> `ticker.exe` kjørte. Etter rettelsen ville et postet `TaskbarCreated` ikke
-> lenger rive ned noe, så den tidligere testen med postet melding er ikke
-> kjørt på nytt.
+> **Windows tears down a child from another process when the parent dies.**
+> So `WM_NCDESTROY` is the path actually used, and the timer rebuilt the
+> surface before `TaskbarCreated` arrived. In the first run `TaskbarCreated`
+> tore down the fresh surface, and the desktop was without a chart for one more
+> second. Fixed in `2e43190` (own branch, `desktop-mode-explorer-restart`): the
+> surface is now torn down only if the parent is not the current WorkerW. After
+> the restart UI Automation found `BTC/USDT: $76274.09` in `Shell_TrayWnd`,
+> where no other `ticker.exe` was running. After the fix a posted
+> `TaskbarCreated` would no longer tear anything down, so the earlier test with
+> a posted message has not been rerun.
 
-**Vanlig modus med manifestet**, nytt bygg mot master, samme `--dup`-geometri:
-stil `0x94070000` og exstil `0x00000100` i begge. Toppnivå, samme rekt, samme
-treff-test (`HTCAPTION`/`HTCLIENT`/`HTLEFT`/`HTCLIENT`), og knapperaden
-**0 avvik av 3600 piksler** med `PrintWindow`.
+**Panel mode with the manifest**, new build against master, same `--dup`
+geometry: style `0x94070000` and ex-style `0x00000100` in both. Top-level, same
+rect, same hit test (`HTCAPTION`/`HTCLIENT`/`HTLEFT`/`HTCLIENT`), and the button
+row **0 differences out of 3600 pixels** with `PrintWindow`.
 
-**Opptegning.** Samme QPC-markører ble satt inn med skript i master
-(`084f724`) og i nytt bygg. Total er fra før `BeginPaint` til etter
-`EndPaint` i den trege stien. Tegning er fra `CreateCompatibleDC` til
-`DeleteDC` og ligger 0,03–0,06 ms under total i alle rader. Skrivebordsmodus
-ved 1280×720 er et målebygg der `DM_W`/`DM_H` overstyrer flatens størrelse,
-så forankringen kan sammenliknes med samme pikselmengde. Fire runder, seks
-konfigurasjoner vekselvis. Hver runde: 5 s etter start, deretter 5 s med
-`InvalidateRect` hvert 16. ms fra en annen prosess. Ingen skjermfangst
-underveis:
+**Painting.** The same QPC markers were inserted by script into master
+(`084f724`) and into the new build. Total is from before `BeginPaint` to after
+`EndPaint` on the slow path. Drawing is from `CreateCompatibleDC` to
+`DeleteDC` and is 0.03–0.06 ms below total in every row. Desktop mode at
+1280×720 is a measurement build where `DM_W`/`DM_H` override the surface's
+size, so the embedding can be compared at the same pixel count. Four rounds,
+six configurations alternating. Each round: 5 s after start, then 5 s of
+`InvalidateRect` every 16 ms from another process. No screen capture
+meanwhile:
 
-| Konfig | n | **Median** | Min | p90 | Rundemedianer |
+| Config | n | **Median** | Min | p90 | Round medians |
 |---|---|---|---|---|---|
-| master, vanlig 1280×720 | 838 | **1,94 ms** | 0,92 | 2,68 | 1,79 / 2,11 / 1,83 / 2,29 |
-| ny, vanlig 1280×720 | 795 | **1,89 ms** | 0,82 | 2,60 | 2,09 / 1,89 / 1,94 / 1,84 |
-| ny, skrivebord 1280×720 | 705 | **2,24 ms** | 0,79 | 2,70 | 1,85 / 2,40 / 1,91 / 2,44 |
-| master, vanlig 3840×1600 | 741 | **13,36 ms** | 10,79 | 14,87 | 12,86 / 13,66 / 13,51 / 13,14 |
-| ny, vanlig 3840×1600 | 925 | **13,46 ms** | 10,67 | 14,86 | 12,58 / 13,29 / 14,56 / 13,10 |
-| ny, skrivebord 3840×1600 | 705 | **13,49 ms** | 10,68 | 14,74 | 13,40 / 12,61 / 13,72 / 14,05 |
+| master, panel 1280×720 | 838 | **1.94 ms** | 0.92 | 2.68 | 1.79 / 2.11 / 1.83 / 2.29 |
+| new, panel 1280×720 | 795 | **1.89 ms** | 0.82 | 2.60 | 2.09 / 1.89 / 1.94 / 1.84 |
+| new, desktop 1280×720 | 705 | **2.24 ms** | 0.79 | 2.70 | 1.85 / 2.40 / 1.91 / 2.44 |
+| master, panel 3840×1600 | 741 | **13.36 ms** | 10.79 | 14.87 | 12.86 / 13.66 / 13.51 / 13.14 |
+| new, panel 3840×1600 | 925 | **13.46 ms** | 10.67 | 14.86 | 12.58 / 13.29 / 14.56 / 13.10 |
+| new, desktop 3840×1600 | 705 | **13.49 ms** | 10.68 | 14.74 | 13.40 / 12.61 / 13.72 / 14.05 |
 
-> **Mandatets < 0,85 ms holdes ikke i noen modus, og uendret master holder
-> det heller ikke i dag.** Tallet i *Kjente begrensninger* (~0,85 ms ved
-> 1280×720) er målt under andre forhold. Maskinen var i vanlig bruk, og
-> brukeren hadde egne `ticker.exe` i gang: fire da arbeidet startet, én ved
-> slutten. Bare de raskeste enkeltbildene er under
-> 0,85 ms. **Forankringen koster ikke målbart ved full størrelse:** 13,49 mot
-> 13,46 ms, med rundemedianer som overlapper. Ved 1280×720 er skrivebordsmodus
-> 0,35 ms tregere i median, men også her overlapper rundemedianene
-> (1,85–2,44 mot 1,84–2,09). Det som faktisk koster, er størrelsen: 6,9 ganger
-> så mange piksler gir ~7 ganger tiden. Tidligere målt maksimert: ~9,5 ms ved
+> **The mandate's < 0.85 ms is not met in any mode, and unchanged master does
+> not meet it today either.** The number in *Known limitations* (~0.85 ms at
+> 1280×720) was measured under other conditions. The machine was in normal use,
+> and the user had their own `ticker.exe` running: four when the work started,
+> one at the end. Only the fastest single frames are under
+> 0.85 ms. **The embedding costs nothing measurable at full size:** 13.49 vs
+> 13.46 ms, with round medians that overlap. At 1280×720 desktop mode is
+> 0.35 ms slower in median, but here too the round medians overlap
+> (1.85–2.44 vs 1.84–2.09). What actually costs is the size: 6.9 times as many
+> pixels gives ~7 times the time. Previously measured maximized: ~9.5 ms at
 > 3840×1552.
 
-**Minne og håndtak i hvile.** Ikke-instrumenterte bygg. Målt 15 s etter
-start, deretter fem avlesninger med 2 s mellomrom, to runder.
-`PrivateMemorySize64` og `GetGuiResources`:
+**Memory and handles at rest.** Non-instrumented builds. Measured 15 s after
+start, then five readings 2 s apart, two rounds.
+`PrivateMemorySize64` and `GetGuiResources`:
 
-| Konfig | Private bytes | GDI | USER | Kjernehåndtak |
+| Config | Private bytes | GDI | USER | Kernel handles |
 |---|---|---|---|---|
-| master, vanlig 1280×720 | 3,86–4,00 MB | 33–38 | 14–18 | 366–370 |
-| **ny, vanlig 1280×720** | **3,59 MB** (alle 10) | **31** (alle 10) | **14** (alle 10) | 358–360 |
-| **ny, skrivebord 3840×1600** | **3,36–3,42 MB** | **30** (alle 10) | **6** (alle 10) | 323 |
+| master, panel 1280×720 | 3.86–4.00 MB | 33–38 | 14–18 | 366–370 |
+| **new, panel 1280×720** | **3.59 MB** (all 10) | **31** (all 10) | **14** (all 10) | 358–360 |
+| **new, desktop 3840×1600** | **3.36–3.42 MB** | **30** (all 10) | **6** (all 10) | 323 |
 
-> **Skrivebordsmodus ligger under mandatets ~3,53 MB og 31/14.** Vanlig modus
-> ligger på 3,59 MB, som «~3,6 MB» under *Bygg*. Masters rader er **ikke i
-> hvile**: GDI 33–38 og USER opptil 18 er tellingen midt i en opptegning
-> (fallgruve 27). Det åpne panelet fikk hover-trafikk under målingen, så de
-> tallene sammenliknes ikke. At en flate på 3840×1600 ikke bruker mer privat
-> minne enn panelet, stemmer med at dobbeltbufferet lages og slettes i hvert
-> bilde, og med at kompatible bitmaper ikke telles i prosessens private
-> bytes. Vannmerkebitmapen er det eneste som lever mellom bildene. USER 6 mot
-> 14: flaten får ingen musemeldinger, og det finnes verken peker- eller
-> hover-tilstand å holde på.
+> **Desktop mode is below the mandate's ~3.53 MB and 31/14.** Panel mode
+> is at 3.59 MB, like "~3.6 MB" under *Build*. Master's rows are **not at
+> rest**: GDI 33–38 and USER up to 18 are the count in the middle of a repaint
+> (pitfall 27). The open panel got hover traffic during the measurement, so
+> those numbers are not compared. That a 3840×1600 surface uses no more private
+> memory than the panel fits with the double buffer being created and deleted
+> in every frame, and with compatible bitmaps not being counted in the
+> process's private bytes. The watermark bitmap is the only thing that lives
+> between frames. USER 6 vs 14: the surface gets no mouse messages, and there is
+> neither cursor nor hover state to hold on to.
 
-**Skalering over 100 %** (`e070e34`, egen gren `desktop-mode-dpi`), kjørt med
-brukerens klarsignal. Skaleringen på primærskjermen ble endret med
-`DisplayConfigSetDeviceInfo` (type −4, anbefalt 100 %) og satt tilbake til
-100 % i en `finally`. Proben er per-monitor-bevisst og teller fysiske piksler.
-Den tar punkter hvert 37. px der skrivebordet er øverst, og teller hvor mange
-som har flatens bakgrunn `#0D1117`. Nede til høyre ligger lengst fra origo:
+**Scaling above 100 %** (`e070e34`, own branch `desktop-mode-dpi`), run with
+the user's go-ahead. The scaling on the primary monitor was changed with
+`DisplayConfigSetDeviceInfo` (type −4, recommended 100 %) and set back to
+100 % in a `finally`. The probe is per-monitor aware and counts physical
+pixels. It samples points every 37 px where the desktop is on top, and counts
+how many have the surface's background `#0D1117`. Bottom right is farthest
+from the origin:
 
-| Bygg | Tilfelle | Flatens rekt (fysisk) | Nede til høyre |
+| Build | Case | Surface rect (physical) | Bottom right |
 |---|---|---|---|
-| før | 100 % | 3840×1600 | 784 / 791 |
-| før | 100 % → 150 % mens den kjører | 3840×1600 | 204 / 220 |
-| før | **startet ved 150 %** | **2560×1067** | **16 / 220** |
-| etter | 100 % | 3840×1600 | 784 / 791 |
-| etter | 100 % → 150 % mens den kjører | 3840×1600 | 205 / 220 |
-| etter | startet ved 150 % | **3840×1600** | **203 / 220** |
+| before | 100 % | 3840×1600 | 784 / 791 |
+| before | 100 % → 150 % while running | 3840×1600 | 204 / 220 |
+| before | **started at 150 %** | **2560×1067** | **16 / 220** |
+| after | 100 % | 3840×1600 | 784 / 791 |
+| after | 100 % → 150 % while running | 3840×1600 | 205 / 220 |
+| after | started at 150 % | **3840×1600** | **203 / 220** |
 
-> **Årsak:** en DPI-uvitende prosess får virtualiserte `SM_CXSCREEN`/
-> `SM_CYSCREEN` (2560×1067 ved 150 %), og det var den størrelsen
-> `AttachToDesktop` ga flaten. WorkerW er 3840×1600 fysisk. **Rettelse:**
-> `TogglePopup` setter tråden til `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`
-> rundt `CreateWindowExW` og `AttachToDesktop`, og setter den tilbake
-> umiddelbart. Vinduet beholder konteksten, og `WM_PAINT` kjøres i den, så
-> `GetClientRect` gir fysiske piksler. Resten av prosessen, også vanlig modus,
-> er DPI-uvitende som før. Vindustre-proben ved 100 % etter rettelsen: 14/14.
-> Etter testen: `anbefalt=100% naa=100% systemdpi=96`.
+> **Cause:** a DPI-unaware process gets virtualized `SM_CXSCREEN`/
+> `SM_CYSCREEN` (2560×1067 at 150 %), and that was the size
+> `AttachToDesktop` gave the surface. WorkerW is 3840×1600 physical. **Fix:**
+> `TogglePopup` sets the thread to `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`
+> around `CreateWindowExW` and `AttachToDesktop`, and sets it back
+> immediately. The window keeps the context, and `WM_PAINT` runs in it, so
+> `GetClientRect` gives physical pixels. The rest of the process, panel mode
+> included, is DPI-unaware as before. The window-tree probe at 100 % after the
+> fix: 14/14. After the test: `anbefalt=100% naa=100% systemdpi=96`.
 
-`/W4` rent, x86, 177 KB exe.
+`/W4` clean, x86, 177 KB exe.
 
-### Fase 10 — vedvarende dobbeltbuffer
+### Phase 10 — persistent double buffer
 
-Plan og avvik: `docs/plans/2026-09-17-painting.md`.
-Gren `opptegning`, flettet inn med `--no-ff`.
+Plan and deviations: `docs/plans/2026-09-17-painting.md`.
+Branch `opptegning`, merged with `--no-ff`.
 
-**Hvor tiden gikk.** QPC-markører rundt hvert ledd i `PaintPopup` og
-`DrawChart`, satt inn med skript i både master og nytt bygg. Ved 3840×1600 gikk
-**55–60 % til å blitte vannmerket inn i et helt nytt dobbeltbuffer**
-(6,5–7,9 ms), og ytterligere 1,7 ms til å frigjøre det. `CreateCompatibleBitmap`
-tok bare 0,07 ms. Den er lat, og kostnaden på 24 MB kommer ved første skriving
-og ved frigjøring, i hvert bilde (fallgruve 48).
+**Where the time went.** QPC markers around each step in `PaintPopup` and
+`DrawChart`, inserted by script into both master and the new build. At
+3840×1600, **55–60 % went to blitting the watermark into a brand-new double
+buffer** (6.5–7.9 ms), and another 1.7 ms to freeing it.
+`CreateCompatibleBitmap` took only 0.07 ms. It is lazy, and the cost of 24 MB
+comes at the first write and at freeing, in every frame (pitfall 48).
 
-**Endringen:**
-- **Vedvarende buffer:** `bbDC`/`bbBmp` lever mellom bildene og bygges på nytt
-  bare når størrelsen endres (`EnsureBackBuffer`/`FreeBackBuffer`).
-- **Hurtigstien:** knappene tegnes rett inn i bufferet, og stripa blittes
-  derfra. Mellomrommene er forrige fulle bilde. Nytt vilkår: `bbValid`, og
-  overlayet må verken være åpent eller synlig under uttoning.
-- **Lysene:** tegnes med `DC_PEN`/`DC_BRUSH` og `SetDCPenColor`/
-  `SetDCBrushColor`, satt bare ved fargeskifte, i stedet for `penUp`,
-  `penDown`, `brUp` og `brDown`. Det er fire GDI-objekter mindre, og bufferet
-  tar to av dem.
-- **Vannmerke-cachen er beholdt.** Første versjon fjernet den og tegnet teksten
-  per bilde. Det kostet 0,50–0,53 ms ved 1280×720 og spiste hele gevinsten i
-  vanlig modus. Se planens avvik.
+**The change:**
+- **Persistent buffer:** `bbDC`/`bbBmp` live between frames and are rebuilt
+  only when the size changes (`EnsureBackBuffer`/`FreeBackBuffer`).
+- **The fast path:** the buttons are drawn straight into the buffer, and the
+  strip is blitted from there. The gaps are the previous full frame. New
+  condition: `bbValid`, and the overlay must be neither open nor visible while
+  fading out.
+- **The candles:** drawn with `DC_PEN`/`DC_BRUSH` and `SetDCPenColor`/
+  `SetDCBrushColor`, set only on a color change, instead of `penUp`,
+  `penDown`, `brUp` and `brDown`. That is four GDI objects fewer, and the
+  buffer takes two of them.
+- **The watermark cache is kept.** The first version removed it and drew the
+  text per frame. That cost 0.50–0.53 ms at 1280×720 and ate the whole gain in
+  panel mode. See the plan's deviations.
 
-**Piksler.** Målebygg av master og nytt bygg med *samme* endringer: Binance-svaret
-lest fra fil (faste data), `TrackMouseEvent` som no-op, og vinduet på x = −1270,
-så den ekte pekeren ikke når det. All tilstand ble styrt med postede
-meldinger, og hvert bilde ble fanget med `PrintWindow` først når to bilder på
-rad var likt (fallgruve 50). 15 tilstander: hvile; hover på hver av fire knapper,
-både hurtigsti og full opptegning; forlatt; trådkors; overlay; overlay med musa
-over en knapp; overlay lukket; skrivebordsmodus 3840×1600. Hver tilstand er
-bekreftet mot hvile: knapp 468 px, trådkors 9 417 px, overlay 40 460 px.
+**Pixels.** Measurement builds of master and the new build with the *same*
+changes: the Binance response read from a file (fixed data), `TrackMouseEvent`
+as a no-op, and the window at x = −1270, so the real cursor does not reach it.
+All state was driven with posted messages, and each frame was captured with
+`PrintWindow` only when two frames in a row were identical (pitfall 50).
+15 states: rest; hover on each of four buttons, both fast path and full
+repaint; mouse left; crosshair; overlay; overlay with the mouse over a button;
+overlay closed; desktop mode 3840×1600. Each state is confirmed against rest:
+button 468 px, crosshair 9 417 px, overlay 40 460 px.
 
-| Gjennomløp | Master mot nytt | Hurtigsti mot full (nytt / master) |
+| Pass | Master vs new | Fast path vs full (new / master) |
 |---|---|---|
-| 1 | **0 avvik**, 15/15 | 0 / 0, alle fire knapper |
-| 2 | **0 avvik**, 15/15 | 0 / 0, alle fire knapper |
+| 1 | **0 differences**, 15/15 | 0 / 0, all four buttons |
+| 2 | **0 differences**, 15/15 | 0 / 0, all four buttons |
 
-**Opptegning.** Tre runder, master og nytt vekselvis, 5 s `InvalidateRect`
-hvert 16. ms. Vanlig modus på x = −1270, fordi en første kjøring på skjermen
-ble forurenset av hover (0,2 ms trådkors og opptil 941 bilder per runde):
+**Painting.** Three rounds, master and new alternating, 5 s of `InvalidateRect`
+every 16 ms. Panel mode at x = −1270, because a first run on screen was
+polluted by hover (0.2 ms crosshair and up to 941 frames per round):
 
-| Konfig | Master, median | **Nytt, median** | Rundemedianer master → nytt |
+| Config | Master, median | **New, median** | Round medians master → new |
 |---|---|---|---|
-| vanlig 1280×720 | 1,585 ms | **1,330 ms (−16 %)** | 2,26 / 1,48 / 1,53 → 1,23 / 1,36 / 1,33 |
-| skrivebord 3840×1600 | 11,696 ms | **5,128 ms (−56 %)** | 11,75 / 11,75 / 11,66 → 4,99 / 5,08 / 5,32 |
+| panel 1280×720 | 1.585 ms | **1.330 ms (−16 %)** | 2.26 / 1.48 / 1.53 → 1.23 / 1.36 / 1.33 |
+| desktop 3840×1600 | 11.696 ms | **5.128 ms (−56 %)** | 11.75 / 11.75 / 11.66 → 4.99 / 5.08 / 5.32 |
 
-| Ledd (median) | Vanlig master → nytt | Skrivebord master → nytt |
+| Step (median) | Panel master → new | Desktop master → new |
 |---|---|---|
-| Buffer lages | 0,236 → 0,000 ms | 0,069 → 0,000 ms |
-| Vannmerke-blit | 0,239 → 0,276 ms | **6,500 → 1,817 ms** |
-| Header-tekst | 0,206 → 0,235 ms | 0,283 → 0,285 ms |
-| Lys | 0,600 → 0,536 ms | 1,461 → 1,340 ms |
-| Blit til vindu | 0,098 → 0,098 ms | 1,389 → 1,393 ms |
-| Buffer slettes | 0,011 → 0,000 ms | **1,739 → 0,000 ms** |
+| Buffer created | 0.236 → 0.000 ms | 0.069 → 0.000 ms |
+| Watermark blit | 0.239 → 0.276 ms | **6.500 → 1.817 ms** |
+| Header text | 0.206 → 0.235 ms | 0.283 → 0.285 ms |
+| Candles | 0.600 → 0.536 ms | 1.461 → 1.340 ms |
+| Blit to window | 0.098 → 0.098 ms | 1.389 → 1.393 ms |
+| Buffer deleted | 0.011 → 0.000 ms | **1.739 → 0.000 ms** |
 
-> **Mandatets 0,85 ms nås fortsatt ikke.** Det som gjenstår ved 1280×720, er
-> lysene (0,54), vannmerke-bliten (0,28) og headerteksten (0,24). Ved
-> 3840×1600 er det to fullskjerms-blitter på 1,4–1,8 ms hver og lysene
-> (1,34). Å bytte penn bare ved fargeskifte ga ingen målbar gevinst alene.
+> **The mandate's 0.85 ms is still not reached.** What remains at 1280×720 is
+> the candles (0.54), the watermark blit (0.28) and the header text (0.24). At
+> 3840×1600 it is two full-screen blits of 1.4–1.8 ms each and the candles
+> (1.34). Switching pen only on a color change gave no measurable gain on its
+> own.
 
-**Håndtak og minne i hvile.** Ikke-instrumenterte bygg, 15 s etter start, fem
-avlesninger per runde, to runder:
+**Handles and memory at rest.** Non-instrumented builds, 15 s after start, five
+readings per round, two rounds:
 
-| Konfig | Private bytes | GDI | USER |
+| Config | Private bytes | GDI | USER |
 |---|---|---|---|
-| master, vanlig 1280×720 | 3,69–3,92 MB | 31 | 14 |
-| **nytt, vanlig 1280×720** | 3,59–3,77 MB | **29** | 14 |
-| master, skrivebord 3840×1600 | 3,37–3,48 MB | 28 | 6 |
-| **nytt, skrivebord 3840×1600** | 3,37–3,41 MB | **26** | 6 |
+| master, panel 1280×720 | 3.69–3.92 MB | 31 | 14 |
+| **new, panel 1280×720** | 3.59–3.77 MB | **29** | 14 |
+| master, desktop 3840×1600 | 3.37–3.48 MB | 28 | 6 |
+| **new, desktop 3840×1600** | 3.37–3.41 MB | **26** | 6 |
 
-> Bufferet på 24 MB vises ikke i private bytes, på samme måte som
-> vannmerke-cachen ikke gjorde det. Skrivebordsmodus står nå på 28 GDI i
-> master. Fase 9 målte 30, før DPI-rettelsen, og det er ikke undersøkt hva som
-> utgjør forskjellen.
+> The 24 MB buffer does not show in private bytes, just as the watermark cache
+> did not. Desktop mode is now at 28 GDI in master. Phase 9 measured 30, before
+> the DPI fix, and what makes up the difference has not been investigated.
 
-**Etter rådgiverens gjennomgang**, to ting som ellers bare var påstått:
+**After the advisor's review**, two things that were otherwise only claimed:
 
-| Test | Resultat |
+| Test | Result |
 |---|---|
-| Ekte omstart av Explorer med nytt bygg: bufferet brukt av en *ny* flate | ny flate i WorkerW etter **594 ms**, vindustre 14/14, og **90–98 %** av synlige skrivebordspunkter i alle fire kvadranter har grafens bakgrunnsfarge (DPI-bevisst probe) |
-| 30 størrelsesendringer i vanlig modus | GDI/USER **29/14 før og 29/14 etter** |
-| Hover postet rett etter størrelsesendring (1280×720, 900×500, 1500×800) | hurtigstien identisk med full opptegning i alle tre (`bbValid` stenger hurtigstien til bufferet har riktig størrelse) |
+| Real Explorer restart with the new build: the buffer used by a *new* surface | new surface in WorkerW after **594 ms**, window tree 14/14, and **90–98 %** of visible desktop points in all four quadrants have the chart's background color (DPI-aware probe) |
+| 30 resizes in panel mode | GDI/USER **29/14 before and 29/14 after** |
+| Hover posted right after a resize (1280×720, 900×500, 1500×800) | the fast path identical to a full repaint in all three (`bbValid` blocks the fast path until the buffer has the right size) |
 
-> **DC-tilstanden lever nå mellom bildene.** Penner, pensler, fonter,
-> tekstfarge og bakgrunnsmodus som siste bilde valgte, står fortsatt valgt i
-> `bbDC` når neste bilde begynner. Pikseltesten fant ingen følger av det i de
-> 15 tilstandene. Ny tegnekode må likevel selv velge alt den bruker, og kan
-> ikke regne med en fersk DC.
+> **The DC state now lives between frames.** Pens, brushes, fonts, text color
+> and background mode that the last frame selected are still selected in
+> `bbDC` when the next frame begins. The pixel test found no consequences of
+> that in the 15 states. New drawing code must still select everything it uses
+> itself, and cannot count on a fresh DC.
 
-`/W4` rent, x86.
+`/W4` clean, x86.
 
 ---
 
-### Fase 11 — akser, kontrast og tidsakse
+### Phase 11 — axes, contrast and time axis
 
-Plan og avvik: `docs/plans/2026-09-17-axes.md`. Gren `akser`.
+Plan and deviations: `docs/plans/2026-09-17-axes.md`. Branch `akser`.
 
-**Endringen:**
-- **Geometri:** `PAD_R` 54 → 84 (priskolonne 76 + kantsikring 8) og `PAD_B`
-  10 → 18 (tidsbånd). All aksetekst leser `axL`/`axR`; de magiske
-  `right + 4`, `W − 4`, `W − 2` og `W − 1` er borte.
-- **Aksefont:** `hFontAxis` = Lucida Console em 15, `ANTIALIASED_QUALITY`.
-  Målt: 11 px sifferhøyde, 9 px tegnbredde, tmHeight 15. Tabellen over andre
-  fonter står i planen. `hFontSmall` er uendret for header, overlay og
-  hover-boks, der `LINE_H = 13` er målt på den.
-- **Aksefarge:** `CLR_AXIS` #A0AAB8, **8,05:1** (spesifikasjonen sa 4,85:1). De
-  gamle aksene i `CLR_DIM` lå på 4,12:1, under AA.
-- **Vannmerke:** `WatermarkAlpha(W)`, se *Vannmerket*.
-- **Tidsakse:** bare tekst, `TimeTickStep` (med tak, ikke gulv — gulv
-  kolliderer, se planens avvik 3), rundet opp med `NiceTimeStep` og forankret i
-  lokal tid via `openTime`. Ingen allokering; O(N_x) per bilde.
-- **Prisetikett under stempelet** tegnes ikke når de ville overlappet (< 16 px).
+**The change:**
+- **Geometry:** `PAD_R` 54 → 84 (price column 76 + edge margin 8) and `PAD_B`
+  10 → 18 (time band). All axis text reads `axL`/`axR`; the magic
+  `right + 4`, `W − 4`, `W − 2` and `W − 1` are gone.
+- **Axis font:** `hFontAxis` = Lucida Console em 15, `ANTIALIASED_QUALITY`.
+  Measured: 11 px digit height, 9 px character width, tmHeight 15. The table of
+  other fonts is in the plan. `hFontSmall` is unchanged for header, overlay and
+  hover box, where `LINE_H = 13` is measured on it.
+- **Axis color:** `CLR_AXIS` #A0AAB8, **8.05:1** (the spec said 4.85:1). The
+  old axes in `CLR_DIM` were at 4.12:1, below AA.
+- **Watermark:** `WatermarkAlpha(W)`, see *The watermark*.
+- **Time axis:** text only, `TimeTickStep` (with ceiling, not floor — floor
+  collides, see the plan's deviation 3), rounded up with `NiceTimeStep` and
+  anchored in local time via `openTime`. No allocation; O(N_x) per frame.
+- **Price label under the stamp** is not drawn when they would overlap
+  (< 16 px).
 
-**Enhetstester** mot funksjonene trukket ut av `ticker.c` med `awk`:
-**572 940 / 572 940**. `WatermarkAlpha` er testet på gulv, nominell bredde, tak,
-W ≤ 0, og monotoni og grenser for alle W fra 1 til 8000. `TimeTickStep` er testet
-på motbeviset mot gulv (M = 9, W = 320 → S = 3), degenererte tilfeller og
-kollisjonsfrihet uttømmende over W_chart 160–4000, Δx 80–118 og dCount 1–1440.
-`NiceTimeStep` avrunder aldri nedover for noe intervall, og treffer forventet
-steg for 1m, 5m, 1t, 4t og 1d.
+**Unit tests** against the functions extracted from `ticker.c` with `awk`:
+**572 940 / 572 940**. `WatermarkAlpha` is tested on floor, nominal width,
+ceiling, W ≤ 0, and monotonicity and bounds for every W from 1 to 8000.
+`TimeTickStep` is tested on the counterexample against floor (M = 9, W = 320 →
+S = 3), degenerate cases and freedom from collisions exhaustively over W_chart
+160–4000, Δx 80–118 and dCount 1–1440. `NiceTimeStep` never rounds down for any
+interval, and hits the expected step for 1m, 5m, 1h, 4h and 1d.
 
-**Piksler**, `PrintWindow` av `--dup`-instanser (skriver ikke til registret),
-live data:
+**Pixels**, `PrintWindow` of `--dup` instances (they do not write to the
+registry), live data:
 
-| Størrelse, par/intervall | α (t) | Vannmerkepiksel funnet | Ikke-BG i `x ≥ W − 5` | Tidsbånd utenfor `[left, right]` | Rad `y = bottom` / `bottom + 1` | Tekstrader i båndet |
+| Size, pair/interval | α (t) | Watermark pixel found | Non-BG in `x ≥ W − 5` | Time band outside `[left, right]` | Row `y = bottom` / `bottom + 1` | Text rows in the band |
 |---|---|---|---|---|---|---|
-| 400×250 BTC 1m | 0,040 (10) | `#161A20` ✓ | 0 | 0 | 306 / 0 | 235–245 (11 px) |
-| 1280×720 BTC 1m | 0,065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
-| 1280×720 BTC 1t | 0,065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
-| 1280×720 BNB 4t | 0,065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
-| 1920×900 ETH 1d | 0,080 (20) | `#1F2329` ✓ | 0 | 0 | 1826 / 0 | 885–895 |
-| 3000×900 SOL 5m | 0,100 (26) | `#25292E` ✓ | 0 | 0 | 2906 / 0 | 885–895 |
+| 400×250 BTC 1m | 0.040 (10) | `#161A20` ✓ | 0 | 0 | 306 / 0 | 235–245 (11 px) |
+| 1280×720 BTC 1m | 0.065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
+| 1280×720 BTC 1h | 0.065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
+| 1280×720 BNB 4h | 0.065 (17) | `#1D2026` ✓ | 0 | 0 | 1186 / 0 | 705–715 |
+| 1920×900 ETH 1d | 0.080 (20) | `#1F2329` ✓ | 0 | 0 | 1826 / 0 | 885–895 |
+| 3000×900 SOL 5m | 0.100 (26) | `#25292E` ✓ | 0 | 0 | 2906 / 0 | 885–895 |
 
-Ingen piksler til høyre for `W − 5`. Mellom `W − 8` og `W − 5` ligger bare
-stempelets flate, som får 3 px luft rundt teksten, og aldri tekst. Raden
-`y = bottom` er hel (rutenettet), og `bottom + 1` er tom. Alle
-tekstpiksler i båndet har nøyaktig `#A0AAB8`: Lucida Console i 15 px
-kantutjevnes ikke, heller ikke med `ANTIALIASED_QUALITY`. Avstanden mellom
-etikettene, målt i bildene: 118 px (1m, 1280), 189 px (1t, 2 døgn), 166 px
-(4t, 7 døgn), 170 px (1d, 1920) og 183 px (400×250). Minste luft mellom to
-etiketter er 67 px (4t). Mellomrommet *inne i* `DD.MM HH:MM` er 12 px, og det
-må ikke forveksles med luften mellom to etiketter.
+No pixels to the right of `W − 5`. Between `W − 8` and `W − 5` there is only
+the stamp's surface, which gets 3 px of padding around the text, and never
+text. The row `y = bottom` is solid (the grid), and `bottom + 1` is empty. All
+text pixels in the band are exactly `#A0AAB8`: Lucida Console at 15 px is not
+anti-aliased, not even with `ANTIALIASED_QUALITY`. The spacing between the
+labels, measured in the frames: 118 px (1m, 1280), 189 px (1h, 2 days), 166 px
+(4h, 7 days), 170 px (1d, 1920) and 183 px (400×250). The smallest gap between
+two labels is 67 px (4h). The space *inside* `DD.MM HH:MM` is 12 px, and it
+must not be confused with the gap between two labels.
 
-**Opptegning**, QPC rundt `DrawChart`, 400 bilder per kjøring,
-`InvalidateRect` hvert 16. ms, vinduet nesten helt utenfor skjermen, live data,
-master og nytt vekselvis:
+**Painting**, QPC around `DrawChart`, 400 frames per run,
+`InvalidateRect` every 16 ms, the window almost entirely off screen, live data,
+master and new alternating:
 
-| Konfig | Runde 1 master / nytt | Runde 2 | Runde 3 |
+| Config | Round 1 master / new | Round 2 | Round 3 |
 |---|---|---|---|
-| 1280×720 | 1,613 / 1,990 ms | 1,323 / 1,242 ms | 1,325 / 1,289 ms |
-| 3000×1200 | 2,306 / 2,769 ms | 2,663 / 2,611 ms | 2,508 / 2,525 ms |
+| 1280×720 | 1.613 / 1.990 ms | 1.323 / 1.242 ms | 1.325 / 1.289 ms |
+| 3000×1200 | 2.306 / 2.769 ms | 2.663 / 2.611 ms | 2.508 / 2.525 ms |
 
-Runde 1 er oppvarming. Etter den er forskjellen innenfor støyen: ~12–25
-`ExtTextOutW` per bilde er ikke målbare mot resten.
+Round 1 is warm-up. After it the difference is within the noise: ~12–25
+`ExtTextOutW` per frame are not measurable against the rest.
 
-**GDI i hvile** (1280×720, 5 og 8 s etter start): master 29 / 29, nytt
-**30 / 30**. Den ene er `hFontAxis`.
+**GDI at rest** (1280×720, 5 and 8 s after start): master 29 / 29, new
+**30 / 30**. The extra one is `hFontAxis`.
 
-`/W4` rent, x86.
+`/W4` clean, x86.
 
 ---
 
-### Fokus-blink — klassisk NC-ramme ved aktivering
+### Focus flash — classic NC frame on activation
 
-Plan og avvik: `docs/plans/2026-09-17-focus-flash.md`.
-Gren `fokus-blink`, flettet inn med `--no-ff` før fase 12.
+Plan and deviations: `docs/plans/2026-09-17-focus-flash.md`.
+Branch `fokus-blink`, merged with `--no-ff` before phase 12.
 
-**Årsaken, målt.** En probe leste panelets kant fra den ferdig sammensatte
-skjermen (`BitBlt` fra skjerm-DC) hvert ~2. ms, mens fokus gikk til et
-hjelpevindu og tilbake. Det var **ikke** et blink på ett bilde:
-`DefWindowProc(WM_NCACTIVATE)` tegner den klassiske `WS_THICKFRAME`-rammen inn i
-vindus-DC-en. `WM_NCCALCSIZE` gjør klienten like stor som vinduet, så rammen
-havner *oppå* grafen, 3 px dyp: #E3E3E3 og #FFFFFF ytterst, deretter #B4B4B4
-(`COLOR_ACTIVEBORDER`) eller #F4F7FC (`COLOR_INACTIVEBORDER`). Den blir stående
-til neste fulle opptegning, altså til neste datahenting (målt 1,6 s uten støy,
-opptil 3 s). `WM_SETTEXT`, som kommer ved symbolbytte, tegner den også.
+**The cause, measured.** A probe read the panel's edge from the fully composed
+screen (`BitBlt` from the screen DC) every ~2 ms, while focus went to a
+helper window and back. It was **not** a one-frame flash:
+`DefWindowProc(WM_NCACTIVATE)` draws the classic `WS_THICKFRAME` frame into the
+window DC. `WM_NCCALCSIZE` makes the client as large as the window, so the
+frame lands *on top of* the chart, 3 px deep: #E3E3E3 and #FFFFFF outermost,
+then #B4B4B4 (`COLOR_ACTIVEBORDER`) or #F4F7FC (`COLOR_INACTIVEBORDER`). It
+stays until the next full repaint, that is, until the next data fetch
+(measured 1.6 s without noise, up to 3 s). `WM_SETTEXT`, which comes on a
+symbol change, draws it too.
 
-**Endringen:** `WM_NCACTIVATE` → `DefWindowProcW(hwnd, msg, wParam, -1)`, og
-`WM_NCPAINT` → 0 som vern. `DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`
-fra mandatet er **ikke** brukt (fallgruve 52).
+**The change:** `WM_NCACTIVATE` → `DefWindowProcW(hwnd, msg, wParam, -1)`, and
+`WM_NCPAINT` → 0 as a guard. `DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`
+from the mandate is **not** used (pitfall 52).
 
-| Variant, 3 fokussykluser | Rammefargede px | `WM_SETTEXT` |
+| Variant, 3 focus cycles | Frame-colored px | `WM_SETTEXT` |
 |---|---|---|
-| Uten rettelse | 7 181 184 | 230 100 |
+| Without fix | 7 181 184 | 230 100 |
 | `return TRUE` | 0 | 0 |
 | `DefWindowProc(…, -1)` | 0 | 0 |
 | `-1` + `WM_NCPAINT` | 0 | 0 |
-| `-1` + `WM_NCPAINT` + `DWMNCRP_DISABLED` | **1 296**, forgrunnsbytte feilet 2 av 3 | 0 |
+| `-1` + `WM_NCPAINT` + `DWMNCRP_DISABLED` | **1 296**, foreground switch failed 2 of 3 | 0 |
 
-**Etter fletting med fase 12**, 5 fokussykluser × 1,5 s hver vei. Samples der et
-annet vindu var i forgrunnen, eller dekket ett av 8 kantpunkter, er forkastet
-(fallgruve 54):
+**After merging with phase 12**, 5 focus cycles × 1.5 s each way. Samples where
+another window was in the foreground, or covered one of 8 edge points, are
+discarded (pitfall 54):
 
-| Bygg | Gyldige samples | Rammefargede px | `WM_SETTEXT` / størrelsesendring |
+| Build | Valid samples | Frame-colored px | `WM_SETTEXT` / resize |
 |---|---|---|---|
-| Kontroll, uten rettelse | 984 | 7 910 988 | 230 100 / 0 |
-| `ticker.exe` fra master | 955 | **0** | **0 / 0** |
-| Panel laget på nytt etter to modusbytter | 758 | **0** | **0 / 0** |
+| Control, without fix | 984 | 7 910 988 | 230 100 / 0 |
+| `ticker.exe` from master | 955 | **0** | **0 / 0** |
+| Panel recreated after two mode switches | 758 | **0** | **0 / 0** |
 
-GDI/USER i hvile: 30 / 14. `/W4` rent, x86.
+GDI/USER at rest: 30 / 14. `/W4` clean, x86.
 
-### Fase 12 — modusveksling fra tray-menyen
+### Phase 12 — mode switching from the tray menu
 
-Plan, målinger og avvik: `docs/plans/2026-09-17-mode-switching.md`.
-Gren `modusveksling`, flettet inn med `--no-ff`.
+Plan, measurements and deviations: `docs/plans/2026-09-17-mode-switching.md`.
+Branch `modusveksling`, merged with `--no-ff`.
 
-**Endringen:**
-- `ID_TRAY_DESKTOP` (1003) og `BuildTrayMenu()`. Menyen bygges ved hvert
-  høyreklikk: «Skrivebordsmodus» med hake, «Standardvisning» (grå i
-  skrivebordsmodus), skillelinje, «Avslutt Ticker». Et duplikat får ikke
-  modusvalget.
-- `SetDesktopMode()` **river ned og lager vinduet på nytt** gjennom
-  `TogglePopup`, i stedet for å flytte det med `SetParent` (fallgruve 53).
-  Rekkefølgen er `KillTimer(TIMER_EMBED_ID)`, så `SaveWindowPlacement` mens
-  flagget fortsatt sier panel, så `hPopup = NULL` under lås før
-  `DestroyWindow` (da starter `WM_NCDESTROY` ingen timer). Deretter nullstilles
-  `animRunning`, `trackingMouse`, `panning` og `bbValid`, flagget settes og
-  lagres, og `TogglePopup` kalles.
-- `SaveGeometry` oppdaterer også `g_savedPanelX/Y/W/H`. `PlacePopupInitially`
-  leser dem, og panelet lages nå på nytt etter hver tur innom skrivebordet.
-- `DesktopMode` i registret, se *Registret*.
+**The change:**
+- `ID_TRAY_DESKTOP` (1003) and `BuildTrayMenu()`. The menu is built on every
+  right-click: "Desktop mode" with a check mark, "Default view" (grayed in
+  desktop mode), separator, "Quit". A duplicate does not get the mode
+  choice.
+- `SetDesktopMode()` **tears down and recreates the window** through
+  `TogglePopup`, instead of moving it with `SetParent` (pitfall 53).
+  The order is `KillTimer(TIMER_EMBED_ID)`, then `SaveWindowPlacement` while
+  the flag still says panel, then `hPopup = NULL` under the lock before
+  `DestroyWindow` (so `WM_NCDESTROY` starts no timer). Then
+  `animRunning`, `trackingMouse`, `panning` and `bbValid` are reset, the flag is
+  set and saved, and `TogglePopup` is called.
+- `SaveGeometry` also updates `g_savedPanelX/Y/W/H`. `PlacePopupInitially`
+  reads them, and the panel is now recreated after every trip through the
+  desktop.
+- `DesktopMode` in the registry, see *The registry*.
 
-**Verifisert** i testbygg med `REG_PATH` = `Software\TickerTest`, drevet med
+**Verified** in a test build with `REG_PATH` = `Software\TickerTest`, driven with
 `PostMessage(WM_COMMAND, 1003)`:
 
-| Modus | Forelder | `WS_CHILD` | `WS_THICKFRAME` | Lagdelt / gjennomsiktig | TOPMOST | DPI |
+| Mode | Parent | `WS_CHILD` | `WS_THICKFRAME` | Layered / transparent | TOPMOST | DPI |
 |---|---|---|---|---|---|---|
-| Skrivebord | WorkerW | 1 | 0 | 1 / 1 | 0 | per-monitor |
-| Panel | ingen | 0 | 1 | 0 / 0 | 0 | uvitende |
+| Desktop | WorkerW | 1 | 0 | 1 / 1 | 0 | per-monitor |
+| Panel | none | 0 | 1 | 0 / 0 | 0 | unaware |
 
-- **Registret** følger byttene, og en ny prosess uten argumenter starter rett i
-  skrivebordsmodus, også etter at forrige prosess ble drept i den modusen.
-- **Geometri:** 300,200 900×500 inn, samme ut etter rundtur, også i registret.
-- **Data:** `candleCount` 300 før og i første bilde etter hvert bytte.
-- **Postet «Standardvisning» i skrivebordsmodus** endrer ikke flaten.
-- **GDI/USER i hvile:** 30 / 14–15 etter 20, 40, 60 og 100 rundturer. Det er
-  platå, ikke lekkasje.
-- **Menyen** (`BuildTrayMenu` trukket ut med `awk`): 15/15.
+- **The registry** follows the switches, and a new process without arguments
+  starts straight in desktop mode, also after the previous process was killed
+  in that mode.
+- **Geometry:** 300,200 900×500 in, the same out after a round trip, also in the
+  registry.
+- **Data:** `candleCount` 300 before and in the first frame after each switch.
+- **A posted "Default view" in desktop mode** does not change the surface.
+- **GDI/USER at rest:** 30 / 14–15 after 20, 40, 60 and 100 round trips. That is
+  a plateau, not a leak.
+- **The menu** (`BuildTrayMenu` extracted with `awk`): 15/15.
 
-**Byttetid**, fra `WM_COMMAND` til første fulle bilde er blittet:
+**Switch time**, from `WM_COMMAND` until the first full frame is blitted:
 
-| Retning | Median | Spenn | Største ledd |
+| Direction | Median | Range | Largest step |
 |---|---|---|---|
-| Til skrivebord 3840×1600 | **28 ms** | 26–43 ms | 16 ms: første skriving i ny vannmerke-cache og nytt buffer (fallgruve 48) |
-| Til panel 1280×720 | **18 ms** | 16–37 ms | 6 ms: plassering, visning og forgrunn i `TogglePopup` |
+| To desktop 3840×1600 | **28 ms** | 26–43 ms | 16 ms: first write into a new watermark cache and a new buffer (pitfall 48) |
+| To panel 1280×720 | **18 ms** | 16–37 ms | 6 ms: placement, show and foreground in `TogglePopup` |
 
-> **Mandatets < 16 ms er ikke nådd, og det er et bevisst valg.** Det kan bare
-> nås ved å beholde bitmapene for begge størrelser, rundt 48 MB mer mens
-> panelet er i bruk. Brukeren valgte gjenoppbygging ved bytte: byttet er
-> sjeldent og manuelt, og 28 ms er under to bilder ved 60 Hz.
+> **The mandate's < 16 ms is not reached, and that is a deliberate choice.** It
+> can only be reached by keeping the bitmaps for both sizes, about 48 MB more
+> while the panel is in use. The user chose rebuilding on switch: the switch is
+> rare and manual, and 28 ms is under two frames at 60 Hz.
 
-### Fase 13 — start ved pålogging fra tray-menyen
+### Phase 13 — start at sign-in from the tray menu
 
-Plan, målinger og avvik: `docs/plans/2026-09-17-autostart.md`.
-Gren `autostart`.
+Plan, measurements and deviations: `docs/plans/2026-09-17-autostart.md`.
+Branch `autostart`.
 
-**Endringen:**
-- `IDM_TOGGLE_AUTOSTART` (1004). «Start ved pålogging» med hake står rett over
-  «Avslutt Ticker», med skillelinje på begge sider. Haken leses fra registret
-  hver gang menyen bygges. Et duplikat får ikke valget.
-- `AutostartPresent()` gir haken: verdien finnes, uansett type og innhold.
-- `ToggleAutostart()`: er verdien lik gjeldende sitert sti (`_wcsicmp`), slettes
-  den. Ellers skrives gjeldende sti, også når verdien peker på en flyttet exe,
-  er usitert, har feil type eller er for lang. Et avkrysset valg med foreldet
-  sti rettes derfor ved klikk i stedet for å slås av.
-- `AutostartCommand()` bruker samme `MAX_PATH`-vakt som `SpawnInstance`. En
-  avkuttet sti skrives aldri.
-- Mandatet nevner `WM_CONTEXTMENU`, men tray-ikonet leverer `WM_RBUTTONUP`
-  gjennom `WM_TRAYICON`. Punktet ligger derfor i `BuildTrayMenu()`.
+**The change:**
+- `IDM_TOGGLE_AUTOSTART` (1004). "Start at sign-in" with a check mark sits
+  directly above "Quit", with a separator on both sides. The check mark is read
+  from the registry every time the menu is built. A duplicate does not get the
+  item.
+- `AutostartPresent()` gives the check mark: the value exists, whatever its
+  type and content.
+- `ToggleAutostart()`: if the value equals the current quoted path
+  (`_wcsicmp`), it is deleted. Otherwise the current path is written, also when
+  the value points to a moved exe, is unquoted, has the wrong type or is too
+  long. A checked item with a stale path is therefore fixed by a click instead
+  of being turned off.
+- `AutostartCommand()` uses the same `MAX_PATH` guard as `SpawnInstance`. A
+  truncated path is never written.
+- The mandate mentions `WM_CONTEXTMENU`, but the tray icon delivers
+  `WM_RBUTTONUP` through `WM_TRAYICON`. The item therefore lives in
+  `BuildTrayMenu()`.
 
-**Verifisert** i testbygg med `AUTOSTART_KEY` = `Software\TickerTestRun`, fra
-to mapper med mellomrom i navnet, **27/27 i tre kjøringer**. Testene dekker
-menyrekkefølge og tekst, hake før og etter klikk, sitert `REG_SZ`, sletting,
-flyttet exe (verdien oppdateres, ikke slettes), casing, usitert sti,
-`REG_DWORD`, for lang verdi og duplikat. Kommandolinja er kjørt med
-`CreateProcess`-tolkning og starter riktig exe. **GDI/USER 28/13**, uendret
-gjennom 800 klikk og 80 menyer. En ekte pålogging er ikke testet.
+**Verified** in a test build with `AUTOSTART_KEY` = `Software\TickerTestRun`,
+from two folders with spaces in the name, **27/27 in three runs**. The tests
+cover menu order and text, check mark before and after a click, quoted
+`REG_SZ`, deletion, moved exe (the value is updated, not deleted), casing,
+unquoted path, `REG_DWORD`, a value that is too long, and a duplicate. The
+command line was run through `CreateProcess` parsing and starts the right exe.
+**GDI/USER 28/13**, unchanged through 800 clicks and 80 menus. A real sign-in
+is not tested.
 
-**Etter fletting**, i bygget som ligger i rotmappa og mot den ekte
-Run-nøkkelen: **14/14**. Menyen har riktig rekkefølge og tekst; autostart
-skriver `"C:\Users\sysadmin\Desktop\Ticker\ticker.exe"` og sletter igjen;
-skrivebordsmodus av og på i samme kjøring gir flate i WorkerW → toppnivåpanel →
-flate i WorkerW, med `DesktopMode` 1 → 0 → 1 og «Standardvisning» grå bare i
-skrivebordsmodus. Run-nøkkelen sto uten `Ticker`-verdi før og etter.
-
----
-
-### Fase 14 — tekstfri flate på skrivebordet
-
-Plan og målinger: `docs/plans/2026-09-17-ambient-mode.md`.
-Gren `omgivelsesmodus`.
-
-**Premisset:** et panel leses fovealt — brukeren stopper opp og dekoder tall.
-En flate i skrivebordet leses perifert, og da er alfanumeriske stempler
-interferens mot ikoner og mapper. Opptegningen deles derfor i to lag:
-infrastruktur (kurve, rutenett, akselogikk) som består, og metadata (pris,
-prosent, undertittel, akseetiketter, siste-pris-stempel) som deaktiveres når
-vinduet er en bakgrunnsstruktur.
-
-**Endringen:**
-- `ChartGeometry()` gir hele flaten i skrivebordsmodus: `0, 0, W, H`. Ett sted,
-  og vannmerkets sentrering, rutenettet, lysene, klipperegionen og
-  siste-pris-linja følger etter.
-- `DrawChart()`: header-blokka, prisaksens etiketter, hele tidsakse-blokka og
-  siste-pris-**stempelet** er gated på `!g_desktopMode`. Den stiplede
-  siste-pris-linja blir stående — den er geometri, ikke et tall. Vannmerket
-  består som identitetsmarkør.
-- Tom buffer i skrivebordsmodus returnerer uten melding. Flaten står med
-  bakgrunn og vannmerke.
-- Rutenettet tegner bare linje 1–3 der. Kant til kant ville lagt linje 0 og 4
-  på `y = 0` og `y = H - 1`, altså en 1 px ramme rundt hele skjermen.
-- `SetDesktopMode()` nullstiller `wmValid`: vannmerke-cachen ligger i `ctx`,
-  overlever at vinduet lages på nytt, og er nøklet på `(W, H, symIdx, ivIdx)` —
-  ikke på modus, som nå avgjør geometrien.
-- Hurtigstien for knapperaden i `WM_PAINT` krever nå `!g_desktopMode`
-  eksplisitt.
-
-**Verifisert** med dump av bakbufferet fra testbygget (`WM_APP+7`), ikke
-skjermdump: flaten er lagdelt og ligger bak ikonene. **22/22 i to kjøringer.**
-Null piksler av `CLR_AXIS`, `CLR_TEXT` og `CLR_DIM` på skrivebordet, mot
-1 514 / 230 / 105 i panelkontrollen i samme kjøring. Rutenettradene ligger på
-nøyaktig 400, 800 og 1200 av 1600 med utstrekning x 0 … 3839 — det direkte
-beviset på full flate — mot 44, 208, 373, 537, 702 og x 10 … 1195 i panelet.
-Tom buffer gir 0 `CLR_DIM`-piksler på skrivebordet og 134 i panelet.
-**GDI/USER 30/14**, uendret gjennom 50 modusbytter.
-
-**Etter fletting**, med produksjonsbygget i drift på ekte skjerm: flaten ligger
-i WorkerW, 3840×1600, og et utsnitt på 2400×1000 av skrivebordet har 0
-`CLR_AXIS`- og 0 `CLR_DIM`-piksler, med 25 210 piksler rutenett og lys. Ett
-`CLR_TEXT`-treff dukket opp i én av tre kjøringer; `WindowFromPoint` viste at
-det tilhørte et `XamlWindow`, ikke tickerflaten (fallgruve 54 igjen, nå på en
-enkelt piksel). Tray-menyen har fortsatt alle seks punktene.
+**After the merge**, in the build in the root folder and against the real Run
+key: **14/14**. The menu has the right order and text; autostart writes
+`"C:\Users\sysadmin\Desktop\Ticker\ticker.exe"` and deletes it again; desktop
+mode off and on in the same run gives surface in WorkerW → top-level panel →
+surface in WorkerW, with `DesktopMode` 1 → 0 → 1 and "Default view" grayed only
+in desktop mode. The Run key had no `Ticker` value before and after.
 
 ---
 
-### Fase 15 — luft mot aksen og prislinja som bro
+### Phase 14 — text-free surface on the desktop
 
-Plan og målinger: `docs/plans/2026-09-17-price-line-offset.md`.
-Gren `prislinje-offset`.
+Plan and measurements: `docs/plans/2026-09-17-ambient-mode.md`.
+Branch `omgivelsesmodus`.
 
-**Endringen:** `ChartRect` skiller nå mellom `right`/`cw` (lysenes flate) og
-`edge` (aksekanten, der stempelet og etikettene begynner). `PLOT_PAD_R` = 10 px
-er luftrommet mellom dem, med `#error`-vakt på [8, 12]. Rutenettet,
-klipperegionen, den stiplede siste-pris-linja og trådkorsets vannrette linje går
-til `edge`; lysene stopper på `right`, fordi `slot` regnes av `cw`. Alt som
-mapper x ↔ lysindeks leser `cw` og følger med uten egne endringer. I
-skrivebordsmodus er `right == edge`: der finnes ingen akse.
+**The premise:** a panel is read foveally — the user stops and decodes
+numbers. A surface in the desktop is read peripherally, and then alphanumeric
+stamps are interference against icons and folders. Painting is therefore split
+into two layers: infrastructure (curve, grid, axis logic) that stays, and
+metadata (price, percent, subtitle, axis labels, last-price stamp) that is
+disabled when the window is a background structure.
 
-**Linja tegnes til `edge + 1`.** `LineTo` tegner ikke sluttpunktet, så med
-`edge` sto kolonnen `x = edge` tom — ett svart hull mellom linja og stempelet.
-Pikselmålingen fanget det; øyet gjorde det ikke.
+**The change:**
+- `ChartGeometry()` returns the whole surface in desktop mode: `0, 0, W, H`.
+  One place, and the watermark's centering, the grid, the candles, the clip
+  region and the last-price line follow.
+- `DrawChart()`: the header block, the price axis labels, the whole time axis
+  block and the last-price **stamp** are gated on `!g_desktopMode`. The dashed
+  last-price line stays — it is geometry, not a number. The watermark stays as
+  an identity marker.
+- An empty buffer in desktop mode returns without a message. The surface shows
+  background and watermark.
+- The grid draws only lines 1–3 there. Edge to edge would have put lines 0 and
+  4 on `y = 0` and `y = H - 1`, that is, a 1 px frame around the whole screen.
+- `SetDesktopMode()` resets `wmValid`: the watermark cache lives in `ctx`,
+  survives the window being recreated, and is keyed on
+  `(W, H, symIdx, ivIdx)` — not on mode, which now decides the geometry.
+- The fast path for the button row in `WM_PAINT` now requires
+  `!g_desktopMode` explicitly.
 
-**Verifisert** med dump av bakbufferet, **11/11** ved 1280×720: `right` = 1186,
-`edge` = 1196, siste lyspiksel utenom stempelbåndet på **x = 1184**, og
-nøyaktig **én** rad med lysfarge i luftrommet — den stiplede linja.
-`x = edge` og `x = edge + 1` er begge `0x00FF66`: linja møter stempelet uten
-brudd. **GDI/USER 30/14**, uendret gjennom 40 resizer og 40 tittelbytter.
-Skrivebordsmodus uendret, høyeste lyspiksel x = 3839 av 3839.
+**Verified** with a dump of the back buffer from the test build (`WM_APP+7`),
+not a screenshot: the surface is layered and sits behind the icons. **22/22 in
+two runs.** Zero pixels of `CLR_AXIS`, `CLR_TEXT` and `CLR_DIM` on the desktop,
+against 1 514 / 230 / 105 in the panel control in the same run. The grid rows
+lie at exactly 400, 800 and 1200 of 1600 with extent x 0 … 3839 — the direct
+proof of a full surface — against 44, 208, 373, 537, 702 and x 10 … 1195 in
+the panel. An empty buffer gives 0 `CLR_DIM` pixels on the desktop and 134 in
+the panel. **GDI/USER 30/14**, unchanged through 50 mode switches.
 
-**Stiplingen brøt likevel, og ble rettet.** Første versjon tegnet hele linja
-med `PS_DASH` inn til `edge + 1`, og 20 av 20 målte bredder fikk kontakt.
-Målingen var ikke representativ: i produksjonsbygget, ved 1004 px, sto
-`x = edge` på bakgrunnsfargen — mønsteret endte i et «av»-intervall. `PS_DASH`
-gir ingen kontroll over fasen ved linjeslutt. Linja er nå **stiplet over
-dataflaten og heltrukket over luftrommet** (`right → edge + 1`, `DC_PEN` i
-samme farge). Etter rettelsen: kontakt i 20 av 20 bredder og i 12 av 12 rundt
-998 … 1009 px, altså også bredden som brøt. Det er konstruksjon, ikke flaks.
-
-**I produksjonsbygget**, lest med `PrintWindow`: **5/5** ved 1280×720. Én rad
-med lysfarge i luftrommet, siste lyspiksel x = 1184 mot kanten 1186, og
-`x = edge` og `edge + 1` begge `0x00FF66`.
-
----
-
-### Fase 16 — pris-stempel i skrivebordsmodus
-
-Plan og målinger: `docs/plans/2026-09-17-desktop-stamp.md`.
-Gren `skrivebordsstempel`.
-
-**Endringen:** skrivebordsflaten har fått tilbake en høyre marg — ikke til
-akseetiketter, men til det ene stempelet med siste pris. `ChartGeometry` setter
-`edge = W - DeskAxisW(H)` i skrivebordsmodus, og `right = edge - PLOT_PAD_R` i
-begge modi. Venstre, topp og bunn er fortsatt kant til kant.
-
-- `DeskPillH(H)` = `H / 40`, klemt til [16, 48]. `DeskPillFontH` er
-  `MulDiv(pillH, 15, 16)` — samme forhold som panelets 16 px stempel rundt en
-  15 px font. `DeskAxisW` runder tegnbredden **opp**; med nedrunding ville åtte
-  tegn fått 6 px for lite, og prisen ville falt stille tilbake til aksens
-  oppløsning.
-- Alle tre er rene funksjoner av `H`, fordi `ChartGeometry` også kalles fra
-  treffdeteksjon og panorering, der det ikke finnes noen DC å måle i.
-- `hFontPill` bufres etter høyde, som `hFontWm`, og frigis med de andre fontene.
-- Stempelet tegnes nå i begge modi. Akseetiketter, tidsakse og header er
-  fortsatt borte fra skrivebordet.
-
-**Fase 14s invariant er endret:** «null alfanumeriske piksler på skrivebordet»
-er nå «nøyaktig ett tekstelement». `CLR_AXIS`, `CLR_TEXT` og `CLR_DIM` er
-fortsatt null — stempelteksten er `CLR_BG` på mettet flate — men rutenettradene
-spenner til `edge`, ikke til `W - 1`.
-
-**Verifisert** med dump av bakbufferet, **15/15**, og panelproben fra fase 15
-fortsatt **11/11**. Ved 3840×1600: stempel 40 px, font 38 px, marg 196 px, så
-`edge` = 3644. Rutenettradene ligger på 400/800/1200 med utstrekning x 0 … 3643.
-Én rad med lysfarge i luftrommet, siste lyspiksel på x = 3618, stempelhøyden
-målt til 40 px i kolonnen `edge + 1`, og teksten innenfor `[3648, 3832)`.
-**GDI/USER 31/14**, uendret gjennom 50 modusbytter.
-
-**Teksten er trygt mørk:** flaten er lagdelt med `LWA_ALPHA 255`, ikke
-fargenøkkel. Med `LWA_COLORKEY` på `CLR_BG` ville sifrene blitt hull ut til
-tapetet.
-
-### Fase 17 — symbol og intervall fra tray-menyen
-
-Plan, målinger og avvik: `docs/plans/2026-09-18-tray-symbol-interval.md`.
-Gren `tray-symbol-intervall`, flettet inn med `--no-ff`.
-
-**Endringen:** tray-menyen har fått to undermenyer øverst, «Symbol» og
-«Intervall», med skillelinje under. Ett punkt per rad i `SYMBOLS[]` /
-`INTERVALS[]`, etikett lik overlayets, radiohake på gjeldende indeks
-(`CheckMenuRadioItem`). Dermed kan skrivebordsmodus bytte uten å gå veien om
-panelet, og panelet kan bytte uten å åpne overlayet.
-
-- `ID_TRAY_SYMBOL_FIRST` (1100) og `ID_TRAY_INTERVAL_FIRST` (1200), begge
-  100 brede. Tre `C_ASSERT` under tabellene stopper bygget om en tabell
-  vokser forbi området sitt. `#if` går ikke: `SYMBOL_COUNT` er `sizeof`.
-- `WM_COMMAND` gjør områdesjekk først, som `ID_TRAY_RESET`: en postet ID
-  utenfor tabellene er en stille no-op. Innenfor oversettes den til samme
-  `hit`-koding som `OverlayHit`, og `ApplyConfigChoice` er felles for begge
-  veier.
-- **`ApplyConfigChoice` tar ikke lenger noe HWND.** Eneste bruk var
-  `InvalidateRect(hwnd)` til slutt. Fra menyen er riktig vindu `hPopup`, som
-  er NULL når panelet er lukket, og `InvalidateRect(NULL, …)` tegner hele
-  skrivebordet på nytt. Funksjonen leser `hPopup` selv og hopper over
-  invalideringen uten vindu. Alt annet i den var allerede vindussikkert.
-- Undermenyene henges på med `MF_POPUP` og eies av hovedmenyen; `DestroyMenu`
-  i `WM_TRAYICON` river ned alle tre.
-- **Duplikater får undermenyene.** Overlayet lar dem alt bytte sin egen
-  visning, og `SaveConfig` hopper over duplikater selv.
-
-**Verifisert** i testbygg mot `Software\TickerTest`, **40/40 i to kjøringer**:
-menyinnhold, IDer og radiohaker; valg med panelet lukket (registret skrives,
-ingen popup, ingen krasj, panelet åpner med riktig par); bytte tømmer
-bufferet synkront og fyller det igjen; samme valg rører ingenting; IDer
-utenfor området rører ingenting; skrivebordsmodus tegnes på nytt med nytt
-symbol, og bildet med tomt buffer har **null** piksler over luminans 120;
-duplikat bytter lokalt uten å røre registret. **GDI/USER 33/14** etter
-oppvarming og etter hver av tre runder med 50 menyer og 40 valg.
-
-**I produksjonsbygget**, som kjører i skrivebordsmodus og bare ble lest, ikke
-klikket: menyen har 9 punkter i riktig rekkefølge, undermenyene 4 og 6, og
-radiohakene står på BTC/USDT og 1m, lik `SymbolIndex` 0 og `IntervalIndex` 0
-i `Software\Ticker`. Undermenyenes egne punkter har ID −1 (`MF_POPUP`), som
-`WM_COMMAND` aldri ser.
-
-### Fase 18 — historikk på forespørsel
-
-Plan, målinger og avvik: `docs/plans/2026-09-18-history.md`.
-Gren `historikk`, flettet inn med `--no-ff`. Valgt av agenten etter fri
-gjennomgang; begrunnelsen står i planen.
-
-**Endringen:** panorerer brukeren inn i veggen (`viewStart` 0), ber UI-tråden
-om eldre lys, og arbeidertråden henter `SEED_COUNT` lys med
-`endTime = candles[0].openTime - 1` før den vanlige hentingen i samme syklus.
-`PrependCandles` legger dem foran, flytter utsnittet like mye og teller
-`frontShift` ned, så bildet ikke rører seg.
-
-- **`evictedTotal` er blitt `frontShift`**, med fortegn: +1 per utkasting,
-  −k per bakfylling. `ApplyEviction` er blitt `ApplyFrontShift` og flytter
-  `dispStart`, `hoverIdx` og `panAnchorView` begge veier. Panoreringsblokka
-  kaller den under lås før den leser ankeret.
-- **Ankeret glir i veggen.** Klemmer `ClampView`, flyttes ankeret dit
-  utsnittet faktisk står. Før husket det overskytingen: et drag 15 lys forbi
-  veggen ga et hopp på 16 lys ved neste museflytt etter at lysene kom, og et
-  drag tilbake fra veggen sto stille like lenge.
-- **`HttpGet` sjekker statuskoden.** Ikke-2xx er FALSE. Før talte en 429 med
-  JSON-kropp som suksess, og parserne fanget det stille. Bakfyllingen trenger
-  skillet: 2xx med null lys er «historikken er slutt», alt annet backoff.
-- **`RequestHistory` vekker tråden bare når `netFailures` er 0.**
-  `hWakeEvent` nullstiller backoffen, og et drag i veggen under en frakobling
-  skal ikke slå den av. I backoff ser tråden flagget på sin egen syklus.
-- **`histDone`** på 2xx uten lys, på svar der ingenting var eldre, og på
-  fullt buffer. Nullstilles med `histPending` der `candleCount` settes til 0.
-- **`MAX_CANDLES` 6000.** Levende lys kastes aldri for å gi plass til gamle.
-- **`WM_APP_PROBE`** bak `#ifdef TICKER_PROBE`: testbyggets vindu mot indre
-  tilstand. Produksjonsbygget har ikke meldingen.
-
-**Verifisert:** enhetsharness **36/36** mot de faktiske funksjonene
-(`PrependCandles`, `ApplyFrontShift`, `MergeCandles`, `HttpGet` mot Binance
-med 400, 404, 200 og `[]`). Ende til ende **33/33 i to kjøringer**: bakfylling
-landet etter 353–372 ms, `viewStart` 0 → 300 med samme eldste synlige
-tidsstempel og pikselidentisk bilde; drag i veggen gir ett lys per spor etter
-landing, ikke hopp; hjulspam under henting; SOL/USDT 1d uttømmes på 8 runder
-til **11.08.2020**, noteringsdagen; BTC/USDT 1m fyller 6000 på 19 runder;
-`R` gir siste 300; **GDI/USER 30/14** flatt.
-
-### Fase 19 — tastatursnarveier for kontrollknappene
-
-Plan og målinger: `docs/plans/2026-09-18-keyboard-shortcuts.md`.
-Gren `tastatursnarveier`, flettet inn med `--no-ff`. Valgt av agenten blant
-fire kandidater; begrunnelsen og det som ble lagt bort (DPI-skalering av
-stempelet, maskinen står på 100 %) står i planen.
-
-**Endringen:** `WM_KEYDOWN` i `PopupProc` kjenner `Ctrl`+`N` (`[ + ]`),
-`Ctrl`+`M` (minimer), `F11` (maksimer/gjenopprett) og `Ctrl`+`W` (lukk).
-Alle fire går gjennom `OnButtonClick`, så tast og klikk deler samme sti —
-geometrien lagres før maksimering, en gjenopprettet rekt utenfor alt synlig
-fanges, og et duplikat avsluttes av lukking. `Alt`+`F4` virket fra før:
-`DefWindowProc` sender `SC_CLOSE` også uten `WS_SYSMENU`, målt.
-
-- **Sperret** midt i en panorering (`panning`): en minimering under drag
-  ville hoppet over `WM_LBUTTONUP`, som slipper capture og setter pekeren
-  tilbake. Sperret i skrivebordsmodus, som aldri får tastaturfokus uansett.
-- **`staleSecsShown`** nullstilles i `WM_APP_DATA` når linja er oppe.
-  Telleren starter på 9, så 0 er aldri et ekte sekundtall.
-- Snarveiene arver `ESC`-forbeholdet: de krever tastaturfokus i panelet.
-
-**Verifisert** ende til ende, **23/23 i to kjøringer**, i testbygg mot
-`Software\TickerTest`. Tastene sendes som ekte tastetrykk med `SendInput`
-etter at proben har bekreftet forgrunn og fokus på panelet; en kontroll med
-`Ctrl`+`0` (900×500 → 1280×720) beviser først at injeksjonen og
-`Ctrl`-tilstanden når fram. Rød kjøring mot urørt kode: 14 OK, 6 FAIL, med
-kontrollen grønn. `F11` → maksimert og tilbake til 1280×720; `Ctrl`+`M` →
-minimert; `Ctrl`+`N` → én ny prosess med panel på +30/+30, avsluttet av
-`WM_CLOSE`; `Alt`+`F4` og `Ctrl`+`W` → skjult, åpner igjen; 20 runder
-`F11`/`F11`/`Ctrl`+`M`/gjenopprett; **GDI/USER 30/14** før og etter.
-
-**Ikke testet:** `staleSecsShown`-grenen (krever kuttet nett, fallgruve 9)
-og panoreringssperren (krever tast midt i et ekte drag). Begge er lest.
+**After the merge**, with the production build running on a real monitor: the
+surface sits in WorkerW, 3840×1600, and a 2400×1000 section of the desktop has
+0 `CLR_AXIS` and 0 `CLR_DIM` pixels, with 25 210 pixels of grid and candles.
+One `CLR_TEXT` hit showed up in one of three runs; `WindowFromPoint` showed
+that it belonged to a `XamlWindow`, not the ticker surface (pitfall 54 again,
+now on a single pixel). The tray menu still has all six items.
 
 ---
 
-### Fase 20 — tastaturnavigasjon i grafen og tapt capture
+### Phase 15 — room before the axis and the price line as a bridge
 
-Plan og målinger: `docs/plans/2026-09-18-keyboard-navigation.md`.
-Gren `tastaturnavigasjon`, flettet inn med `--no-ff`. Valgt av agenten blant
-fem kandidater; det som ble lagt bort (volum, hvilemodus, oppløsningsbytte,
-DPI-stempelet) står i planen med begrunnelse.
+Plan and measurements: `docs/plans/2026-09-17-price-line-offset.md`.
+Branch `prislinje-offset`.
 
-**Endringen, i to commits.** Først `PanView` og `ZoomView`, trukket ut av
-`WM_MOUSEWHEEL` uten atferdsendring, pluss probe-felt 12 (`panning`) — det
-er bygget rød-kjøringen gikk mot. Så tastene i `WM_KEYDOWN`, etter fase
-19-blokka og før `ESC`-lagene: `←`/`→` ett hjulhakk, `PgUp`/`PgDn` et helt
-utsnitt, `Home` til veggen (som ber om historikk, fase 18), `End` til den
-levende kanten, `+`/`-` ett zoomtrinn om midten — `VK_OEM_PLUS`/`VK_ADD` og
-`VK_OEM_MINUS`/`VK_SUBTRACT`, `Ctrl` tillatt på disse to og ikke på de
-andre. Samme sperrer som hjulet: ikke med overlayet åpent, ikke i
-skrivebordsmodus, ikke under panorering. Hover nullstilles som `R` gjør —
-å regne lyset under pekeren på nytt ville latt trådkorset gli med lyset
-under easingen og bli stående forskjøvet fra pekeren.
+**The change:** `ChartRect` now separates `right`/`cw` (the candles' area)
+from `edge` (the axis edge, where the stamp and the labels begin).
+`PLOT_PAD_R` = 10 px is the gap between them, with an `#error` guard on
+[8, 12]. The grid, the clip region, the dashed last-price line and the
+crosshair's horizontal line run to `edge`; the candles stop at `right`,
+because `slot` is computed from `cw`. Everything that maps x ↔ candle index
+reads `cw` and follows without changes of its own. In desktop mode
+`right == edge`: there is no axis there.
 
-**`WM_CAPTURECHANGED`:** står `panning` og `lParam` er et annet vindu enn
-oss, slippes panoreringen og pekeren settes tilbake. Vår egen
-`ReleaseCapture` sender også meldingen, men da er `panning` alt `FALSE`.
-Probe-felt 13 leser `GetCapture() == hwnd` fra appens tråd.
+**The line is drawn to `edge + 1`.** `LineTo` does not draw the end point, so
+with `edge` the column `x = edge` stayed empty — one black hole between the
+line and the stamp. The pixel measurement caught it; the eye did not.
 
-**Verifisert** ende til ende, **52/52 og 51/51 i to kjøringer** (den andre
-uten `Alt`+`Tab`-grenen, se under), i testbygg mot `Software\TickerTest`.
-Tastene sendes med `SendInput` etter forgrunns- og fokuskontroll som i fase
-19; kontrollen først er `Ctrl`+hjul via `SendMessage` (300 seedede lys og
-`DEFAULT_VIEW` 300 gir veggen fra start, så utsnittet må smalnes før
-panorering kan måles). Tilstand leses med `WM_APP_PROBE`.
+**Verified** with a dump of the back buffer, **11/11** at 1280×720: `right` =
+1186, `edge` = 1196, the last candle pixel outside the stamp band at
+**x = 1184**, and exactly **one** row of candle color in the gap — the dashed
+line. `x = edge` and `x = edge + 1` are both `0x00FF66`: the line meets the
+stamp without a break. **GDI/USER 30/14**, unchanged through 40 resizes and 40
+title changes. Desktop mode unchanged, highest candle pixel x = 3839 of 3839.
 
-- **Rød kjøring** mot del 1: kontrollen grønn, alle tastene røde
-  (16 OK, 23 FAIL). Rød kjøring av capture-stien mot et bygg med handleren
-  koblet ut: menyen tok capture, `panning` ble stående, `Ctrl`+`M` sperret.
-- `←` → `vs − vc/8`, `followLive` av, 46 000–51 000 ulike piksler i
-  grafbåndet (`PrintWindow` før/etter); `→` tilbake; `PgUp` → veggen, 300
-  lys kom, `PgDn` → kanten; `Home` → utsnittet starter på det eldste lyset
-  før *og* etter bakfyllingen (samme `openTime`, `vs` = antall nye lys);
-  `End` → `followLive`; `+` → `vc / 1,2` om midten, `-` tilbake, numerisk og
-  `Ctrl`+`+` likeså. Layoutets `+` er `VK_OEM_PLUS` (`VkKeyScan` 0xBB).
-- Overlayet åpent → `←` gjør ingenting; `ESC` → virker igjen. Hover med
-  ekte peker → `←` → `hoverIdx = −1`.
-- **Capture:** ekte drag med `SendInput` (`pan=1`, `cap=1`). `Alt`+`Tab`
-  tok capture i to av fem kjøringer med ekte drag og lot panelet beholde
-  den i tre — forgrunnen byttet hver gang. Den deterministiske tyven er
-  **tray-menyen**:
-  `TrackPopupMenu` i samme tråd tar capture hver gang, `panning` slippes,
-  og `Ctrl`+`M` minimerer etterpå. `ESC` lukker menyen *før* museknappen
-  slippes (fallgruve 56).
-- **GDI/USER 30/14** i hvile ved start; **32/14** etter første overlay og
-  **35/14** etter første tray-meny, begge uendret over tre sykluser til og
-  gjennom 30 runder `←`/`→`/`+`/`-`. Hoppene er engangs (fallgruve 65),
-  ikke lekkasjer, og de samme i bygget uten fase 20.
+**The dashing broke anyway, and was fixed.** The first version drew the whole
+line with `PS_DASH` up to `edge + 1`, and 20 of 20 measured widths made
+contact. The measurement was not representative: in the production build, at
+1004 px, `x = edge` was the background color — the pattern ended in an "off"
+interval. `PS_DASH` gives no control over the phase at the end of the line.
+The line is now **dashed over the data area and solid over the gap**
+(`right → edge + 1`, `DC_PEN` in the same color). After the fix: contact in 20
+of 20 widths and in 12 of 12 around 998 … 1009 px, so also the width that
+broke. That is by construction, not luck.
 
-**Ikke testet:** capture tatt av et vindu i en annen prosess
-(`SetCapture` på tvers), og `Win`-tasten. Begge går gjennom samme melding.
-Hjulet *uten* `Ctrl` — panorering gjennom `PanView` — er heller ikke målt
-etter refaktoreringen; kontrollen brukte bare `Ctrl`+hjul (`ZoomView`, som
-ga `vs` 68 / `vc` 173 før og etter i hver kjøring). Stien er lest.
+**In the production build**, read with `PrintWindow`: **5/5** at 1280×720. One
+row of candle color in the gap, the last candle pixel at x = 1184 against the
+edge 1186, and `x = edge` and `edge + 1` both `0x00FF66`.
 
 ---
 
-### Fase 21 — volumstolper under lysene
+### Phase 16 — price stamp in desktop mode
 
-Plan og målinger: `docs/plans/2026-09-18-volume.md`.
-Gren `volum`, flettet inn med `--no-ff`. Valgt av agenten blant fire
-kandidater; hvilemodus og oppløsningsbytte ble lagt bort fordi ingen av dem
-kan observeres i en probe på denne maskinen (begrunnelsen står i planen).
+Plan and measurements: `docs/plans/2026-09-17-desktop-stamp.md`.
+Branch `skrivebordsstempel`.
 
-**Endringen, i to commits.** Først instrumentering: `Candle.volume`
-(48 byte per lys, bufferet 288 KB), probe-felt 14 (volum ved indeks, ×100 —
-`LRESULT` er 32 bit på x86) og 15 (siste fulle opptegning i µs, QPC rundt
-den trege stien i `PaintPopup`, bare testbygg). Så funksjonen:
-`ParseKlines` leser felt 5 (sitert streng som OHLC); `VolumeMax` over
-målutsnittet der `PriceRange` regnes; `dispVolMax` eases i `WM_TIMER` som
-femte verdi, snapp = en kvart piksel av båndhøyden; stolpene tegnes etter
-rutenettet og før lysene, innenfor samme klipp, i de nederste `VOL_FRAC` =
-22 % av grafflaten, `bodyW` brede på lysets `cx`, nederste rad på
-`y = bottom` inklusiv. Skalaen tegningen leser er *visningen*, aldri
-målet. Retningen er lysets egen (close mot open). Ett `PolyPolygon` per
-farge og bolk på 256 stolper med `NULL_PEN`, som fyller nøyaktig
-`FillRect`-pikslene. Hover-boksen får en `V`-rad (74 → 87 px) med
-`K`/`M`-format. **Skrivebordsmodus tegner stolpene også:** fase 14 fjernet
-det som må leses fovealt (tall); stolper leses perifert som lysene.
-`ChartGeometry`, `HitCandle`, aksene og stempelet er urørt.
+**The change:** the desktop surface has got a right margin back — not for
+axis labels, but for the one stamp with the last price. `ChartGeometry` sets
+`edge = W - DeskAxisW(H)` in desktop mode, and `right = edge - PLOT_PAD_R` in
+both modes. Left, top and bottom are still edge to edge.
 
-**Verifisert** ende til ende, **24/24**, i testbygg mot
-`Software\TickerTest`. Rød kjøring mot commit 1: volum 0 i alle seks lys,
-0 stolpepiksler, boks 72 px (8 FAIL). Grønn: volum > 0 i seks lys spredt
-over bufferet (3,16–14,44 BTC på 1m); **5 748** eksakt stolpefargede
-piksler i panelet, alle i `[559, 702]` = nøyaktig båndet `[bottom + 1 −
-144, bottom]`, ingen over det, ingen utenfor grafflaten i x, høyeste
-stolpe når båndets topp; hover-boksens lengste loddrette `CLR_BOX`-løp
-**85** (72 før); skrivebordsflaten 3840×1600 fanget med `PrintWindow`
-under WorkerW: 47 019 stolpepiksler i `[1249, 1599]`, båndtopp 1248;
-GDI/USER stabile (32/14 → 33/14 etter et modusbytte fram og tilbake).
-Hvilenivået 32/14 er to høyere enn fase 20s 30/14 fordi de to
-stolpepenslene lages ved oppstart; +1 etter modusbytte fantes også i
-bygget uten fase 21 (30 → 31 i rød-kjøringen).
+- `DeskPillH(H)` = `H / 40`, clamped to [16, 48]. `DeskPillFontH` is
+  `MulDiv(pillH, 15, 16)` — the same ratio as the panel's 16 px stamp around a
+  15 px font. `DeskAxisW` rounds the character width **up**; with rounding
+  down, eight characters would have been 6 px short, and the price would have
+  silently fallen back to the axis resolution.
+- All three are pure functions of `H`, because `ChartGeometry` is also called
+  from hit detection and panning, where there is no DC to measure in.
+- `hFontPill` is cached by height, like `hFontWm`, and freed with the other
+  fonts.
+- The stamp is now drawn in both modes. Axis labels, time axis and header are
+  still gone from the desktop.
 
-**Rettelse etter fletting:** `PolyPolygon` fylte med ALTERNATE. Med flere
-lys enn piksler (`vc > cw`) er `slot` under 1, `bodyW` klemmes til 1, og
-nabolys lander på samme `cx`; to like rektangler i samme bolk nuller
-hverandre under partall/oddetall-regelen, så stolpen forsvant.
-`SetPolyFillMode(WINDING)` rundt bolkene. Målt i proben: to like
-rektangler 10×16 gir 0 piksler under ALTERNATE og 160 under WINDING; fullt
-utzoomet med 1800 lys på 1176 px har raden `y = bottom` stolpefarge i
-873 av 1176 kolonner under ALTERNATE (rød kjøring) og 1169 / 1166 av
-1176 under WINDING (28/28 i to kjøringer). Fyllmodusen koster ikke målbart
-(medianer 1,46–1,66 ms mot 1,58 i ALTERNATE-kjøringen).
+**Phase 14's invariant has changed:** "zero alphanumeric pixels on the
+desktop" is now "exactly one text element". `CLR_AXIS`, `CLR_TEXT` and
+`CLR_DIM` are still zero — the stamp text is `CLR_BG` on a saturated fill —
+but the grid rows span to `edge`, not to `W - 1`.
 
-**Opptegning ved 1280×720, 300 lys, median over 172 fulle bilder, samme
-probe og samme kjøreforhold (ingen `PrintWindow` imens):** 1,44 ms uten
-stolper (commit 1), 1,84 ms med ett `FillRect` per lys (+0,40 ms),
-**1,56 ms** med `PolyPolygon` i bolker (+0,12 ms). p90 1,63 / 2,08 /
-1,75 ms. Bolkevarianten ble valgt på tallene; `FillRect`-varianten hadde
-også 24/24. Tabellen i *Målinger* er oppdatert.
+**Verified** with a dump of the back buffer, **15/15**, and the panel probe
+from phase 15 still **11/11**. At 3840×1600: stamp 40 px, font 38 px, margin
+196 px, so `edge` = 3644. The grid rows lie at 400/800/1200 with extent
+x 0 … 3643. One row of candle color in the gap, the last candle pixel at
+x = 3618, the stamp height measured at 40 px in column `edge + 1`, and the
+text within `[3648, 3832)`. **GDI/USER 31/14**, unchanged through 50 mode
+switches.
 
-**Ikke testet:** et par med volum 0 i hele utsnittet (`dispVolMax` 0 →
-ingen stolper; grenen er lest), og `K`/`M`-formatet i hover-boksen
-(BTC-volum på 1m er under tusen).
+**The text is safely dark:** the surface is layered with `LWA_ALPHA 255`, not
+a color key. With `LWA_COLORKEY` on `CLR_BG` the digits would have become
+holes through to the wallpaper.
 
-### Fase 22 — verktøylinje i headeren
+### Phase 17 — symbol and interval from the tray menu
 
-Plan og målinger: `docs/plans/2026-09-18-toolbar.md`.
-Gren `verktoylinje`, flettet inn med `--no-ff`. Brukeren la fram to idéer —
-verktøylinje og pris-varsler på prisaksen — og agenten valgte. Varslene er
-lagt bort som kandidat: utløseren (levende pris krysser en linje) kan ikke
-framprovoseres i en probe uten et *skrivende* probe-felt, og lyd og ballong
-kan ikke observeres. Begrunnelsen står i planen.
+Plan, measurements and deviations: `docs/plans/2026-09-18-tray-symbol-interval.md`.
+Branch `tray-symbol-intervall`, merged with `--no-ff`.
 
-**Endringen, i to commits.** Først instrumentering: `tbHot`, `showVol`,
-`dispVolF` og probe-felt 16–21 (`ivIdx`, `symIdx`, `showVol`, `tbHot`,
-`overlayOpen`, `dispVolF` × 1000). Så funksjonen: `ToolbarLayout` /
-`ToolbarHit` / `ToolbarStrip` (ren funksjon av bredden, faste pillebredder,
-`C_ASSERT` mot 400 px), `DrawToolbar` fra `PaintPopup`, `HTCLIENT` over
-pillene i `WM_NCHITTEST`, hover og klikk ved siden av knappenes,
-`OnToolbarClick` (intervall → `ApplyConfigChoice`, symbol → overlayet, VOL →
-`SetShowVolume`), `dispVolF` som sjette easede verdi, `V` og `1`…`6`,
-«Volumstolper» i tray-menyen (`ID_TRAY_VOLUME` 1005) og `ShowVolume` i
-registret. Symbollinja som tekst er borte; `frakoblet Ns` står til høyre for
-siste pille når hele teksten får plass. Se **Verktøylinja** under *Vinduet*.
-`HEADER_H`, `ChartGeometry`, `HitCandle` og alle graf-y-er er urørt.
+**The change:** the tray menu has got two submenus at the top, "Symbol" and
+"Interval", with a separator below. One item per row in `SYMBOLS[]` /
+`INTERVALS[]`, label the same as the overlay's, radio check on the current
+index (`CheckMenuRadioItem`). So desktop mode can switch without going through
+the panel, and the panel can switch without opening the overlay.
 
-**Verifisert** ende til ende, **81/81 i to kjøringer**; rød kjøring mot
-commit 1 ga 33 FAIL med kontrollene grønne. `HTCLIENT` på alle åtte piller
-og `HTCAPTION` i hvert mellomrom; pilletilstander lest fra hjørnepiksler;
-0 tekstpiksler innenfor 3 px fra en pillekant; pillene tegnet med tomt
-buffer rett etter et bytte; `IntervalIndex` og `ShowVolume` i registret;
-19 mellomverdier av `dispVolF` på veien til eksakt 0 og 0 stolpepiksler
-(6 267 med VOL på); `DOWN` + `DBLCLK` = to vekslinger; hover med ekte
-peker og `WM_MOUSELEAVE` ut i mellomrommet; alt tegnet og klikkbart ved
-400×250; valgene overlever omstart uten animasjon. Opptegning 1 479 µs før,
-1 606 / 1 517 µs etter (median, 168–177 bilder). GDI/USER 34/14 før og etter
-(«før» tatt etter første overlay).
+- `ID_TRAY_SYMBOL_FIRST` (1100) and `ID_TRAY_INTERVAL_FIRST` (1200), both
+  100 wide. Three `C_ASSERT` below the tables stop the build if a table grows
+  past its range. `#if` does not work: `SYMBOL_COUNT` is `sizeof`.
+- `WM_COMMAND` does a range check first, like `ID_TRAY_RESET`: a posted ID
+  outside the tables is a silent no-op. Inside, it is translated to the same
+  `hit` encoding as `OverlayHit`, and `ApplyConfigChoice` is shared by both
+  paths.
+- **`ApplyConfigChoice` no longer takes an HWND.** Its only use was
+  `InvalidateRect(hwnd)` at the end. From the menu the right window is
+  `hPopup`, which is NULL when the panel is closed, and
+  `InvalidateRect(NULL, …)` repaints the whole desktop. The function reads
+  `hPopup` itself and skips the invalidation when there is no window.
+  Everything else in it was already window-safe.
+- The submenus are attached with `MF_POPUP` and owned by the main menu;
+  `DestroyMenu` in `WM_TRAYICON` tears down all three.
+- **Duplicates get the submenus.** The overlay already lets them switch their
+  own view, and `SaveConfig` skips duplicates by itself.
 
-**Ikke testet:** den ekte tray-menyen (bare kommandoen), bryteren i
-skrivebordsmodus, skjuling av piller under 400 px, og frakoblet-tekstens
-nye plass.
+**Verified** in a test build against `Software\TickerTest`, **40/40 in two
+runs**: menu content, IDs and radio checks; a choice with the panel closed
+(the registry is written, no popup, no crash, the panel opens with the right
+pair); a switch empties the buffer synchronously and fills it again; the same
+choice touches nothing; IDs outside the range touch nothing; desktop mode is
+repainted with the new symbol, and the frame with an empty buffer has **zero**
+pixels above luminance 120; a duplicate switches locally without touching the
+registry. **GDI/USER 33/14** after warm-up and after each of three rounds of
+50 menus and 40 choices.
 
-### Fase 23 — prisvarsler på prisaksen
+**In the production build**, which runs in desktop mode and was only read, not
+clicked: the menu has 9 items in the right order, the submenus 4 and 6, and
+the radio checks are on BTC/USDT and 1m, matching `SymbolIndex` 0 and
+`IntervalIndex` 0 in `Software\Ticker`. The submenus' own items have ID −1
+(`MF_POPUP`), which `WM_COMMAND` never sees.
 
-Plan og målinger: `docs/plans/2026-09-18-price-alerts.md`.
-Gren `prisvarsler`, flettet inn med `--no-ff`. Brukeren la fram tre
-kandidater — prisvarsler med prisinjeksjon i proben, re-initialisering etter
-hvilemodus og oppløsnings-/DPI-bytte i skrivebordsmodus — og agenten valgte.
-Hvilemodus er lagt bort som **anbefalt neste fase** (liten, men den ekte
-hendelsen kan ikke drives fra en probe, fallgruve 47); DPI-byttet står som
-kjent begrensning (én skjerm). Begrunnelsene står i planen.
+### Phase 18 — history on demand
 
-**Avgjørelsen fase 22 ventet på:** testbygget har nå **skrivende**
-probe-felt. De finnes bare bak `/DTICKER_PROBE`, bor på hovedvinduet, og
-injeksjonen bærer prisen i meldingen og prøver utløseren synkront
-(fallgruve 70). Produksjonsbygget har ikke meldingen.
+Plan, measurements and deviations: `docs/plans/2026-09-18-history.md`.
+Branch `historikk`, merged with `--no-ff`. Chosen by the agent after an open
+review; the reasoning is in the plan.
 
-**Endringen, i to commits.** Først instrumentering: tilstandsfeltene i
-`AppContext`, lesende felt 22–32, skrivende 100 (injiser pris) og 101
-(demp). Så funksjonen: `AlertHit` og `AlertRound` (rene), `AlertY` /
-`AlertPriceAtY` / `AlertAxisHit` (leser `disp*`, fallgruve 14), `AlertAdd` /
-`AlertRemove` / `AlertsClear`, `FireAlert`, `CheckAlerts` fra `WM_APP_DATA`,
-`OnAxisClick`, hover i `WM_MOUSEMOVE` (`axisHotY`, `alertHot`, `alertFresh`),
-hånden i `WM_SETCURSOR`, `A`-tasten, `alertFlashF` som sjuende easede
-verdi, `SaveAlerts` / `LoadAlerts`, «Fjern prisvarsler (N)»
-(`ID_TRAY_ALERTS_CLEAR` 1006), og tegningen i `DrawChart`: linjer bak
-lysene, merker, spøkelse og etterglød. Se **Prisvarsler** under *Vinduet*.
-`ChartGeometry`, `HitCandle`, låsens dekning og nettverkstråden er urørt.
+**The change:** when the user pans into the wall (`viewStart` 0), the UI
+thread asks for older candles, and the worker thread fetches `SEED_COUNT`
+candles with `endTime = candles[0].openTime - 1` before the normal fetch in
+the same cycle. `PrependCandles` puts them in front, moves the view by the
+same amount and counts `frontShift` down, so the frame does not move.
 
-**Rettet underveis, funnet på skjermbilde og ikke av proben:** stempelet for
-siste pris lå oppå et varselmerke 12 px under, og et tall kuttet på langs
-stakk fram. Et merke som er dekket av stempelet eller av et senere tegnet
-merke (under 16 px) tegnes nå som ren flate. Proben fikk en sjekk for det.
+- **`evictedTotal` has become `frontShift`**, signed: +1 per eviction, −k per
+  backfill. `ApplyEviction` has become `ApplyFrontShift` and moves
+  `dispStart`, `hoverIdx` and `panAnchorView` both ways. The panning block
+  calls it under the lock before it reads the anchor.
+- **The anchor slides at the wall.** If `ClampView` clamps, the anchor is
+  moved to where the view actually is. Before, it remembered the overshoot: a
+  drag 15 candles past the wall gave a jump of 16 candles on the next mouse
+  move after the candles arrived, and a drag back from the wall stood still
+  for just as long.
+- **`HttpGet` checks the status code.** Non-2xx is FALSE. Before, a 429 with a
+  JSON body counted as success, and the parsers caught it silently. The
+  backfill needs the distinction: 2xx with zero candles is "the history has
+  ended", anything else is backoff.
+- **`RequestHistory` wakes the thread only when `netFailures` is 0.**
+  `hWakeEvent` resets the backoff, and a drag at the wall during a
+  disconnection must not turn it off. In backoff the thread sees the flag on
+  its own cycle.
+- **`histDone`** on 2xx without candles, on a response where nothing was
+  older, and on a full buffer. Reset together with `histPending` where
+  `candleCount` is set to 0.
+- **`MAX_CANDLES` 6000.** Live candles are never discarded to make room for
+  old ones.
+- **`WM_APP_PROBE`** behind `#ifdef TICKER_PROBE`: the test build's window
+  into internal state. The production build does not have the message.
 
-**Rettet etter flettingen, funnet av produksjonsbygget:** exe-en vokste fra
-187 392 til 216 064 byte. `AlertRound` brukte `pow(10, floor(log10(x)))`, og
-de to kallene alene dro inn ~21 KB CRT-matematikk — for en avrunding med ni
-mulige svar. Byttet mot en trapp (`q *= 10`) over 1 og deling på 10 eller
-100 under 1 (deling, fordi 0,1 og 0,01 ikke finnes eksakt). **195 072 byte**
-etterpå, +7,7 KB for hele fasen. Enhetstestene 20/20 og 109/109 i to nye
-kjøringer på det bygget. Alle tidligere bygg i fasen var testbygg; bare
-produksjonsbygget viste størrelsen (fallgruve 75).
+**Verified:** unit harness **36/36** against the actual functions
+(`PrependCandles`, `ApplyFrontShift`, `MergeCandles`, `HttpGet` against
+Binance with 400, 404, 200 and `[]`). End to end **33/33 in two runs**:
+backfill landed after 353–372 ms, `viewStart` 0 → 300 with the same oldest
+visible timestamp and a pixel-identical frame; a drag at the wall gives one
+candle per slot after landing, not a jump; wheel spam during a fetch;
+SOL/USDT 1d is exhausted in 8 rounds back to **2020-08-11**, the listing day;
+BTC/USDT 1m fills 6000 in 19 rounds; `R` gives the last 300; **GDI/USER
+30/14** flat.
 
-**Verifisert.** Enhetstester på ekte kode (funksjonene limt ut av
-`ticker.c`): **20/20** — `AlertHit` på begge sider, på nivået, pris 0 og
-negativ, nivå 0; `AlertRound` for BTC 1m/1d og SOL, gulvet 0,01, og
-egenskapen |avrundet − pris| ≤ en halv piksel over ca. 1 250 steglengder.
-Ende til ende, **109/109 i to kjøringer**; rød kjøring mot commit 1 ga
-**52 FAIL** med alle kontrollene grønne, også den skrivende proben selv
-(felt 100 og 101 finnes i begge bygg). Klikk på rad 300 setter nivået
-innenfor én piksel i pris (81 066,00 mot 81 065,82; linja på rad 299,
-fallgruve 73), fortegnet følger siden, 1 074 ravpiksler i merket og 1 161 i
-linja med lysene over; spøkelset er rammet (365 px) med linja på pekerens
-rad; hånden over kolonnen; rødt merke under ekte peker, rav mens det er
-nysatt; `A` med og uten trådkors; nærmeste merke fjernes; raskt dobbeltklikk
-er sett + fjern og **nullstiller ikke** utsnittet, mens dobbeltklikk i
-grafen fortsatt gjør det. Utløseren: en cent under fyrer ikke, *på* nivået
-fyrer, én gang, registret ryddet med en gang; nedre varsel speilvendt;
-pris 0 fyrer ikke; to av tre varsler forbi samme pris fyrer i samme prøve
-og det riktige står igjen; nivå 0, duplikat og det niende avvises.
-Etterglød 1 000 → mellomverdi → eksakt 0, 1 186 ravaktige piksler over
-lysene og 0 etterpå. Symbolene er atskilt (ETH har ingen, BTC-varselet
-overlever turen). Fyrer med panelet skjult, uten etterglød. **Ett varsel
-udempet per kjøring:** `Shell_NotifyIconW(NIM_MODIFY, NIF_INFO)` svarte
-`TRUE`. 400×250 virker. Overlever omstart med side; et register skrevet for
-hånd (krysset nivå, NaN, −1e12, 0 og ett gyldig) gir én fyring på første
-pris og ett varsel igjen. Opptegning med **åtte** varsler: +0,11 og
-+0,17 ms (1 893 → 2 006 og 1 938 → 2 110 µs, median av 150) — åtte
-`GetTextExtentPoint32W` + `DrawTextW`; ett eller to varsler er i støyen.
-GDI/USER **34/14 før og etter** i alle tre kjøringer.
+### Phase 19 — keyboard shortcuts for the control buttons
 
-**Ikke testet:** at ballongen faktisk *vises* og lyden *høres* (bare svaret
-fra `Shell_NotifyIconW`); den ekte tray-menyen (bare kommandoen);
-varsellinjene i skrivebordsmodus (samme `DrawChart`, ikke fanget); utløseren
-gjennom en ekte henting (bare injisert — stien fra `WM_APP_DATA` og ut er
-den samme); et duplikats varsler; det grå spøkelset med fullt sett (klikket
-er testet, fargen ikke); merke dekket av et *annet merke* (bare av
-stempelet).
+Plan and measurements: `docs/plans/2026-09-18-keyboard-shortcuts.md`.
+Branch `tastatursnarveier`, merged with `--no-ff`. Chosen by the agent among
+four candidates; the reasoning and what was set aside (DPI scaling of the
+stamp, the machine is at 100 %) are in the plan.
 
-### Fase 24 — sunne inndata og oppvåkning fra dvale
+**The change:** `WM_KEYDOWN` in `PopupProc` knows `Ctrl`+`N` (`[ + ]`),
+`Ctrl`+`M` (minimize), `F11` (maximize/restore) and `Ctrl`+`W` (close). All
+four go through `OnButtonClick`, so key and click share the same path — the
+geometry is saved before maximizing, a restored rect outside everything
+visible is caught, and a duplicate exits on close. `Alt`+`F4` already worked:
+`DefWindowProc` sends `SC_CLOSE` also without `WS_SYSMENU`, measured.
 
-Plan og målinger: `docs/plans/2026-09-18-robust-input.md`.
-Gren `robuste-inndata`, flettet inn med `--no-ff`.
+- **Blocked** in the middle of panning (`panning`): a minimize during a drag
+  would have skipped `WM_LBUTTONUP`, which releases capture and restores the
+  cursor. Blocked in desktop mode, which never gets keyboard focus anyway.
+- **`staleSecsShown`** is reset in `WM_APP_DATA` when the line is up. The
+  counter starts at 9, so 0 is never a real number of seconds.
+- The shortcuts inherit the `ESC` caveat: they require keyboard focus in the
+  panel.
 
-**Mandatet var et arkitekturdirektiv:** behold C nær Win32, flytt «høyere
-logikk» til C++ — `std::vector` og RAII i stedet for `malloc`/`realloc`/`free`,
-`std::string` og nlohmann/json for API-svarene, klasser rundt SMA/EMA/RSI —
-med null lekkasjer og feiltoleranse mot nettbrudd og ugyldige svar som
-overordnet krav, og full frihet til å forme det. **Direktivet beskriver en
-annen kodebase enn denne.** Det finnes ingen `malloc` å erstatte (alle
-buffere er statiske, se *Datalag*), ingen indikatorer å kapsle inn, og én
-kildefil. Midlene ble derfor **målt, ikke adoptert** — tallene står under
-*Avviste forslag* — mens målet i direktivets punkt 3 ble fasen: finn det som
-faktisk kan gå galt med inndata og nett, og rett det.
+**Verified** end to end, **23/23 in two runs**, in a test build against
+`Software\TickerTest`. The keys are sent as real keystrokes with `SendInput`
+after the probe has confirmed foreground and focus on the panel; a control
+with `Ctrl`+`0` (900×500 → 1280×720) first proves that the injection and the
+`Ctrl` state get through. Red run against untouched code: 14 OK, 6 FAIL, with
+the control green. `F11` → maximized and back to 1280×720; `Ctrl`+`M` →
+minimized; `Ctrl`+`N` → one new process with a panel at +30/+30, ended by
+`WM_CLOSE`; `Alt`+`F4` and `Ctrl`+`W` → hidden, opens again; 20 rounds of
+`F11`/`F11`/`Ctrl`+`M`/restore; **GDI/USER 30/14** before and after.
 
-**Funnet ved gjennomlesing:** parserne stolte på `atof`, som ikke kan feile.
-`"price":"abc"` ga 0.0 og `TRUE`, `"1e999"` ga inf, `"nan"` ga NaN — rett inn
-i `lastPrice` og `candles[]`. En inf i et lys sprenger Y-skalaen (og
-`double → int` i koordinatene er udefinert oppførsel), en NaN-pris tegner et
-blankt ikon. Et lys med usiterte felt lånte tallene fra *neste* lys, fordi
-letingen etter hermetegn ikke stoppet ved klammene. `PrependCandles` antar
-stigende tid uten at noe garanterte det. Og et 2xx-svar med bare søppel satte
-`histDone` for godt. Ingenting av dette er sett fra Binance — men appen står
-på i ukevis, og «serveren bestemmer» (kommentaren i `PrependCandles`).
+**Not tested:** the `staleSecsShown` branch (requires a cut network,
+pitfall 9) and the panning block (requires a key in the middle of a real
+drag). Both are read.
 
-**Endringen, i to commits.** Først instrumentering: tellerne 110–112 på
-hovedvinduet (hentesykluser, oppvåkninger, forkastede verdier), bare i
-testbygget. Så funksjonen: `PriceSane`, `CandleSane`, `ParseQuotedNumber`
-(`strtod` med sluttpeker: ett helt tall mellom hermetegnene, ellers NULL);
-`FastParsePrice` rører ikke ut-verdien uten en sunn pris; `ParseKlines`
-hopper over usunne lys og teller dem i `*rejected`; `WorkerFetchHistory`
-regner «null lys, noen forkastet» som en feil og ikke som slutten på
-historikken. `WM_POWERBROADCAST` / `PBT_APMRESUMEAUTOMATIC` setter `dropConn`
-(nytt felt i låsedomenet) og `hWakeEvent`; tråden slipper `hConnect` først i
-neste syklus (teller 113). `MergeCandles`, `PrependCandles`, backoffen og
-all tegning er urørt. **Exe 195 072 → 195 584 byte (+512).**
+---
 
-**Verifisert.** Enhetstester på ekte kode: **31/31**, rød kjøring mot
-commit 1 ga **22 FAIL** — tekst, tom streng, 0, negativ, nan, inf, overflow,
-avkuttet svar og søppel etter tallet for prisen; `high < low`, nan, inf,
-nullpriser, negativt volum, open utenfor spennet, tid bakover, duplisert tid,
-`openTime` 0, usiterte felt, for kort array og søppel etter et tall for
-lysene. Ende til ende (`probe_resume.c`), **22/22 i to kjøringer**, rød
-kjøring **7 FAIL**: oppvåkning gir ny henting etter **281–297 ms** tre av tre
-i begge kjøringer (hvilesyklusen er 3 000 ms), forbindelsen slippes hver
-gang og neste henting lykkes over den nye; `PBT_APMSUSPEND`, `PBT_APMRESUMESUSPEND` og
-`PBT_APMPOWERSTATUSCHANGE` vekker ikke; ti oppvåkninger på rad gir 2
-hentinger (auto-reset-hendelsen slår dem sammen); med panelet åpent går
-**300 ekte lys gjennom den nye parseren med 0 forkastet**, og oppvåkning
-vekker også lysgrenen (297 ms). GDI/USER **23/5 før og etter** 13
-oppvåkninger; ren avslutning, kode 0. Proben sender ingen taster eller klikk
-og trenger ikke en inaktiv maskin.
+### Phase 20 — keyboard navigation in the chart and lost capture
 
-**Ikke testet:** ekte dvale. Proben *sender* `WM_POWERBROADCAST`; at Windows
-leverer den til et skjult toppnivåvindu er dokumentert, men ikke målt her, og
-fallgruve 47 er nettopp en sendt melding som var grønn mens den ekte
-hendelsen avslørte en feil. Oppførselen når nettet ikke er oppe ved første
-forsøk (forventet: én feil, så 6 s) er lest, ikke kjørt. Fase 23-proben
-(prisvarsler, 109 sjekker) er **ikke kjørt på nytt** — den krever en inaktiv
-maskin; stien fra `WM_APP_DATA` og ut er urørt. Et usunt lys *ende til ende*
-(bare i enhetstestene — det finnes ikke noe skrivende probe-felt for et helt
-svar), og bakfyllingen (fase 18) gjennom den nye parseren (samme funksjon som
-seed-svaret, men stien med `rejected` er bare lest).
+Plan and measurements: `docs/plans/2026-09-18-keyboard-navigation.md`.
+Branch `tastaturnavigasjon`, merged with `--no-ff`. Chosen by the agent among
+five candidates; what was set aside (volume, sleep mode, resolution change,
+the DPI stamp) is in the plan with reasons.
 
-### Fase 25 — glidende snitt: SMA 20 og EMA 50
+**The change, in two commits.** First `PanView` and `ZoomView`, extracted
+from `WM_MOUSEWHEEL` without a behavior change, plus probe field 12
+(`panning`) — that is the build the red run went against. Then the keys in
+`WM_KEYDOWN`, after the phase 19 block and before the `ESC` layers:
+`←`/`→` one wheel notch, `PgUp`/`PgDn` a whole view, `Home` to the wall
+(which asks for history, phase 18), `End` to the live edge, `+`/`-` one zoom
+step about the center — `VK_OEM_PLUS`/`VK_ADD` and
+`VK_OEM_MINUS`/`VK_SUBTRACT`, `Ctrl` allowed on these two and not on the
+others. The same blocks as the wheel: not with the overlay open, not in
+desktop mode, not during panning. Hover is reset as `R` does it —
+recomputing the candle under the cursor would have let the crosshair slide
+with the candle during the easing and stay offset from the cursor.
 
-Plan og målinger: `docs/plans/2026-09-19-indicators.md`.
-Gren `indikatorer`, flettet inn med `--no-ff`.
+**`WM_CAPTURECHANGED`:** if `panning` is set and `lParam` is a window other
+than ours, panning is released and the cursor is restored. Our own
+`ReleaseCapture` also sends the message, but then `panning` is already
+`FALSE`. Probe field 13 reads `GetCapture() == hwnd` from the app's thread.
 
-**Mandatet** listet SMA/EMA i C, `WM_DISPLAYCHANGE`/`WM_DPICHANGED` i
-skrivebordsmodus, og eget initiativ. **Valgt: SMA/EMA** — det eneste av de
-tre brukeren ser hver gang panelet åpnes, og det fase 24 lovet («indikatorer
-er ønsket, bygg dem i C»). Skjermbytte står som neste kandidat, med en
-testbar utforming i planfila.
+**Verified** end to end, **52/52 and 51/51 in two runs** (the second without
+the `Alt`+`Tab` branch, see below), in a test build against
+`Software\TickerTest`. The keys are sent with `SendInput` after a foreground
+and focus check as in phase 19; the control first is `Ctrl`+wheel via
+`SendMessage` (300 seeded candles and `DEFAULT_VIEW` 300 give the wall from
+the start, so the view must be narrowed before panning can be measured).
+State is read with `WM_APP_PROBE`.
 
-**Ingen tabell.** Snittene lagres ikke. `IndState` er en stegmaskin på 40
-byte: `IndStep(&s, candles, i)` mates ett lys og gir verdien i det den
-faller ut. SMA er en rullende sum, startet `period − 1` lys før første
-tegnede lys (`IndFeedStart`), så summen aldri lever lenger enn ett bilde og
-ikke kan drive. EMA er sådd med SMA av de første 50 lysene og går videre med
-`v += k·(close − v)`, `k = 2/51`; den har uendelig hukommelse og mates
-**alltid fra lys 0**, ellers ville linja avhenge av hvor utsnittet begynner
-og flytte seg under panorering. Bare `+ − × ÷` — ingen `pow`/`log`
-(fallgruve 75). Punktene legges rett i `s_volPts`, volumstolpenes buffer,
-som er ferdig brukt når linjene begynner: **overlegget har null byte eget
-statisk minne.**
+- **Red run** against part 1: the control green, all the keys red
+  (16 OK, 23 FAIL). Red run of the capture path against a build with the
+  handler disconnected: the menu took capture, `panning` stayed set,
+  `Ctrl`+`M` blocked.
+- `←` → `vs − vc/8`, `followLive` off, 46 000–51 000 differing pixels in the
+  chart band (`PrintWindow` before/after); `→` back; `PgUp` → the wall, 300
+  candles arrived, `PgDn` → the edge; `Home` → the view starts at the oldest
+  candle before *and* after the backfill (same `openTime`, `vs` = number of
+  new candles); `End` → `followLive`; `+` → `vc / 1,2` about the center, `-`
+  back, numpad and `Ctrl`+`+` likewise. The layout's `+` is `VK_OEM_PLUS`
+  (`VkKeyScan` 0xBB).
+- Overlay open → `←` does nothing; `ESC` → works again. Hover with a real
+  cursor → `←` → `hoverIdx = −1`.
+- **Capture:** a real drag with `SendInput` (`pan=1`, `cap=1`). `Alt`+`Tab`
+  took capture in two of five runs with a real drag and let the panel keep it
+  in three — the foreground switched every time. The deterministic thief is
+  **the tray menu**:
+  `TrackPopupMenu` in the same thread takes capture every time, `panning` is
+  released, and `Ctrl`+`M` minimizes afterwards. `ESC` closes the menu
+  *before* the mouse button is released (pitfall 56).
+- **GDI/USER 30/14** at rest at start; **32/14** after the first overlay and
+  **35/14** after the first tray menu, both unchanged over three cycles up to
+  and through 30 rounds of `←`/`→`/`+`/`-`. The jumps are one-time
+  (pitfall 65), not leaks, and the same in the build without phase 20.
 
-**Tegningen** (`DrawIndicator`): `Polyline` med `DC_PEN` i bolker på 1024
-punkter, siste punkt i en bolk er første i neste. Etter lysene og før
-`SelectClipRgn(NULL)` — *over* lysene (en dempet 1 px linje bak mettede
-lyskropper forsvinner der den krysser prisen), under siste-pris-linja og
-trådkorset. Linja går ett lys ut på hver side og forlater flaten gjennom
-klippet. `floor` på x, fordi lyset utenfor venstre kant har negativ
-forskyvning der `(int)` runder mot null. `y` klemmes til ±16 flatehøyder
-(GDI regner i 27 bit). **`PriceRange` er urørt:** prisaksen ser ikke
-snittene, og en linje utenfor prisområdet klippes, som i TradingView. Begge
-modi — en kurve er ikke tekst (fase 14).
+**Not tested:** capture taken by a window in another process (`SetCapture`
+across processes), and the `Win` key. Both go through the same message. The
+wheel *without* `Ctrl` — panning through `PanView` — is not measured after the
+refactoring either; the control used only `Ctrl`+wheel (`ZoomView`, which
+gave `vs` 68 / `vc` 173 before and after in each run). The path is read.
 
-**Forklaringen** står øverst til venstre i grafflaten i linjenes egne
-farger — `SMA 20  81162.66    EMA 50  81196.25` — med verdien på lyset
-under trådkorset, ellers siste synlige lys. Verdien faller ut av samme
-gjennomløp som tegner linja. Bare i panelet, og bare når hele teksten får
-plass (~323 px; et avkuttet tall er et feil tall).
+---
 
-**Bryteren** følger VOL (fase 22): `showInd` (registret, `ShowIndicators`,
-på som standard), `dispIndF` ∈ [0, 1] eased i `WM_TIMER` — her som *farge*
-mot `CLR_BG` (`Blend`), τ 55 ms, snapp 0,02 — og snappet når flaten ikke
-synes. `MA`-pille, tasten `M` (uten Ctrl; `Ctrl`+`M` minimerer) og «Glidende
-snitt» i tray-menyen (`ID_TRAY_INDICATORS` 1007), som er veien inn i
-skrivebordsmodus. **Verktøylinja var full** (x = 310 av 312 på 400 px):
-`MA`-pillen er det ene, bevisste unntaket fra `C_ASSERT`-regelen og skjules
-under 426 px av den regelen som alltid har stått der. `POPUP_MIN_W` er ikke
-hevet.
+### Phase 21 — volume bars under the candles
 
-**`SEED_COUNT` 300 → 360.** Første skjermbilde viste EMA-linja begynne en
-sjettedel inn i grafen: med 300 av 300 lys synlige er lys 0–48 udefinert.
-Første henting (og hver bakfyllingsbolk) tar nå 360 lys; standardutsnittet
-er fortsatt de siste 300, så oppvarmingen ligger utenfor venstre kant.
-`C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_EMA_PERIOD)`. Svaret er ~60 KB av
-`s_httpBuf` på 96.
+Plan and measurements: `docs/plans/2026-09-18-volume.md`.
+Branch `volum`, merged with `--no-ff`. Chosen by the agent among four
+candidates; sleep mode and resolution change were set aside because neither
+can be observed in a probe on this machine (the reasoning is in the plan).
 
-**Verifisert.** Enhetstester på ekte kode (`unit_ind`): **20/20**, rød mot
-commit 1 (funksjonene finnes ikke). 6000 pseudotilfeldige lukkekurser mot
-uavhengige referanser: største avvik SMA 0, EMA 1,5·10⁻¹⁰; rullende sum
-startet midt i bufferet over 3000 lys: 2,5·10⁻¹⁰. Testene fant én ekte feil
-før den ble committet: periodevernet lå i `IndInit`, men ikke i
-`IndFeedStart`. Ende til ende (`probe_ind.c`): **54/54 i to kjøringer**, rød
-kjøring **29 FAIL**. Appens verdier (felt 36/37) mot probens egen utregning
-av lukkekursene (felt 38) på fire lys, innen 2 cent; SMA i 1126–1130 og EMA i
-1136 av 1136 kolonner, null linjepiksler utenfor grafflaten, en
-linjepiksel innen 2 px av utregnet (x, y) på tre lys per linje; `M` toner
-`dispIndF` gjennom mellomverdier til 0 på ~220–250 ms og skriver registret
-med en gang; pillen på (325, 35) skrur på, mellomrommet VOL|MA treffer
-ingenting; tray-kommandoen; omstart med `ShowIndicators` = 0 gir null linjer
-fra første bilde; 410 px skjuler pillen mens `M` virker, 430 px viser den;
-bakfylt til ~4700–5000 lys og zoomet helt ut er EMA sammenhengende i 1136
-av 1136 kolonner. Skrivebordsmodus sett i `PrintWindow` ved 3840×1600: 4165 +
-3730 linjepiksler, ingen forklaring. **Opptegning:** de to linjene koster
-**52–59 µs** per bilde med 300 synlige lys og **179–181 µs** med 4300–4700
-(median, QPC rundt blokka i testbygget, felt 39) — 3 % av en opptegning på
-~1,9 ms. Å måle det som *differansen* mellom hele opptegningen med og uten
-snitt lot seg ikke gjøre: fem vekslende runder ga −139, +63, +78, +80 og
-+196 µs ved 300 lys i fem kjøringer — støygulvet er større enn det som måles
-(fallgruve 80). **GDI/USER 32/14 før og etter** 12 bytter med toning og 1200 bilder. **Exe
-195 584 → 199 168 byte (+3 584)**; commit 1 alene 0; `/TP` identisk; uten
-`wcscat_s` samme tall — veksten er koden, ikke CRT.
+**The change, in two commits.** First instrumentation: `Candle.volume`
+(48 bytes per candle, the buffer 288 KB), probe field 14 (volume at index,
+×100 — `LRESULT` is 32 bits on x86) and 15 (last full repaint in µs, QPC
+around the slow path in `PaintPopup`, test build only). Then the feature:
+`ParseKlines` reads field 5 (quoted string like OHLC); `VolumeMax` over the
+target view where `PriceRange` is computed; `dispVolMax` is eased in
+`WM_TIMER` as the fifth value, snap = a quarter pixel of the band height; the
+bars are drawn after the grid and before the candles, inside the same clip,
+in the bottom `VOL_FRAC` = 22 % of the chart area, `bodyW` wide at the
+candle's `cx`, the bottom row at `y = bottom` inclusive. The scale the
+drawing reads is *the display*, never the target. The direction is the
+candle's own (close against open). One `PolyPolygon` per color and batch of
+256 bars with `NULL_PEN`, which fills exactly the `FillRect` pixels. The
+hover box gets a `V` row (74 → 87 px) with `K`/`M` format. **Desktop mode
+draws the bars too:** phase 14 removed what has to be read foveally
+(numbers); bars are read peripherally like the candles. `ChartGeometry`,
+`HitCandle`, the axes and the stamp are untouched.
 
-**Proben trenger en inaktiv maskin likevel.** Den sender ingen `SendInput`
-og flytter ikke pekeren, og første utgave startet derfor uten å vente. I
-en grønn kjøring kom brukeren tilbake (siste inndata 0,3 s gammel da det
-ble undersøkt) og må ha holdt `Ctrl` idet proben postet `M` — panelet sto
-minimert med `showInd` urørt, og `Ctrl`+`M` er eneste vei dit: appen leste `Ctrl`+`M`, minimerte panelet som den skal, og
-proben — som fanget et 0×0-vindu og talte piksler i 1280×720 — døde med
-tilgangsfeil etter fire FAIL. Ingen produktfeil; proben venter nå på 25 s
-uten inndata, venter ut modifikatortaster før hver postet tast, og avbryter
-med kode 4 når fangsten ikke har den størrelsen den regner med (fallgruve 84).
+**Verified** end to end, **24/24**, in a test build against
+`Software\TickerTest`. Red run against commit 1: volume 0 in all six candles,
+0 bar pixels, box 72 px (8 FAIL). Green: volume > 0 in six candles spread
+over the buffer (3.16–14.44 BTC on 1m); **5 748** pixels in exactly the bar
+color in the panel, all in `[559, 702]` = exactly the band `[bottom + 1 −
+144, bottom]`, none above it, none outside the chart area in x, the highest
+bar reaches the top of the band; the hover box's longest vertical `CLR_BOX`
+run **85** (72 before); the desktop surface 3840×1600 captured with
+`PrintWindow` under WorkerW: 47 019 bar pixels in `[1249, 1599]`, band top
+1248; GDI/USER stable (32/14 → 33/14 after a mode switch there and back).
+The rest level 32/14 is two higher than phase 20's 30/14 because the two bar
+brushes are created at startup; the +1 after a mode switch was also in the
+build without phase 21 (30 → 31 in the red run).
 
-**Ikke testet:** trådkorsets innvirkning på forklaringen er sett i et
-skjermbilde (ekte peker, 80959.24 på lyset 02:22 mot 81157.62 på siste lys),
-ikke i proben — en postet `WM_MOUSEMOVE` holder ikke hover (fallgruve 35).
-Tray-*menyen* er ikke åpnet; kommandoen den sender, er. Utkasting i front
-ved fullt buffer (6000 lys) mens linjene vises er lest, ikke kjørt: EMA
-mates fra det nye lys 0 og flytter seg med under 10⁻⁹ av prisen etter ~1000
-lys. Fase 23- og fase 24-probene er ikke kjørt på nytt; `WM_APP_DATA`-stien,
-parserne og varslene er urørt, men **`SEED_COUNT` er endret** og eldre prober
-som forventer 300 lys etter første henting, vil feile på det tallet.
+**Fix after the merge:** `PolyPolygon` filled with ALTERNATE. With more
+candles than pixels (`vc > cw`), `slot` is below 1, `bodyW` is clamped to 1,
+and neighboring candles land on the same `cx`; two identical rectangles in
+the same batch cancel each other under the even-odd rule, so the bar
+disappeared. `SetPolyFillMode(WINDING)` around the batches. Measured in the
+probe: two identical 10×16 rectangles give 0 pixels under ALTERNATE and 160
+under WINDING; fully zoomed out with 1800 candles on 1176 px, the row
+`y = bottom` has bar color in 873 of 1176 columns under ALTERNATE (red run)
+and 1169 / 1166 of 1176 under WINDING (28/28 in two runs). The fill mode has
+no measurable cost (medians 1.46–1.66 ms against 1.58 in the ALTERNATE run).
 
-### Fase 26 — skrivebordsflaten: egne overleggsvalg og skjermbytte
+**Painting at 1280×720, 300 candles, median over 172 full frames, same probe
+and same run conditions (no `PrintWindow` meanwhile):** 1.44 ms without bars
+(commit 1), 1.84 ms with one `FillRect` per candle (+0.40 ms), **1.56 ms**
+with `PolyPolygon` in batches (+0.12 ms). p90 1.63 / 2.08 / 1.75 ms. The
+batch variant was chosen on the numbers; the `FillRect` variant also had
+24/24. The table in *Measurements* is updated.
 
-Plan og målinger: `docs/plans/2026-09-19-desktop-surface.md`.
-Gren `skrivebordsflate`, flettet inn med `--no-ff`.
+**Not tested:** a pair with volume 0 in the whole view (`dispVolMax` 0 → no
+bars; the branch is read), and the `K`/`M` format in the hover box (BTC
+volume on 1m is under a thousand).
 
-**Tilbakemelding fra bruk: «nå vises volum og MA i bakgrunnsbildet».** Lest
-som at det ikke hører hjemme der, og det stemmer med fase 14s egen regel:
-flaten leses perifert bak ikonene, og alt som må dekodes ble fjernet.
-Volumstolpene har likevel stått på skrivebordet siden fase 21 uten noen
-modussjekk, og fase 25 la snittlinjene oppå med begrunnelsen «en kurve er
-ikke tekst». Den begrunnelsen var feil — stolper og snitt er måleverktøy,
-ikke tapet (fallgruve 85). Brukeren sto i panelmodus under fase 25 og så
-begge på skrivebordet først etterpå.
+### Phase 22 — toolbar in the header
 
-**Ett valg per modus, ikke hardkodet bort.** Fase 22 la «Volumstolper» i
-tray-menyen nettopp for at skrivebordsmodus skulle kunne bytte. `showVol` /
-`showInd` er panelets (standard på, uendret); `showVolDesk` / `showIndDesk`
-er skrivebordets (`ShowVolumeDesktop` / `ShowIndicatorsDesktop`, **standard
-av**). `ShowVolNow()` / `ShowIndNow()` gir valget for modusen prosessen står
-i — alt som tegner, easer, haker av i tray-menyen eller svarer en probe
-(felt 18/34) leser dem, og `SetShowVolume` / `SetShowIndicators` skriver
-modusens felt. `dispVolF` / `dispIndF` snapper ved modusbytte, og
-oppstartssnappen er flyttet til etter at modusen er kjent (den sto rett
-etter `LoadConfig`, før `--desktop-mode` og `DesktopMode` var lest). To
-klikk i tray-menyen gir overleggene tilbake på skrivebordet.
+Plan and measurements: `docs/plans/2026-09-18-toolbar.md`.
+Branch `verktoylinje`, merged with `--no-ff`. The user put forward two ideas
+— a toolbar and price alerts on the price axis — and the agent chose. The
+alerts were set aside as a candidate: the trigger (live price crosses a line)
+cannot be provoked in a probe without a *writing* probe field, and sound and
+balloon cannot be observed. The reasoning is in the plan.
 
-**Skjermbytte.** Flaten er et `WS_CHILD` av WorkerW og får aldri
-`WM_DISPLAYCHANGE`; det skjulte hovedvinduet er toppnivå og får den.
-`PlaceDesktopSurface` er skilt ut av `AttachToDesktop`.
-`RefitDesktopSurface` kjører i en per-monitor-v2-brakett som `TogglePopup`
-(`GetSystemMetrics` følger trådens kontekst, og hovedtråden er uvitende):
-sitter flaten ikke i dagens WorkerW, rives den og `WM_NCDESTROY` starter
-gjenoppbyggingen (stien fra fase 9); ellers legges den på nytt. Uendret
-geometri er en no-op; ny størrelse gir `WM_SIZE`, som kaster vannmerket,
-og dobbeltbufferet og stempelfonten (H/40) er nøklet på størrelsen.
-`TIMER_REFIT_ID` gjør det samme en gang til etter 1 s, fordi Explorer legger
-sin egen WorkerW på nytt etter samme melding og origo regnes i dens
-koordinater. `lParam` leses ikke (virtualisert). **`WM_DPICHANGED` håndteres
-ikke, med vilje:** hovedvinduet får den aldri, og flaten regner i fysiske
-piksler, så en ren skaleringsendring endrer ingenting for den.
+**The change, in two commits.** First instrumentation: `tbHot`, `showVol`,
+`dispVolF` and probe fields 16–21 (`ivIdx`, `symIdx`, `showVol`, `tbHot`,
+`overlayOpen`, `dispVolF` × 1000). Then the feature: `ToolbarLayout` /
+`ToolbarHit` / `ToolbarStrip` (a pure function of the width, fixed pill
+widths, `C_ASSERT` against 400 px), `DrawToolbar` from `PaintPopup`,
+`HTCLIENT` over the pills in `WM_NCHITTEST`, hover and click alongside the
+buttons', `OnToolbarClick` (interval → `ApplyConfigChoice`, symbol → the
+overlay, VOL → `SetShowVolume`), `dispVolF` as the sixth eased value, `V` and
+`1`…`6`, "Volume bars" in the tray menu (`ID_TRAY_VOLUME` 1005) and
+`ShowVolume` in the registry. The symbol line as text is gone; `frakoblet Ns`
+sits to the right of the last pill when the whole text fits. See
+**The toolbar** under *The window*. `HEADER_H`, `ChartGeometry`, `HitCandle`
+and all chart y values are untouched.
 
-**Verifisert** (`probe_desk.c`, per-monitor-bevisst som flaten, venter på
-inaktiv maskin): **45/45 i to kjøringer**, rød kjøring **26 FAIL**. Rent
-skrivebord: 0 stolpe- og 0 linjepiksler i en fangst på 3840×1600 med ~42 700
-lyspiksler (rød: 35 112 / 4 144 / 3 725). Tray-kommandoene skriver
-skrivebordets registerverdier og lar panelets stå; pikslene følger. Proben
-krymper flaten til 1920×800 (stempelfont 38 → 19 px) og sender
-`WM_DISPLAYCHANGE`: samme vindu tilbake på 0,0 3840×1600, fonten 38 igjen,
-fullt bilde. Krympet uten melding: ettersjekken retter det innen 1,6 s.
-Revet ut av WorkerW med `SetParent`: rives, bygges på nytt, valgene
-overlever. I panelmodus rører meldingen ingenting. GDI/USER **30/6 før og
-etter** sju skjermbytter. Modusbytte og omstart gir hver modus sitt valg fra
-første bilde, uten animasjon. Fase 25-proben kjørt på nytt: **54/54**.
-**Exe 199 168 → 199 680 byte (+512).**
+**Verified** end to end, **81/81 in two runs**; a red run against commit 1
+gave 33 FAIL with the controls green. `HTCLIENT` on all eight pills and
+`HTCAPTION` in every gap; pill states read from corner pixels; 0 text pixels
+within 3 px of a pill edge; the pills drawn with an empty buffer right after
+a switch; `IntervalIndex` and `ShowVolume` in the registry; 19 intermediate
+values of `dispVolF` on the way to exactly 0 and 0 bar pixels (6 267 with VOL
+on); `DOWN` + `DBLCLK` = two toggles; hover with a real cursor and
+`WM_MOUSELEAVE` out into the gap; everything drawn and clickable at 400×250;
+the choices survive a restart without animation. Painting 1 479 µs before,
+1 606 / 1 517 µs after (median, 168–177 frames). GDI/USER 34/14 before and
+after ("before" taken after the first overlay).
 
-**Ikke testet:** et ekte oppløsnings- eller skjermbytte — proben sender
-meldingen og etterlikner virkningen (fallgruve 47). Om Explorer river
-WorkerW ved et ekte bytte, om en skaleringsendring sender
-`WM_DISPLAYCHANGE`, flere skjermer og bytte av primærskjerm er lest, ikke
-kjørt; maskinen har én skjerm.
+**Not tested:** the real tray menu (only the command), the toggle in desktop
+mode, hiding of pills below 400 px, and the offline text's new place.
 
-### Fase 27 — «Bloomberg Essentials»: VWAP, dagens høy/lav og verdier i hover-boksen
+### Phase 23 — price alerts on the price axis
 
-Plan og målinger: `docs/plans/2026-09-19-bloomberg-essentials.md`.
-Gren `fase27-bloomberg-essentials`, flettet inn med `--no-ff`.
+Plan and measurements: `docs/plans/2026-09-18-price-alerts.md`.
+Branch `prisvarsler`, merged with `--no-ff`. The user put forward three
+candidates — price alerts with price injection in the probe, re-initialization
+after sleep, and a resolution/DPI change in desktop mode — and the agent chose.
+Sleep is set aside as the **recommended next phase** (small, but the real
+event cannot be driven from a probe, pitfall 47); the DPI change stands as a
+known limitation (one monitor). The reasons are in the plan.
 
-**Bestillingen:** stiplede linjer for sessionens høy og lav bak lysene med
-diskret etikett på aksen, VWAP som gyllen linje over lysene, og SMA/EMA/VWAP
-som eksakte tall i hover-boksen — uten nytt minne og uten å røre
-skrivebordet.
+**The decision phase 22 was waiting for:** the test build now has **writing**
+probe fields. They exist only behind `/DTICKER_PROBE`, live on the main window,
+and the injection carries the price in the message and tries the trigger
+synchronously (pitfall 70). The production build does not have the message.
 
-**Session = UTC-døgnet, ikke utsnittet.** Bestillingen sa «døgn/utsnitt» og
-«VWAP for det synlige utsnittet». `PriceRange` legger 8 % luft rundt
-utsnittets høy og lav, så linjer på *utsnittets* ekstremer ville stått på
-samme sted i hvert bilde; og en VWAP forankret i første synlige lys ville
-hoppet for hvert lys under panorering (fallgruve 90). `SessionStartAt` finner
-døgnets første lys med binærsøk i `openTime`; på 1d-lys finnes ingen session.
-**VWAP nullstilles per døgn** (`DrawVwap`), typisk pris (H + L + C) / 3, og
-linja brytes ved døgnskiftet — så den er definert også når utsnittet står i
-gårsdagen. Dagens høy/lav gjelder bare i dag og går fra døgnets første lys
-inn til aksen. Alt er stegmaskiner og rene funksjoner som i fase 25: ingen
-tabell, ingen nye buffere (`s_volPts` lånes til `Polyline` og `PolyPolyline`).
+**The change, in two commits.** First instrumentation: the state fields in
+`AppContext`, reading fields 22–32, writing 100 (inject price) and 101
+(mute). Then the feature: `AlertHit` and `AlertRound` (pure), `AlertY` /
+`AlertPriceAtY` / `AlertAxisHit` (read `disp*`, pitfall 14), `AlertAdd` /
+`AlertRemove` / `AlertsClear`, `FireAlert`, `CheckAlerts` from `WM_APP_DATA`,
+`OnAxisClick`, hover in `WM_MOUSEMOVE` (`axisHotY`, `alertHot`, `alertFresh`),
+the hand in `WM_SETCURSOR`, the `A` key, `alertFlashF` as the seventh eased
+value, `SaveAlerts` / `LoadAlerts`, "Clear price alerts (N)"
+(`ID_TRAY_ALERTS_CLEAR` 1006), and the drawing in `DrawChart`: lines behind
+the candles, tags, ghost and afterglow. See **Price alerts** under *The window*.
+`ChartGeometry`, `HitCandle`, the lock's coverage and the network thread are untouched.
 
-**Et ufullstendig døgn tegnes ikke — og hentes inn.** 360 lys er seks timer
-ved 1m, og «dagens høy» av de siste seks timene er et feil tall.
-`WM_APP_DATA` ber om eldre lys (`RequestHistory`, fase 18) til døgnet er
-dekket: høyst fire hentinger, bare med panelet synlig og indikatorene på i
-modusen prosessen står i.
+**Fixed along the way, found in a screenshot and not by the probe:** the
+last-price stamp lay on top of an alert tag 12 px below, and a number cut
+lengthwise stuck out. A tag that is covered by the stamp or by a tag drawn
+later (under 16 px) is now drawn as a plain surface. The probe got a check for it.
 
-**Bak indikatorbryteren.** Verktøylinja er full (`C_ASSERT`, fase 25), så alt
-følger `ShowIndNow()` / `dispIndF`: `M`, `MA`-pillen og tray-punktet, som nå
-heter «Indikatorer». Skrivebordet har `ShowIndicatorsDesktop` = 0 som
-standard (fase 26) og er dermed urørt; ingen nye registernøkler. De stiplede
-linjene tones med resten, og er derfor streker til `PolyPolyline` med
-`DC_PEN` og ikke en `PS_DASH`-penn — GDI-tallet i hvile er uendret. Mønsteret
-(6 på / 6 av) er forankret i flatens venstre kant. `CLR_VWAP` F2D14B er gulere
-og lysere enn varslenes rav; `CLR_SESSION` 90939E er nøytral grå (fallgruve
-87 forklarer hvorfor ikke 8A93A0). Aksemerkene er dempede (`CLR_BOX`-flate,
-grå tekst, ingen ramme) og lavest i rang i kollisjonssystemet fra fase 23.
-Forklaringen fikk et tredje ledd i gull, som faller ut alene når raden er
-smal; krysser en sessionlinje forklaringens rad (lavt panel), får teksten
-ugjennomsiktig bakgrunn. Hover-boksen er 126 px høy med indikatorene på
-(87 + 3 × 13) og 87 som før uten.
+**Fixed after the merge, found by the production build:** the exe grew from
+187 392 to 216 064 bytes. `AlertRound` used `pow(10, floor(log10(x)))`, and
+those two calls alone pulled in ~21 KB of CRT math — for a rounding with nine
+possible answers. Replaced with a staircase (`q *= 10`) above 1 and division by
+10 or 100 below 1 (division, because 0.1 and 0.01 do not exist exactly).
+**195 072 bytes** afterwards, +7.7 KB for the whole phase. Unit tests 20/20 and
+109/109 in two new runs on that build. All earlier builds in the phase were
+test builds; only the production build showed the size (pitfall 75).
 
-**Verifisert.** `probe_sess.c` (1280×720, ekte peker for hover, venter
-på inaktiv maskin): **54/54 i to kjøringer** (og 53/53 før 06:00 UTC, da
-bakfyllingen ikke trengtes), rød kjøring **14 FAIL** før 06:00 og **18 FAIL**
-etter. Kl. 06:01 UTC hentet bufferet seg fra 360 til 720 lys av seg selv og
-stoppet; commit 1 samme minutt sto på `fullstendig = 0`. Dagens høy/lav og
-VWAP stemmer med probens egen utregning av feltene 14 og 47–50 (VWAP innen
-5 cent på fire lys). Begge stiplede linjer ligger på utregnet rad i eksakt
-`CLR_SESSION` (548 av 1098 px, lengste strek 6 px, ingenting før døgnets
-første lys), VWAP i 1081 av 1081 kolonner innen 2 px av utregnet (x, y), 0 px
-utenfor grafflaten. Hover-boksen 126 px på / 87 av. 1d: ingen session, ingen
-bakfylling, «VWAP  -». 1t: VWAP regnet fra hvert døgns start, 1088 av 1136
-kolonner. **Kostnad, direkte målt (felt 45): 15–21 µs per bilde** (snittene
-fra fase 25: 48–57 µs). GDI/USER **32/14 før og etter**. Enhetstester 24/24.
-Skrivebordsproben (utvidet) 47/47: **0 px VWAP og 0 px høy/lav som
-standard** på 3840×1600, 3860 / 1824 px når de skrus på. Fase 25-proben
-54/54 etter at den lærte å vente på bakfyllingen. En fangst ved 560×300
-viste dagens høy tvers gjennom forklaringens sifre; rettet i commit 3.
-Byttet: bakgrunnen visker da også ut veker og snittpiksler under teksten.
-**Exe 199 680 → 203 776 byte (+4 096)**, `/TP` byte-identisk.
+**Verified.** Unit tests on real code (the functions pasted out of
+`ticker.c`): **20/20** — `AlertHit` on both sides, on the level, price 0 and
+negative, level 0; `AlertRound` for BTC 1m/1d and SOL, the floor 0.01, and
+the property |rounded − price| ≤ half a pixel over about 1 250 step sizes.
+End to end, **109/109 in two runs**; a red run against commit 1 gave
+**52 FAIL** with all the controls green, including the writing probe itself
+(fields 100 and 101 exist in both builds). A click on row 300 sets the level
+within one pixel in price (81 066.00 vs 81 065.82; the line on row 299,
+pitfall 73), the sign follows the side, 1 074 amber pixels in the tag and 1 161
+in the line with the candles on top; the ghost is framed (365 px) with the line
+on the pointer's row; the hand over the column; red tag under a real pointer,
+amber while newly set; `A` with and without crosshair; the nearest tag is
+removed; a fast double-click is set + remove and **does not reset** the view,
+while a double-click in the chart still does. The trigger: one cent below does
+not fire, *on* the level fires, once, the registry cleared at once; lower alert
+mirrored; price 0 does not fire; two of three alerts passed by the same price
+fire in the same check and the right one remains; level 0, duplicate and the
+ninth are rejected. Afterglow 1 000 → intermediate value → exactly 0, 1 186
+amber-like pixels over the candles and 0 afterwards. The symbols are separate
+(ETH has none, the BTC alert survives the round trip). Fires with the panel
+hidden, without afterglow. **One alert unmuted per run:**
+`Shell_NotifyIconW(NIM_MODIFY, NIF_INFO)` returned
+`TRUE`. 400×250 works. Survives a restart with side; a registry written by
+hand (crossed level, NaN, −1e12, 0 and one valid) gives one firing on the first
+price and one alert left. Painting with **eight** alerts: +0.11 and
++0.17 ms (1 893 → 2 006 and 1 938 → 2 110 µs, median of 150) — eight
+`GetTextExtentPoint32W` + `DrawTextW`; one or two alerts are in the noise.
+GDI/USER **34/14 before and after** in all three runs.
 
-**Ikke testet:** et ekte døgnskifte med panelet åpent, og bakfylling under
-nettverksfeil (lest, ikke kjørt).
+**Not tested:** that the balloon actually *shows* and the sound is *heard* (only
+the return value from `Shell_NotifyIconW`); the real tray menu (only the
+command); the alert lines in desktop mode (same `DrawChart`, not captured); the
+trigger through a real fetch (only injected — the path from `WM_APP_DATA` onward
+is the same); a duplicate's alerts; the gray ghost with a full set (the click
+is tested, the color not); a tag covered by *another tag* (only by the
+stamp).
 
-### Fase 28 — gårsdagens nivåer: forrige døgns høy, lav og slutt
+### Phase 24 — sane input and wake from sleep
+
+Plan and measurements: `docs/plans/2026-09-18-robust-input.md`.
+Branch `robuste-inndata`, merged with `--no-ff`.
+
+**The mandate was an architecture directive:** keep C close to Win32, move
+"higher logic" to C++ — `std::vector` and RAII instead of `malloc`/`realloc`/`free`,
+`std::string` and nlohmann/json for the API responses, classes around SMA/EMA/RSI —
+with zero leaks and fault tolerance against network drops and invalid responses
+as the overriding requirement, and full freedom to shape it. **The directive
+describes a different codebase than this one.** There is no `malloc` to replace
+(all buffers are static, see *Data layer*), no indicators to encapsulate, and one
+source file. The means were therefore **measured, not adopted** — the numbers are
+under *Rejected proposals* — while the goal in the directive's point 3 became the
+phase: find what can actually go wrong with input and network, and fix it.
+
+**Found by reading through:** the parsers relied on `atof`, which cannot fail.
+`"price":"abc"` gave 0.0 and `TRUE`, `"1e999"` gave inf, `"nan"` gave NaN —
+straight into `lastPrice` and `candles[]`. An inf in a candle blows up the Y scale
+(and `double → int` in the coordinates is undefined behavior), a NaN price draws a
+blank icon. A candle with unquoted fields borrowed the numbers from the *next*
+candle, because the search for quote marks did not stop at the brackets.
+`PrependCandles` assumes ascending time without anything guaranteeing it. And a
+2xx response with nothing but garbage set `histDone` for good. None of this has
+been seen from Binance — but the app stays on for weeks, and "the server decides"
+(the comment in `PrependCandles`).
+
+**The change, in two commits.** First instrumentation: counters 110–112 on
+the main window (fetch cycles, wakes, rejected values), only in the
+test build. Then the feature: `PriceSane`, `CandleSane`, `ParseQuotedNumber`
+(`strtod` with an end pointer: one whole number between the quote marks, otherwise
+NULL); `FastParsePrice` does not touch the output value without a sane price;
+`ParseKlines` skips insane candles and counts them in `*rejected`;
+`WorkerFetchHistory` treats "zero candles, some rejected" as an error and not as
+the end of the history. `WM_POWERBROADCAST` / `PBT_APMRESUMEAUTOMATIC` sets
+`dropConn` (new field in the lock domain) and `hWakeEvent`; the thread releases
+`hConnect` only in the next cycle (counter 113). `MergeCandles`, `PrependCandles`,
+the backoff and all drawing are untouched. **Exe 195 072 → 195 584 bytes (+512).**
+
+**Verified.** Unit tests on real code: **31/31**, a red run against
+commit 1 gave **22 FAIL** — text, empty string, 0, negative, nan, inf, overflow,
+truncated response and garbage after the number for the price; `high < low`, nan,
+inf, zero prices, negative volume, open outside the range, time going backward,
+duplicated time, `openTime` 0, unquoted fields, too short an array and garbage
+after a number for the candles. End to end (`probe_resume.c`), **22/22 in two
+runs**, red run **7 FAIL**: a wake gives a new fetch after **281–297 ms** three of
+three in both runs (the idle cycle is 3 000 ms), the connection is released every
+time and the next fetch succeeds over the new one; `PBT_APMSUSPEND`,
+`PBT_APMRESUMESUSPEND` and
+`PBT_APMPOWERSTATUSCHANGE` do not wake; ten wakes in a row give 2
+fetches (the auto-reset event merges them); with the panel open,
+**300 real candles go through the new parser with 0 rejected**, and a wake
+also wakes the candle branch (297 ms). GDI/USER **23/5 before and after** 13
+wakes; clean exit, code 0. The probe sends no keys or clicks
+and does not need an idle machine.
+
+**Not tested:** real sleep. The probe *sends* `WM_POWERBROADCAST`; that Windows
+delivers it to a hidden top-level window is documented, but not measured here, and
+pitfall 47 is exactly a sent message that was green while the real
+event revealed a bug. The behavior when the network is not up at the first
+attempt (expected: one error, then 6 s) is read, not run. The phase 23 probe
+(price alerts, 109 checks) was **not run again** — it needs an idle
+machine; the path from `WM_APP_DATA` onward is untouched. An insane candle *end to
+end* (only in the unit tests — there is no writing probe field for a whole
+response), and the backfill (phase 18) through the new parser (same function as
+the seed response, but the path with `rejected` is only read).
+
+### Phase 25 — moving averages: SMA 20 and EMA 50
+
+Plan and measurements: `docs/plans/2026-09-19-indicators.md`.
+Branch `indikatorer`, merged with `--no-ff`.
+
+**The mandate** listed SMA/EMA in C, `WM_DISPLAYCHANGE`/`WM_DPICHANGED` in
+desktop mode, and own initiative. **Chosen: SMA/EMA** — the only one of the
+three the user sees every time the panel opens, and what phase 24 promised
+("indicators are wanted, build them in C"). The monitor change stands as the next
+candidate, with a testable design in the plan file.
+
+**No table.** The averages are not stored. `IndState` is a 40-byte step
+machine: `IndStep(&s, candles, i)` is fed one candle and gives the value as it
+falls out. The SMA is a rolling sum, started `period − 1` candles before the first
+drawn candle (`IndFeedStart`), so the sum never lives longer than one frame and
+cannot drift. The EMA is seeded with the SMA of the first 50 candles and continues
+with `v += k·(close − v)`, `k = 2/51`; it has infinite memory and is fed
+**always from candle 0**, otherwise the line would depend on where the view begins
+and move during panning. Only `+ − × ÷` — no `pow`/`log`
+(pitfall 75). The points go straight into `s_volPts`, the volume bars' buffer,
+which is done being used when the lines begin: **the overlay has zero bytes of its
+own static memory.**
+
+**The drawing** (`DrawIndicator`): `Polyline` with `DC_PEN` in chunks of 1024
+points, the last point in a chunk is the first in the next. After the candles and
+before `SelectClipRgn(NULL)` — *above* the candles (a muted 1 px line behind
+saturated candle bodies disappears where it crosses the price), below the
+last-price line and the crosshair. The line goes one candle out on each side and
+leaves the surface through the clip. `floor` on x, because the candle outside the
+left edge has a negative offset where `(int)` rounds toward zero. `y` is clamped to
+±16 surface heights (GDI computes in 27 bits). **`PriceRange` is untouched:** the
+price axis does not see the averages, and a line outside the price range is
+clipped, as in TradingView. Both modes — a curve is not text (phase 14).
+
+**The legend** sits at the top left of the chart area in the lines' own
+colors — `SMA 20  81162.66    EMA 50  81196.25` — with the value at the candle
+under the crosshair, otherwise the last visible candle. The value falls out of the
+same pass that draws the line. Only in the panel, and only when the whole text
+fits (~323 px; a truncated number is a wrong number).
+
+**The toggle** follows VOL (phase 22): `showInd` (the registry, `ShowIndicators`,
+on by default), `dispIndF` ∈ [0, 1] eased in `WM_TIMER` — here as *color*
+toward `CLR_BG` (`Blend`), τ 55 ms, snap 0.02 — and snapped when the surface is
+not visible. `MA` pill, the `M` key (without Ctrl; `Ctrl`+`M` minimizes) and
+"Glidende snitt" ("Moving averages") in the tray menu (`ID_TRAY_INDICATORS` 1007), which is the way
+in for desktop mode. **The toolbar was full** (x = 310 of 312 at 400 px):
+the `MA` pill is the one deliberate exception to the `C_ASSERT` rule and is hidden
+below 426 px by the rule that has always been there. `POPUP_MIN_W` is not
+raised.
+
+**`SEED_COUNT` 300 → 360.** The first screenshot showed the EMA line starting a
+sixth of the way into the chart: with 300 of 300 candles visible, candles 0–48 are
+undefined. The first fetch (and every backfill chunk) now takes 360 candles; the
+default view is still the last 300, so the warm-up lies outside the left edge.
+`C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_EMA_PERIOD)`. The response is ~60 KB of
+the 96 KB `s_httpBuf`.
+
+**Verified.** Unit tests on real code (`unit_ind`): **20/20**, red against
+commit 1 (the functions do not exist). 6000 pseudo-random closes against
+independent references: largest deviation SMA 0, EMA 1.5·10⁻¹⁰; rolling sum
+started in the middle of the buffer over 3000 candles: 2.5·10⁻¹⁰. The tests found
+one real bug before it was committed: the period guard was in `IndInit`, but not
+in `IndFeedStart`. End to end (`probe_ind.c`): **54/54 in two runs**, red
+run **29 FAIL**. The app's values (fields 36/37) against the probe's own
+computation from the closes (field 38) on four candles, within 2 cents; SMA in
+1126–1130 and EMA in 1136 of 1136 columns, zero line pixels outside the chart
+area, a line pixel within 2 px of the computed (x, y) on three candles per line;
+`M` fades `dispIndF` through intermediate values to 0 in ~220–250 ms and writes
+the registry at once; the pill at (325, 35) switches on, the gap VOL|MA hits
+nothing; the tray command; a restart with `ShowIndicators` = 0 gives zero lines
+from the first frame; 410 px hides the pill while `M` works, 430 px shows it;
+backfilled to ~4700–5000 candles and zoomed all the way out, the EMA is continuous
+in 1136 of 1136 columns. Desktop mode looked at in `PrintWindow` at 3840×1600:
+4165 + 3730 line pixels, no legend. **Painting:** the two lines cost
+**52–59 µs** per frame with 300 visible candles and **179–181 µs** with 4300–4700
+(median, QPC around the block in the test build, field 39) — 3 % of a ~1.9 ms
+repaint. Measuring it as the *difference* between the whole repaint with and
+without averages could not be done: five alternating rounds gave −139, +63, +78,
++80 and +196 µs at 300 candles in five runs — the noise floor is larger than what
+is being measured (pitfall 80). **GDI/USER 32/14 before and after** 12 toggles
+with fading and 1200 frames. **Exe
+195 584 → 199 168 bytes (+3 584)**; commit 1 alone 0; `/TP` identical; without
+`wcscat_s` the same number — the growth is the code, not the CRT.
+
+**The probe needs an idle machine after all.** It sends no `SendInput`
+and does not move the pointer, and the first version therefore started without
+waiting. In a green run the user came back (last input 0.3 s old when it was
+checked) and must have held `Ctrl` as the probe posted `M` — the panel was
+minimized with `showInd` untouched, and `Ctrl`+`M` is the only way there: the app
+read `Ctrl`+`M`, minimized the panel as it should, and
+the probe — which captured a 0×0 window and counted pixels in 1280×720 — died with
+an access violation after four FAIL. No product bug; the probe now waits for 25 s
+without input, waits out modifier keys before each posted key, and aborts
+with code 4 when the capture does not have the size it expects (pitfall 84).
+
+**Not tested:** the crosshair's effect on the legend is seen in a
+screenshot (real pointer, 80959.24 at the 02:22 candle vs 81157.62 at the last
+candle), not in the probe — a posted `WM_MOUSEMOVE` does not hold hover (pitfall
+35). The tray *menu* is not opened; the command it sends is. Eviction at the front
+with a full buffer (6000 candles) while the lines are shown is read, not run: the
+EMA is fed from the new candle 0 and moves by less than 10⁻⁹ of the price after
+~1000 candles. The phase 23 and phase 24 probes were not run again; the
+`WM_APP_DATA` path, the parsers and the alerts are untouched, but **`SEED_COUNT`
+has changed** and older probes that expect 300 candles after the first fetch
+will fail on that number.
+
+### Phase 26 — the desktop surface: its own overlay choices and monitor change
+
+Plan and measurements: `docs/plans/2026-09-19-desktop-surface.md`.
+Branch `skrivebordsflate`, merged with `--no-ff`.
+
+**Feedback from use: "now volume and MA show on the wallpaper".** Read
+as meaning they do not belong there, and that matches phase 14's own rule:
+the surface is read peripherally behind the icons, and everything that has to be
+decoded was removed. The volume bars had nevertheless been on the desktop since
+phase 21 without any mode check, and phase 25 put the average lines on top with
+the reasoning "a curve is not text". That reasoning was wrong — bars and averages
+are measuring tools, not wallpaper (pitfall 85). The user was in panel mode during
+phase 25 and saw both on the desktop only afterwards.
+
+**One choice per mode, not hardcoded away.** Phase 22 put "Volume bars" in
+the tray menu precisely so that desktop mode could toggle. `showVol` /
+`showInd` belong to the panel (default on, unchanged); `showVolDesk` / `showIndDesk`
+belong to the desktop (`ShowVolumeDesktop` / `ShowIndicatorsDesktop`, **default
+off**). `ShowVolNow()` / `ShowIndNow()` give the choice for the mode the process
+is in — everything that draws, eases, checks marks in the tray menu or answers a
+probe (fields 18/34) reads them, and `SetShowVolume` / `SetShowIndicators` write
+the mode's field. `dispVolF` / `dispIndF` snap on a mode change, and
+the startup snap is moved to after the mode is known (it was right
+after `LoadConfig`, before `--desktop-mode` and `DesktopMode` had been read). Two
+clicks in the tray menu bring the overlays back on the desktop.
+
+**Monitor change.** The surface is a `WS_CHILD` of WorkerW and never gets
+`WM_DISPLAYCHANGE`; the hidden main window is top-level and gets it.
+`PlaceDesktopSurface` is split out of `AttachToDesktop`.
+`RefitDesktopSurface` runs in a per-monitor-v2 bracket like `TogglePopup`
+(`GetSystemMetrics` follows the thread's context, and the main thread is unaware):
+if the surface is not in the current WorkerW, it is torn down and `WM_NCDESTROY`
+starts the rebuild (the path from phase 9); otherwise it is placed again.
+Unchanged geometry is a no-op; a new size gives `WM_SIZE`, which discards the
+watermark, and the double buffer and the stamp font (H/40) are keyed on the size.
+`TIMER_REFIT_ID` does the same once more after 1 s, because Explorer places
+its own WorkerW again after the same message and the origin is computed in its
+coordinates. `lParam` is not read (virtualized). **`WM_DPICHANGED` is not
+handled, on purpose:** the main window never gets it, and the surface computes in
+physical pixels, so a pure scaling change changes nothing for it.
+
+**Verified** (`probe_desk.c`, per-monitor aware like the surface, waits for an
+idle machine): **45/45 in two runs**, red run **26 FAIL**. Clean
+desktop: 0 bar and 0 line pixels in a capture at 3840×1600 with ~42 700
+candle pixels (red: 35 112 / 4 144 / 3 725). The tray commands write the
+desktop's registry values and leave the panel's alone; the pixels follow. The
+probe shrinks the surface to 1920×800 (stamp font 38 → 19 px) and sends
+`WM_DISPLAYCHANGE`: the same window back at 0,0 3840×1600, the font 38 again,
+full frame. Shrunk without a message: the follow-up check fixes it within 1.6 s.
+Torn out of WorkerW with `SetParent`: torn down, rebuilt, the choices
+survive. In panel mode the message touches nothing. GDI/USER **30/6 before and
+after** seven monitor changes. Mode change and restart give each mode its choice
+from the first frame, without animation. The phase 25 probe run again: **54/54**.
+**Exe 199 168 → 199 680 bytes (+512).**
+
+**Not tested:** a real resolution or monitor change — the probe sends
+the message and imitates the effect (pitfall 47). Whether Explorer tears down
+WorkerW on a real change, whether a scaling change sends
+`WM_DISPLAYCHANGE`, multiple monitors and changing the primary monitor are read,
+not run; the machine has one monitor.
+
+### Phase 27 — "Bloomberg Essentials": VWAP, today's high/low and values in the hover box
+
+Plan and measurements: `docs/plans/2026-09-19-bloomberg-essentials.md`.
+Branch `fase27-bloomberg-essentials`, merged with `--no-ff`.
+
+**The order:** dashed lines for the session's high and low behind the candles with
+a discreet label on the axis, VWAP as a golden line above the candles, and SMA/EMA/VWAP
+as exact numbers in the hover box — without new memory and without touching
+the desktop.
+
+**Session = the UTC day, not the view.** The order said "day/view" and
+"VWAP for the visible view". `PriceRange` adds 8 % air around
+the view's high and low, so lines at the *view's* extremes would have stood in the
+same place in every frame; and a VWAP anchored at the first visible candle would
+have jumped with every candle during panning (pitfall 90). `SessionStartAt` finds
+the day's first candle with a binary search in `openTime`; on 1d candles there is
+no session. **VWAP resets per day** (`DrawVwap`), typical price (H + L + C) / 3,
+and the line breaks at the day rollover — so it is defined also when the view is in
+yesterday. Today's high/low applies only today and runs from the day's first candle
+in to the axis. Everything is step machines and pure functions as in phase 25: no
+table, no new buffers (`s_volPts` is borrowed for `Polyline` and `PolyPolyline`).
+
+**An incomplete day is not drawn — and is fetched.** 360 candles is six hours
+at 1m, and "today's high" of the last six hours is a wrong number.
+`WM_APP_DATA` asks for older candles (`RequestHistory`, phase 18) until the day is
+covered: at most four fetches, only with the panel visible and the indicators on in
+the mode the process is in.
+
+**Behind the indicators toggle.** The toolbar is full (`C_ASSERT`, phase 25), so
+everything follows `ShowIndNow()` / `dispIndF`: `M`, the `MA` pill and the tray
+item, which is now called "Indikatorer" (Indicators). The desktop has
+`ShowIndicatorsDesktop` = 0 by default (phase 26) and is thus untouched; no new
+registry keys. The dashed lines fade with the rest, and are therefore strokes for
+`PolyPolyline` with `DC_PEN` and not a `PS_DASH` pen — the GDI count at rest is
+unchanged. The pattern (6 on / 6 off) is anchored at the surface's left edge.
+`CLR_VWAP` F2D14B is yellower and lighter than the alerts' amber; `CLR_SESSION`
+90939E is a neutral gray (pitfall 87 explains why not 8A93A0). The axis tags are
+muted (`CLR_BOX` surface, gray text, no frame) and lowest in rank in the collision
+system from phase 23. The legend got a third item in gold, which drops out alone
+when the row is narrow; if a session line crosses the legend's row (low panel), the
+text gets an opaque background. The hover box is 126 px tall with the indicators on
+(87 + 3 × 13) and 87 as before without.
+
+**Verified.** `probe_sess.c` (1280×720, real pointer for hover, waits
+for an idle machine): **54/54 in two runs** (and 53/53 before 06:00 UTC, when
+the backfill was not needed), red run **14 FAIL** before 06:00 and **18 FAIL**
+after. At 06:01 UTC the buffer fetched itself from 360 to 720 candles on its own
+and stopped; commit 1 in the same minute stood at `fullstendig = 0`. Today's
+high/low and VWAP match the probe's own computation from fields 14 and 47–50 (VWAP
+within 5 cents on four candles). Both dashed lines lie on the computed row in exact
+`CLR_SESSION` (548 of 1098 px, longest stroke 6 px, nothing before the day's
+first candle), VWAP in 1081 of 1081 columns within 2 px of the computed (x, y), 0 px
+outside the chart area. Hover box 126 px on / 87 off. 1d: no session, no
+backfill, "VWAP  -". 1h: VWAP computed from each day's start, 1088 of 1136
+columns. **Cost, measured directly (field 45): 15–21 µs per frame** (the averages
+from phase 25: 48–57 µs). GDI/USER **32/14 before and after**. Unit tests 24/24.
+The desktop probe (extended) 47/47: **0 px VWAP and 0 px high/low by
+default** at 3840×1600, 3860 / 1824 px when they are switched on. The phase 25 probe
+54/54 after it learned to wait for the backfill. A capture at 560×300
+showed today's high straight through the legend's digits; fixed in commit 3.
+The trade-off: the background then also wipes out wicks and average pixels under
+the text. **Exe 199 680 → 203 776 bytes (+4 096)**, `/TP` byte-identical.
+
+**Not tested:** a real day rollover with the panel open, and backfill during
+network errors (read, not run).
+
+### Phase 28 — yesterday's levels: the previous day's high, low and close
 
 Plan: `docs/plans/2026-09-19-yesterdays-levels.md`.
-Gren `fase28-gaarsdagens-nivaaer`, flettet inn med `--no-ff`. Mandatet var
-«continue»; kandidaten sto i fase 27-planen.
+Branch `fase28-gaarsdagens-nivaaer`, merged with `--no-ff`. The mandate was
+"continue"; the candidate was in the phase 27 plan.
 
-**Tre nivåer for i dag.** Forrige UTC-døgns høy, lav og sluttkurs tegnes som
-vannrette linjer fra *dagens* første lys og inn til aksen, som dagens
-høy/lav: lysene som laget dem trenger ingen strek over seg. `PrevSession`
-finner gårsdagen som [start, dagens start) med de samme binærsøkene som
-`SessionStartAt`; ligger lyset foran dagens første ikke i døgnet før (hull),
-finnes ingen gårsdag. Ufullstendig gårsdag tegnes ikke, som i fase 27.
+**Three levels for today.** The previous UTC day's high, low and close are drawn as
+horizontal lines from *today's* first candle in to the axis, like today's
+high/low: the candles that made them need no stroke over them. `PrevSession`
+finds yesterday as [start, today's start) with the same binary searches as
+`SessionStartAt`; if the candle before today's first is not in the previous day
+(a gap), there is no yesterday. An incomplete yesterday is not drawn, as in phase 27.
 
-**Bakfyllingen går til forrige døgnskifte.** `SessionsNeedHistory` erstatter
-fase 27-vilkåret i `WM_APP_DATA`: sann til både dagens og gårsdagens session
-er hele, `histDone`, eller gårsdagen ikke finnes. Ved 1m er det opptil 2880
-lys (åtte hentinger), ved 5m én henting, fra 15m ingen. Hver henting poster
-`WM_APP_DATA`, som spør igjen — målt **3,3–3,7 s fra 360 til 2880 lys**.
-Fortsatt bare med panelet synlig og indikatorene på i modusen prosessen står
-i; skrivebordet henter ingenting (målt: 360 lys, felt 54 = 0).
+**The backfill goes to the previous day rollover.** `SessionsNeedHistory` replaces
+the phase 27 condition in `WM_APP_DATA`: true until both today's and yesterday's
+session are whole, `histDone`, or yesterday does not exist. At 1m that is up to
+2880 candles (eight fetches), at 5m one fetch, from 15m none. Each fetch posts
+`WM_APP_DATA`, which asks again — measured **3.3–3.7 s from 360 to 2880 candles**.
+Still only with the panel visible and the indicators on in the mode the process is
+in; the desktop fetches nothing (measured: 360 candles, field 54 = 0).
 
-**Utseende.** `CLR_PREV` 6F7B95 — kjøligere og mørkere enn `CLR_SESSION`,
-«samme ting, eldre» — og ikke på blandingslinja fra `CLR_BG` eller `CLR_BOX`
-til noen tekstfarge (minste sprik per kanal 0,089). Samme periode (12) og
-anker som dagens linjer: høy/lav **2 på / 10 av**, sluttkursen **10 på / 2
-av**. Første utkast var 2/4; trådkorsets `PS_DOT` er et tett prikkemønster i
-grått, og 2/10 ligger lenger unna. `DrawDashLine` tar mønsteret som
-parameter. De fem nivåene (dagens høy, lav, gårsdagens slutt, høy, lav) står
-nå i **én tabell i aksekolonnens rang**, så kollisjonsregelen, merkene,
-rutenettetikettenes vikeplikt og forklaringens «struck»-regel er én løkke
-hver i stedet for en kopi per klasse. Ingen rader i hover-boksen (nivåene er
-konstanter), ingen pille, ingen registernøkkel: alt følger `ShowIndNow()`.
+**Appearance.** `CLR_PREV` 6F7B95 — cooler and darker than `CLR_SESSION`,
+"the same thing, older" — and not on the blend line from `CLR_BG` or `CLR_BOX`
+to any text color (smallest gap per channel 0.089). Same period (12) and
+anchor as today's lines: high/low **2 on / 10 off**, the close **10 on / 2
+off**. The first draft was 2/4; the crosshair's `PS_DOT` is a dense dot pattern in
+gray, and 2/10 lies further away. `DrawDashLine` takes the pattern as a
+parameter. The five levels (today's high, low, yesterday's close, high, low) are
+now in **one table in the axis column's rank**, so the collision rule, the tags,
+the grid labels' duty to yield and the legend's "struck" rule are one loop
+each instead of a copy per class. No rows in the hover box (the levels are
+constants), no pill, no registry key: everything follows `ShowIndNow()`.
 
-**Verifisert.** `probe_prev.c` (1280×720, venter på inaktiv maskin, starter
-ikke 23:50–00:05 UTC): **52/52 i to kjøringer, rød mot commit 1: 21 FAIL**
-(bakfyllingen stoppet på 1442 lys, felt 54 sto på 1, nivåene −1, 0 px).
-Verdiene stemmer med probens lineære utregning av felt 38 og 47–50
-(81400,00 / 76296,00 / 80883,87); gårsdagen er 1440 lys ved 1m, 288 ved 5m
-(360 → 720 av seg selv), begge døgn åpner på 00:00 UTC. Piksler ved 15m:
-alle tre linjer på utregnet rad i eksakt `CLR_PREV` — slutt 249 av 312 px,
-lengste strek 10, 22 hele; høy 47 px, lengste 2; lav 52 px, lengste 2 —
-ingenting før dagens første lys, 0 px over og under grafflaten. Aksemerket
-for lav sto (1083 px `CLR_BOX`, tall i `CLR_PREV`); slutt vek for dagens lav
-4 px unna og høy for stempelet 2 px unna, som rangen sier. `M` og
-tray-kommando 1007: 348 → 0 px. 1d: ingen gårsdag, ingen bakfylling.
-**Kostnad (felt 56): 1 µs per bilde** med 1440 lys å lese; hele
-sessionblokka 26 µs (21 før), snittene 48 µs med 2880 lys i bufferet.
-GDI/USER **32/14 før og etter**. Enhetstester `unit_prev` 27/27 (rød mot
-master: bygger ikke). Regresjon: `probe_ind` 54/54, `probe_desk` 49/49 (**0
-px `CLR_PREV` og ingen bakfylling på skrivebordet som standard**; 545 px og
-2881 lys når indikatorene skrus på der), `probe_sess` 52/52 etter rettelsen av felt 14 under (to sjekker om en
-ufullstendig gårsdag faller bort nå som den alltid hentes). Sett på:
-fangst ved 1280×720 og 560×300 (15m).
-**Exe 203 776 → 204 800 byte (+1 024)**, commit 1: 0, `/TP` byte-identisk.
+**Verified.** `probe_prev.c` (1280×720, waits for an idle machine, does not start
+23:50–00:05 UTC): **52/52 in two runs, red against commit 1: 21 FAIL**
+(the backfill stopped at 1442 candles, field 54 stood at 1, the levels −1, 0 px).
+The values match the probe's linear computation from fields 38 and 47–50
+(81400.00 / 76296.00 / 80883.87); yesterday is 1440 candles at 1m, 288 at 5m
+(360 → 720 on its own), both days open at 00:00 UTC. Pixels at 15m:
+all three lines on the computed row in exact `CLR_PREV` — close 249 of 312 px,
+longest stroke 10, 22 whole; high 47 px, longest 2; low 52 px, longest 2 —
+nothing before today's first candle, 0 px above and below the chart area. The axis
+tag for low stood (1083 px `CLR_BOX`, number in `CLR_PREV`); close yielded to
+today's low 4 px away and high to the stamp 2 px away, as the rank says. `M` and
+tray command 1007: 348 → 0 px. 1d: no yesterday, no backfill.
+**Cost (field 56): 1 µs per frame** with 1440 candles to read; the whole
+session block 26 µs (21 before), the averages 48 µs with 2880 candles in the buffer.
+GDI/USER **32/14 before and after**. Unit tests `unit_prev` 27/27 (red against
+master: does not build). Regression: `probe_ind` 54/54, `probe_desk` 49/49 (**0
+px `CLR_PREV` and no backfill on the desktop by default**; 545 px and
+2881 candles when the indicators are switched on there), `probe_sess` 52/52 after
+the fix of field 14 below (two checks about an incomplete yesterday drop out now
+that it is always fetched). Looked at:
+captures at 1280×720 and 560×300 (15m).
+**Exe 203 776 → 204 800 bytes (+1 024)**, commit 1: 0, `/TP` byte-identical.
 
-**Funnet underveis:** `probe_sess` (fase 27) feilet på «VWAP innen 5 cent»
-med 5,7 cent. VWAP-koden er urørt. Avvikene var ensidige (0, +4,0, +2,6,
-+5,7 cent), altså systematiske: probe-felt 14 **trunkerte** volumet til
-hundredeler i stedet for å avrunde, så hver vekt i probens sum var litt for
-liten, og skjevheten vokser med antall lys — fase 27 kjørte kl. 06 UTC med
-~360 lys i sessionen, denne kl. 19 med 1152. Felt 14 avrunder nå (bare
-testbygget; prod-exe uendret), og avviket er under 0,5 cent på alle fire lys
-med toleransen tilbake på 5 cent (fallgruve 91).
+**Found along the way:** `probe_sess` (phase 27) failed on "VWAP within 5 cents"
+with 5.7 cents. The VWAP code is untouched. The deviations were one-sided (0, +4.0,
++2.6, +5.7 cents), that is, systematic: probe field 14 **truncated** the volume to
+hundredths instead of rounding, so every weight in the probe's sum was slightly too
+small, and the bias grows with the number of candles — phase 27 ran at 06 UTC with
+~360 candles in the session, this one at 19 with 1152. Field 14 now rounds (only
+the test build; prod exe unchanged), and the deviation is under 0.5 cents on all
+four candles with the tolerance back at 5 cents (pitfall 91).
 
-**Ikke testet:** et ekte døgnskifte med panelet åpent (enhetstestet: rett
-etter 00:00 er gårsdagen «resten av bufferet, ufullstendig», og bakfyllingen
-starter på nytt), et hull i Binance' historikk (enhetstestet), og bakfylling
-under nettverksfeil.
+**Not tested:** a real day rollover with the panel open (unit tested: right
+after 00:00, yesterday is "the rest of the buffer, incomplete", and the backfill
+starts again), a gap in Binance's history (unit tested), and backfill
+during network errors.
 
-### Fase 29 — lesbare nivåer: merkelapper og et trådkorsmerke som ikke kutter tall
+### Phase 29 — readable levels: labels and a crosshair tag that does not cut numbers
 
-Plan: `docs/plans/2026-09-19-readable-levels.md`. Gren
-`fase29-lesbare-nivaaer`, flettet inn med `--no-ff`. Mandatet var «ok kjør».
-To lesbarhetsfeil ble valgt foran nye indikatorer: fase 28 etterlot fem
-vannrette linjer uten navn, og trådkorsets aksemerke — det eneste merket som
-flytter seg med hånda — var det eneste uten kollisjonsregel.
+Plan: `docs/plans/2026-09-19-readable-levels.md`. Branch
+`fase29-lesbare-nivaaer`, merged with `--no-ff`. The mandate was "ok, go".
+Two readability bugs were chosen ahead of new indicators: phase 28 left five
+horizontal lines without names, and the crosshair's axis tag — the only tag
+that moves with the hand — was the only one without a collision rule.
 
-**Merkelappene.** HOD, LOD, PDC, PDH, PDL (handelssjargongen, som `VWAP` og
-`O H L C V` ellers) ved linjas *venstre* ende, `max(xs, left) + 4`, rett
-over linja og under den når det ikke er rom over. Ikke ved aksen: der står
-de nyeste lysene, og aksemerket bærer tallet. Tegnes i forklaringens blokk,
-ikke i nivåblokka — den ligger bak lysene, og tekst der ville blitt overmalt.
-Aksefonten, linjas farge, tonet med `dispIndF`; teksten slutter to rader over
-linja, så strekmønsteret og pikselprobene står rene. Kollisjon på
-**rektangler i rang**, ikke på y-avstand (aksefonten er høyere enn 12 px):
-en lapp som ville truffet forklaringen eller en lapp foran seg i rangen,
-tegnes ikke. Under 200 px flate faller alle ut. Ikke på skrivebordet.
+**The labels.** HOD, LOD, PDC, PDH, PDL (the trading jargon, like `VWAP` and
+`O H L C V` elsewhere) at the line's *left* end, `max(xs, left) + 4`, just
+above the line, and below it when there is no room above. Not at the axis:
+the newest candles are there, and the axis tag carries the number. Drawn in
+the legend's block, not in the level block — that one lies behind the
+candles, and text there would be painted over. The axis font, the line's
+color, faded with `dispIndF`; the text ends two rows above the line, so the
+dash pattern and the pixel probes stay clean. Collision on **rectangles in
+rank**, not on y distance (the axis font is taller than 12 px): a label that
+would hit the legend or a label ahead of it in rank is not drawn. Below a
+200 px surface they all drop out. Not on the desktop.
 
-**Trådkorsmerket i rangen:** stempelet, så trådkorsmerket, så resten.
-`yCross` regnes ved siden av `yPill` med samme synlighetsprøve og klemming
-som trådkorsblokka, og går inn i `yTag[]`: rutenettetiketter og nivåmerker
-under 16 px unna tegnes ikke, et varselmerke beholder flaten og mister
-tallet. Under 16 px fra *stempelet* tegnes ikke trådkorsmerket selv — siste
-pris er tallet som aldri skal kuttes, og hover-boksen bærer lysets tall.
-Linja tegnes som før. Pekeren i aksekolonnen gir `hoverIdx = −1`
-(`HitCandle`), så spøkelsesmerket og trådkorsmerket finnes aldri samtidig.
+**The crosshair tag in the rank:** the stamp, then the crosshair tag, then
+the rest. `yCross` is computed next to `yPill` with the same visibility test
+and clamping as the crosshair block, and goes into `yTag[]`: grid labels and
+level tags less than 16 px away are not drawn, an alert tag keeps its surface
+and loses its number. Within 16 px of the *stamp* the crosshair tag itself is
+not drawn — the last price is the number that must never be cut, and the
+hover box carries the candle's numbers. The line is drawn as before. The
+pointer in the axis column gives `hoverIdx = −1` (`HitCandle`), so the ghost
+tag and the crosshair tag never exist at the same time.
 
-**Verifisert.** `probe_lbl.c` (1280×720, 15m, ekte peker for hover):
-**28/28 i to kjøringer**, rød mot commit 1: **5 FAIL** — blant dem **101
-tekstpiksler av en avkuttet etikett** i stripa over trådkorsmerket (pekeren
-11 px under etiketten) og 1139 px trådkorsmerke oppå stempelet. Grønn: 0
-piksler i stripa, merket står (1143 px), 40 px unna står etiketten hel (94
-px); 9 px fra stempelet: 0 px trådkorsmerke, felt 58 = 0. Felt 57 = 0x1B:
-HOD, LOD, PDH og PDL fikk lapp (64–93 tekstpiksler hver, 0 px på naboradene,
-lengste løp på linjas rad 6 og 2 som før), PDC vek for LOD 3 px unna.
-**Kostnad (felt 59): 1 µs per bilde.** GDI/USER **32/14 før og etter**.
-Regresjon: `probe_prev` 52/52, `probe_sess` 52/52, `probe_ind` 54/54,
-`probe_desk` 49/49. Sett på: 1280×720 og 560×300.
-**Exe 204 800 → 205 824 byte (+1 024)**, commit 1: 0, `/TP` byte-identisk.
+**Verified.** `probe_lbl.c` (1280×720, 15m, real pointer for hover):
+**28/28 in two runs**, red against commit 1: **5 FAIL** — among them **101
+text pixels of a cut-off label** in the strip above the crosshair tag (the
+pointer 11 px below the label) and 1139 px of crosshair tag on top of the
+stamp. Green: 0 pixels in the strip, the tag is there (1143 px), 40 px away
+the label stands whole (94 px); 9 px from the stamp: 0 px of crosshair tag,
+field 58 = 0. Field 57 = 0x1B: HOD, LOD, PDH and PDL got a label (64–93 text
+pixels each, 0 px on the neighboring rows, longest run on the line's row 6
+and 2 as before), PDC gave way to LOD 3 px away.
+**Cost (field 59): 1 µs per frame.** GDI/USER **32/14 before and after**.
+Regression: `probe_prev` 52/52, `probe_sess` 52/52, `probe_ind` 54/54,
+`probe_desk` 49/49. Looked at: 1280×720 and 560×300.
+**Exe 204 800 → 205 824 bytes (+1 024)**, commit 1: 0, `/TP` byte-identical.
 
-**Ikke testet:** trådkorsmerket mot et *varselmerke* og et nivåmerke er lest,
-ikke fanget (samme `yTag`-løkke som rutenettetikettene, som er fanget).
+**Not tested:** the crosshair tag against an *alert tag* and a level tag is
+read, not captured (the same `yTag` loop as the grid labels, which is
+captured).
 
 ### Phase 30 — the name TickC: registry, autostart and exe renamed, with migration
 
@@ -2980,7 +3053,7 @@ and the alert balloon (`Price crossed the alert going up/down. Last price:
 ...`). Hours are `h` (`1h`, `4h`, `2h 30m`). Dates are ISO: `2026-09-22` on
 1d, `09-22 14:30` on 1h and 4h — the same width as `22.09.2026` and
 `22.09 14:30`, so the monospace time axis lays out the same. The last
-non-ASCII escape in the file (`\x00e5` in "pålogging") is gone.
+non-ASCII escape in the file (`\x00e5` in "paalogging", the old word for sign-in) is gone.
 
 **Verified.** `scan_ui_strings.py` scans every literal outside comments for
 Norwegian words, `æøå` escapes, the `t` hour suffix and `dd.mm` dates:
@@ -3020,11 +3093,11 @@ Exe 206 336 bytes, unchanged.
 
 ---
 
-## Kjente begrensninger
+## Known limitations
 
 - **`probe_prev` cannot check a dash pattern when two levels share a row.**
   When today's high and yesterday's close lie one row apart (86 625.82 and
-  86 620.00 on 22.09.2026), one line's dashes break the other's, and the
+  86 620.00 on 2026-09-22), one line's dashes break the other's, and the
   pattern check fails on any build (confirmed against phase 29). It clears
   itself when the levels move apart; a fix would skip the check for a level
   within two rows of another.
@@ -3035,708 +3108,722 @@ Exe 206 336 bytes, unchanged.
   `Software\Ticker` again with default settings and does not know about
   `TickC`. The next `TickC.exe` start leaves that key alone (the new key
   wins) but removes a `Ticker` Run value if it finds one.
-- **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
-  tråden har hentet. Alle senere åpninger har data fra bufferet umiddelbart.
-- **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0` og
-  tray-menyens «Standardvisning» setter tilbake til **1280×720** sentrert,
-  klemt til arbeidsområdet om skjermen er mindre.
-- **Opptegningen holder ikke 0,85 ms.** Etter fase 10 er medianen 1,33 ms
-  ved 1280×720 og 5,13 ms ved 3840×1600, målt 17.09.2026. Etter fase 21
-  er den 1,56 ms ved 1280×720 med 300 lys (1,44 uten stolpene, målt i
-  samme kjøring med QPC i testbygget). Fordelingen per ledd står i fase 10. Eldre tall (0,462 ms på ~380×300 i del C, ~0,85 ms ved
-  1280×720 i fase 7) er målt under andre forhold og lot seg ikke gjenskape med
-  uendret kode i fase 9.
-- **Prisvarslene prøves mot én pris per henting** (fase 23), altså hvert
-  tredje sekund: lysets lukkekurs med panelet åpent, ticker-prisen ellers.
-  En spiss som går forbi nivået og tilbake mellom to hentinger fyrer
-  ingenting — lysets `high`/`low` leses ikke. Under en frakobling prøves
-  ingenting; første pris etterpå fyrer det som er passert.
-- **Bare varslene til symbolet som vises, er våkne** (fase 23). Appen henter
-  ett symbol om gangen; et varsel på ETH sover mens BTC vises, og fyrer på
-  første ETH-pris etter byttet dersom nivået er passert i mellomtiden.
-- **Et varsel utenfor det synlige prisområdet tegnes ikke** (fase 23),
-  heller ikke som en markør i kanten — samme regel som siste-pris-stempelet.
-  Det er våkent likevel. Det fjernes ved å panorere eller zoome til det
-  synes, eller med «Fjern prisvarsler (N)», som tar alle for symbolet og er
-  stedet antallet vises.
-- **Et varsel satt tett på prisen kan fyre med én gang** (fase 23). Siden
-  velges mot siste lys' lukkekurs; med panelet lukket prøves ticker-prisen,
-  og de to kan ligge noen cent fra hverandre.
-- **Et duplikat har egne, flyktige varsler** (fase 23): det leser og skriver
-  ikke registret, men varsler satt i det fyrer fra dets eget tray-ikon og
-  dør med panelet. To *hovedinstanser* startet for hånd fyrer begge det
-  samme varselet.
-- **Ballongen kan holdes tilbake av «Ikke stør»**, og lyden er systemlyden
-  «Stjerne» — er den slått av i Windows, er varselet stumt. Ettergløden
-  vises bare når panelet er synlig i det varselet fyrer.
-- **De ytterste 6 px av priskolonnen er skaleringskant** (`HTRIGHT`), ikke
-  varselflate, når panelet ikke er maksimert.
-- **Frakoblet-telleren vises ikke i headeren på smale paneler** (fase 22).
-  Verktøylinja slutter på x = 338 (med `MA`-pillen, fase 25; 310 uten);
-  teksten trenger ~75 px til før prisaksens etikett, altså et panel på
-  ~510 px eller mer. Dempet pris,
-  tray-tips og ikon bærer tilstanden uansett. Symbollinjas ellipse-gren
-  er borte sammen med symbollinja.
-- **Periodene er faste** (fase 25): SMA 20 og EMA 50, ikke valgbare, og
-  begge eller ingen — én bryter.
-- **`MA`-pillen finnes ikke under 426 px bredde** (fase 25). `M` og
-  tray-menyen virker. Forklaringen trenger ~335 px grafbredde og er borte
-  under ~440 px panelbredde; linjene tegnes uansett.
-- **EMA avhenger av hvor bufferet begynner** (fase 25). Den mates fra lys 0,
-  så en bakfylling (fase 18) eller en utkasting i front flytter såpunktet.
-  Virkningen dør ut med (49/51)ⁿ: etter 300 lys er den under 10⁻⁵ av
-  avviket i såpunktet. På de første ~150 lysene etter lys 49 i et *kort*
-  buffer kan linja skille seg synlig fra TradingViews, som har lengre
-  historikk.
-- **Snittene er udefinert på de første 19 / 49 lysene i bufferet**, og
-  linja begynner der. Standardutsnittet skjuler det (`SEED_COUNT` 360);
-  panorert helt til historikkens start synes det.
-- **Linjene er 1 px også på skrivebordet** når de er skrudd på der (fase 25;
-  av som standard fra fase 26). Stempelet skalerer
-  med H/40; linjene gjør ikke det (`DC_PEN` er alltid 1 px), og ved
-  3840×1600 er de tynne. Rutenettet har samme egenskap.
-- **Trådkorset tegnes over forklaringen** når pekeren står under den.
-- **Et duplikat arver `ShowIndicators` fra registret**, som `ShowVolume`
-  under, og skriver det aldri.
-- **Et duplikat arver `ShowVolume` fra registret, ikke fra panelet det ble
-  startet fra** (fase 22). `--dup` bærer symbol og intervall, ikke
-  volumvalget; i praksis er de like, fordi hovedinstansen skriver valget
-  i det det tas. Et duplikat skriver aldri.
-- **Verktøylinja har ingen tastaturfokus-markør.** Pillene nås med `V` og
-  `1`…`6`, ikke med `Tab`.
-- **Flere instanser deler registret.** Duplikater skriver ingenting, men
-  startes flere *hovedinstanser* for hånd (to ganger `ticker.exe`), vinner den
-  som lukkes sist. Hver instans har også sitt eget tray-ikon — et duplikat
-  forsvinner når panelet lukkes, en hovedinstans blir liggende til
-  «Avslutt Ticker».
-- **Et duplikat som skjules fra sitt eget tray-ikon blir liggende skjult**
-  (tray-klikk på et aktivt panel skjuler det, som for hovedinstansen). Det
-  avsluttes med krysset, `ESC` eller tray-menyen.
-- **Hover-opptegningen uteblir av og til i opptil ~2 s** i en probe som flytter
-  den ekte pekeren og leser med `PrintWindow`. Sett i gammelt og nytt bygg
-  (fase 8). Ikke sett for hånd, og årsaken er ikke undersøkt.
-- **Det finnes ingen systemmeny** (`Alt`+mellomrom), fordi vinduet ikke har
-  `WS_SYSMENU`. Kontrollknappene nås fra tastaturet med `Ctrl`+`N`,
-  `Ctrl`+`M`, `F11`, `Ctrl`+`W` og `Alt`+`F4` (fase 19), grafen med
-  piltaster, `PgUp`/`PgDn`, `Home`/`End` og `+`/`-` (fase 20), i tillegg
-  til `Ctrl`+`0`, `R`, `ESC` og `Win`+piltast.
-- **`ESC`, snarveiene og navigasjonstastene krever tastaturfokus.** Har du
-  klikket i et annet vindu, må panelet klikkes først. Knappene og hjulet
-  virker uansett.
-- **Et tastetrykk i grafen fjerner trådkorset** til neste musebevegelse
-  (fase 20). Det er valgt framfor å la krysset gli med lyset under easingen.
-- **`Alt`+`Tab` midt i et drag slipper ikke alltid capture.** Målt: i to
-  av fem kjøringer tok oppgavebytteren capture, tre ganger beholdt panelet
-  den, og draget fortsetter da til knappen slippes. `WM_CAPTURECHANGED`
-  (fase 20) dekker tilfellene der capture faktisk tas — tray-menyen gjør
-  det hver gang.
-- **Tray-ikonets skala er implisitt.** SOL på $150 og BTC på $150 000 tegnes
-  begge som `150`. Fonten har ingen `k`-glyf — fase 1 valgte bevisst `75.8`
-  framfor `75k` — og verktøytipset bærer det eksakte tallet.
-- **Animasjonsklokka går i korte støt når panelet står åpent.** Er panelet
-  lukket går det ingen timer i det hele tatt. Med panelet åpent starter hver
-  datahenting klokka på nytt, fordi det levende lyset kan flytte Y-målet:
-  målt **23 tikk på 30 sekunder**, mot 1800 om den hadde gått kontinuerlig.
-  Den dør altså mellom hentingene — dette er ikke en lekkasje.
-- **Skrivebordsmodus står uten graf i ~0,6 s når Explorer startes på nytt**
-  (målt 566 ms). Det meste er Explorer selv: ny Progman kommer etter ~0,3 s, og
-  WorkerW etter ~0,3 s til.
-- **Skrivebordsmodus: den klassiske WorkerW-grenen er ikke kjørt.** Maskinen
-  har 24H2-treet, der WorkerW er barn av Progman.
-- **Skrivebordsmodus dekker bare primærskjermen** (mandatet). Flere skjermer
-  er ikke testet, fordi maskinen har én.
-- **Skrivebordsmodus tegner i fysiske piksler ved skalering over 100 %.**
-  Flaten dekker hele skjermen, men tekst og marger får samme pikselstørrelse
-  som ved 100 %, altså mindre på skjermen. Det følger av at hele layouten er
-  i rå piksler (se *Avviste forslag*, DPI-manifest).
-- **Skjermbytte er bare prøvd med en sendt melding** (fase 26).
-  `WM_DISPLAYCHANGE` legger skrivebordsflaten på nytt over primærskjermen,
-  med en ettersjekk etter 1 s, men den ekte hendelsen kan ikke drives fra en
-  probe og maskinen har én skjerm. `WM_DPICHANGED` håndteres ikke: flaten
-  regner i fysiske piksler. Skulle flaten likevel stå feil, bygger en tur
-  innom panelmodus og tilbake den på nytt.
-- **Volum og glidende snitt er av på skrivebordet som standard** (fase 26)
-  og skrus på fra tray-menyen *mens prosessen står i skrivebordsmodus*.
-  Panelet har sine egne valg. Den som hadde dem på skrivebordet før fase
-  26, må skru dem på igjen én gang.
-- **Dagens session er UTC-døgnet** (fase 27), ikke lokal midnatt og ikke
-  utsnittet: VWAP nullstilles og «dagens» høy/lav begynner 00:00 UTC (02:00
-  norsk sommertid), som Binance sine dagslys. På 1d-lys finnes ingen session
-  — VWAP viser en strek og linjene tegnes ikke. Dagens høy/lav tegnes bare
-  når nivået ligger innenfor det synlige prisområdet og utsnittet rekker inn
-  i dagen; aksemerket viker for stempelet, varsler og spøkelsesmerket.
-- **Et døgn som ikke er helt i bufferet, får ingen VWAP** (fase 27). For
-  *dagens* og (fra fase 28) gårsdagens døgn hentes eldre lys av seg selv
-  (høyst åtte hentinger ved 1m,
-  bare med panelet synlig og indikatorene på); for eldre døgn i venstre kant
-  av bufferet står linja tom til neste døgnskifte, til brukeren drar i
-  veggen. Bakfyllingen betyr at bufferet ved 1m har opptil 2880 lys kort
-  etter åpning, ikke 360 — private bytes er uendret (`candles[]` er statisk).
-- **Gårsdagens nivåer synes sjelden i standardutsnittet ved 1m** (fase 28).
-  300 minutter av i dag har et smalt prisområde, og et nivå utenfor det
-  tegnes ikke — heller ikke som markør i kanten, samme regel som varslene og
-  dagens høy/lav. Zoom ut, eller bytt til 15m/1t.
-- **To nivåer få piksler fra hverandre tegnes begge** (fase 28; sett i
-  fangsten: gårsdagens slutt 4 px over dagens lav). Det er to tall, og
-  avstanden er informasjon; aksemerket og merkelappen (fase 29) til det
-  lavest rangerte viker, så den linja står uten navn til nivåene skilles.
-- **Merkelappene er gjennomsiktig tekst over lysene** (fase 29). Ved dagens
-  første lys kan en veke gå gjennom en bokstav (sett: «PDH» ved 15m). En
-  ugjennomsiktig flate ville visket ut lysene under; teksten er tre store
-  bokstaver og tåler det.
-- **Trådkorsmerket vises ikke under 16 px fra siste-pris-stempelet** (fase
-  29). Trådkorslinja og hover-boksen står; tallet på aksen er da stempelets.
-- **Åpnet sent i døgnet ved 1m hentes opptil 2880 lys** (fase 28, åtte
-  hentinger på 3–4 s) når indikatorene er på. EMA-såpunktet flytter seg
-  tilsvarende bakover (se EMA-punktet over); private bytes er uendret.
-- **Oppvåkning fra dvale er bare prøvd med en sendt melding** (fase 24).
-  `PBT_APMRESUMEAUTOMATIC` vekker tråden og slipper forbindelsen, men ekte
-  dvale kan ikke drives fra en probe. Er nettet ikke oppe ved første forsøk,
-  feiler det, og backoffen går 6 s, 12 s, … derfra. `frakoblet Ns` viser
-  dvalens lengde til første vellykkede henting (`GetTickCount64` teller
-  søvnen med). Prisvarslene tåler dvale: et passert nivå fyrer på første
-  pris etterpå.
-- **Skrivebordsmodus kobler input-køene sammen.** Et barn av et vindu i en
-  annen prosess får Windows til å koble trådenes input (implisitt
-  `AttachThreadInput`). Henger UI-tråden vår, kan skrivebordet henge med.
-  Nettverket går på egen tråd, så UI-tråden gjør bare opptegning.
-- **Modusbytte tar 18–28 ms (median)**, ikke < 16 ms. Se fase 12.
-- **Et maksimert panel kommer tilbake gjenopprettet** etter en tur innom
-  skrivebordsmodus. Geometrien som lagres, er den gjenopprettede.
-- **Fokus-blink-rettelsen er ikke kjørt med maksimering, minimering eller Aero
+- **The first time the panel opens,** "Loading data from Binance..." shows
+  for ~300 ms until the thread has fetched. Every later opening has data from
+  the buffer at once.
+- **Size and position survive a restart** (the registry). `Ctrl`+`0` and the
+  tray menu's "Default view" reset to **1280×720** centered, clamped to the
+  work area if the screen is smaller.
+- **Painting does not hold 0.85 ms.** After phase 10 the median is 1.33 ms
+  at 1280×720 and 5.13 ms at 3840×1600, measured 2026-09-17. After phase 21
+  it is 1.56 ms at 1280×720 with 300 candles (1.44 without the bars, measured
+  in the same run with QPC in the test build). The breakdown per stage is in
+  phase 10. Older numbers (0.462 ms at ~380×300 in part C, ~0.85 ms at
+  1280×720 in phase 7) were measured under other conditions and could not be
+  reproduced with unchanged code in phase 9.
+- **Price alerts are tested against one price per fetch** (phase 23), that
+  is every third second: the candle's close with the panel open, the ticker
+  price otherwise. A spike that goes past the level and back between two
+  fetches fires nothing — the candle's `high`/`low` is not read. During a
+  disconnect nothing is tested; the first price afterwards fires whatever
+  has been passed.
+- **Only the alerts for the symbol being shown are awake** (phase 23). The
+  app fetches one symbol at a time; an alert on ETH sleeps while BTC is
+  shown, and fires on the first ETH price after the switch if the level was
+  passed in the meantime.
+- **An alert outside the visible price range is not drawn** (phase 23), not
+  even as a marker at the edge — the same rule as the last-price stamp. It
+  is awake all the same. It is removed by panning or zooming until it shows,
+  or with "Clear price alerts (N)", which takes all of them for the symbol
+  and is the place the count is shown.
+- **An alert set close to the price can fire at once** (phase 23). The side
+  is chosen against the last candle's close; with the panel closed the
+  ticker price is tested, and the two can lie a few cents apart.
+- **A duplicate has its own, transient alerts** (phase 23): it does not read
+  or write the registry, but alerts set in it fire from its own tray icon and
+  die with the panel. Two *main instances* started by hand both fire the
+  same alert.
+- **The balloon can be held back by "Do not disturb"**, and the sound is the
+  system sound "Asterisk" — if it is turned off in Windows, the alert is
+  silent. The afterglow shows only when the panel is visible at the moment
+  the alert fires.
+- **The outermost 6 px of the price column are a resize edge** (`HTRIGHT`),
+  not alert surface, when the panel is not maximized.
+- **The offline counter is not shown in the header on narrow panels**
+  (phase 22). The toolbar ends at x = 338 (with the `MA` pill, phase 25; 310
+  without); the text needs ~75 px more before the price axis label, that is
+  a panel of ~510 px or more. The dimmed price,
+  tray tip and icon carry the state regardless. The symbol line's ellipsis
+  branch is gone along with the symbol line.
+- **The periods are fixed** (phase 25): SMA 20 and EMA 50, not selectable,
+  and both or neither — one toggle.
+- **The `MA` pill does not exist below 426 px width** (phase 25). `M` and
+  the tray menu work. The legend needs ~335 px of chart width and is gone
+  below ~440 px panel width; the lines are drawn regardless.
+- **EMA depends on where the buffer begins** (phase 25). It is fed from
+  candle 0, so a backfill (phase 18) or an eviction at the front moves the
+  seed point. The effect dies out as (49/51)ⁿ: after 300 candles it is below
+  10⁻⁵ of the deviation at the seed point. On the first ~150 candles after
+  candle 49 in a *short* buffer the line can differ visibly from
+  TradingView's, which has a longer history.
+- **The averages are undefined on the first 19 / 49 candles in the
+  buffer**, and the line begins there. The default view hides it
+  (`SEED_COUNT` 360); panned all the way to the start of history, it shows.
+- **The lines are 1 px on the desktop too** when turned on there (phase 25;
+  off by default from phase 26). The stamp scales
+  with H/40; the lines do not (`DC_PEN` is always 1 px), and at
+  3840×1600 they are thin. The grid has the same property.
+- **The crosshair is drawn over the legend** when the pointer is under it.
+- **A duplicate inherits `ShowIndicators` from the registry**, like
+  `ShowVolume` below, and never writes it.
+- **A duplicate inherits `ShowVolume` from the registry, not from the panel
+  it was started from** (phase 22). `--dup` carries symbol and interval, not
+  the volume choice; in practice they are the same, because the main
+  instance writes the choice the moment it is made. A duplicate never writes.
+- **The toolbar has no keyboard focus marker.** The pills are reached with
+  `V` and `1`…`6`, not with `Tab`.
+- **Several instances share the registry.** Duplicates write nothing, but if
+  several *main instances* are started by hand (`ticker.exe` twice), the one
+  closed last wins. Each instance also has its own tray icon — a duplicate
+  disappears when its panel closes, a main instance stays until
+  "Quit".
+- **A duplicate hidden from its own tray icon stays hidden** (a tray click
+  on an active panel hides it, as for the main instance). It is closed with
+  the close cross, `ESC` or the tray menu.
+- **The hover repaint sometimes fails to appear for up to ~2 s** in a probe
+  that moves the real pointer and reads with `PrintWindow`. Seen in the old
+  and the new build (phase 8). Not seen by hand, and the cause has not been
+  investigated.
+- **There is no system menu** (`Alt`+space), because the window does not
+  have `WS_SYSMENU`. The control buttons are reached from the keyboard with
+  `Ctrl`+`N`, `Ctrl`+`M`, `F11`, `Ctrl`+`W` and `Alt`+`F4` (phase 19), the
+  chart with arrow keys, `PgUp`/`PgDn`, `Home`/`End` and `+`/`-` (phase 20),
+  in addition to `Ctrl`+`0`, `R`, `ESC` and `Win`+arrow.
+- **`ESC`, the shortcuts and the navigation keys need keyboard focus.** If
+  you have clicked in another window, the panel must be clicked first. The
+  buttons and the wheel work regardless.
+- **A keystroke in the chart removes the crosshair** until the next mouse
+  move (phase 20). That was chosen over letting the cross slide with the
+  candle during the easing.
+- **`Alt`+`Tab` in the middle of a drag does not always release capture.**
+  Measured: in two of five runs the task switcher took capture, three times
+  the panel kept it, and the drag then continues until the button is
+  released. `WM_CAPTURECHANGED` (phase 20) covers the cases where capture is
+  actually taken — the tray menu does it every time.
+- **The tray icon's scale is implicit.** SOL at $150 and BTC at $150 000 are
+  both drawn as `150`. The font has no `k` glyph — phase 1 deliberately chose
+  `75.8` over `75k` — and the tooltip carries the exact number.
+- **The animation timer runs in short bursts while the panel is open.** With
+  the panel closed no timer runs at all. With the panel open every data fetch
+  restarts the timer, because the live candle can move the Y target:
+  measured **23 ticks in 30 seconds**, against 1800 if it had run
+  continuously. So it dies between fetches — this is not a leak.
+- **Desktop mode is without a chart for ~0.6 s when Explorer restarts**
+  (measured 566 ms). Most of it is Explorer itself: a new Progman arrives
+  after ~0.3 s, and WorkerW after ~0.3 s more.
+- **Desktop mode: the classic WorkerW branch has not been run.** The machine
+  has the 24H2 tree, where WorkerW is a child of Progman.
+- **Desktop mode covers only the primary monitor** (the mandate). Several
+  monitors are not tested, because the machine has one.
+- **Desktop mode draws in physical pixels at scaling above 100 %.** The
+  surface covers the whole screen, but text and margins get the same pixel
+  size as at 100 %, so smaller on the screen. That follows from the whole
+  layout being in raw pixels (see *Rejected proposals*, DPI manifest).
+- **A monitor change has only been tried with a sent message** (phase 26).
+  `WM_DISPLAYCHANGE` lays the desktop surface over the primary monitor again,
+  with a follow-up check after 1 s, but the real event cannot be driven from
+  a probe and the machine has one monitor. `WM_DPICHANGED` is not handled:
+  the surface computes in physical pixels. Should the surface still end up
+  wrong, a trip through panel mode and back rebuilds it.
+- **Volume and moving averages are off on the desktop by default** (phase 26)
+  and are turned on from the tray menu *while the process is in desktop
+  mode*. The panel has its own choices. Anyone who had them on the desktop
+  before phase 26 must turn them on again once.
+- **Today's session is the UTC day** (phase 27), not local midnight and not
+  the view: VWAP resets and "today's" high/low begin at 00:00 UTC (02:00
+  Norwegian summer time), like Binance's daily candles. On 1d candles there
+  is no session — VWAP shows a dash and the lines are not drawn. Today's
+  high/low are drawn only when the level lies within the visible price range
+  and the view reaches into the day; the axis tag gives way to the stamp,
+  alerts and the ghost tag.
+- **A day that is not wholly in the buffer gets no VWAP** (phase 27). For
+  *today's* and (from phase 28) yesterday's day, older candles are fetched
+  automatically (at most eight fetches at 1m,
+  only with the panel visible and the indicators on); for older days at the
+  left edge of the buffer the line stays empty until the next day rollover,
+  or until the user drags against the wall. The backfill means the buffer at
+  1m holds up to 2880 candles shortly after opening, not 360 — private bytes
+  are unchanged (`candles[]` is static).
+- **Yesterday's levels rarely show in the default view at 1m** (phase 28).
+  300 minutes of today have a narrow price range, and a level outside it is
+  not drawn — not even as a marker at the edge, the same rule as the alerts
+  and today's high/low. Zoom out, or switch to 15m/1h.
+- **Two levels a few pixels apart are both drawn** (phase 28; seen in the
+  capture: yesterday's close 4 px above today's low). They are two numbers,
+  and the distance is information; the axis tag and the label (phase 29) of
+  the lower-ranked one give way, so that line stands without a name until
+  the levels separate.
+- **The labels are transparent text over the candles** (phase 29). At
+  today's first candle a wick can run through a letter (seen: "PDH" at 15m).
+  An opaque surface would wipe out the candles underneath; the text is three
+  capital letters and can take it.
+- **The crosshair tag is not shown within 16 px of the last-price stamp**
+  (phase 29). The crosshair line and the hover box stay; the number on the
+  axis is then the stamp's.
+- **Opened late in the day at 1m, up to 2880 candles are fetched** (phase
+  28, eight fetches in 3–4 s) when the indicators are on. The EMA seed point
+  moves back accordingly (see the EMA item above); private bytes are
+  unchanged.
+- **Wake from sleep has only been tried with a sent message** (phase 24).
+  `PBT_APMRESUMEAUTOMATIC` wakes the thread and drops the connection, but a
+  real sleep cannot be driven from a probe. If the network is not up at the
+  first attempt, it fails, and the backoff goes 6 s, 12 s, … from there.
+  `frakoblet Ns` shows the length of the sleep until the first successful
+  fetch (`GetTickCount64` counts the sleep too). Price alerts survive sleep:
+  a passed level fires on the first price afterwards.
+- **Desktop mode joins the input queues.** A child of a window in another
+  process makes Windows attach the threads' input (implicit
+  `AttachThreadInput`). If our UI thread hangs, the desktop can hang with it.
+  The network runs on its own thread, so the UI thread only paints.
+- **A mode switch takes 18–28 ms (median)**, not < 16 ms. See phase 12.
+- **A maximized panel comes back restored** after a trip through desktop
+  mode. The geometry that is saved is the restored one.
+- **The focus-flash fix has not been run with maximize, minimize or Aero
   Snap.**
-- **Over $999 999** klippes ikonteksten (4 sifre får ikke plass på 16 px).
-  Trygt — opptegningen er bundet sjekket.
-- **Tidsetiketter popper inn og ut i kantene under panorering** (fase 11).
-  En etikett som ikke får plass innenfor `[left, right]`, tegnes ikke i det hele
-  tatt, i stedet for å klippes midt i et tall.
-- **Fase 11 er ikke pikselverifisert i skrivebordsmodus eller med trådkors.**
-  Begge går gjennom samme `DrawChart`, og pristaggen bruker de samme `axL`/`axR`
-  som stempelet. Men ingen av dem er fanget, fordi det ville flyttet den ekte
-  pekeren eller lagt en flate på skrivebordet.
-- **Historikken hentes bare når brukeren ber om den** (fase 18). Nyåpnet:
-  5 timer på 1m. Hvert vegg-treff gir 300 lys til, opp til 6000 eller
-  historikkens start. Skrivebordsmodus har ingen input og får aldri mer enn
-  det den har sett. Et hull i Binance' egen historikk (vedlikehold) prependes
-  som det er: lysene er indeksbaserte, så tiden komprimeres over hullet.
+- **Above $999 999** the icon text is clipped (4 digits do not fit in 16 px).
+  Safe — painting is bounds-checked.
+- **Time labels pop in and out at the edges during panning** (phase 11).
+  A label that does not fit within `[left, right]` is not drawn at all,
+  instead of being clipped in the middle of a number.
+- **Phase 11 is not pixel-verified in desktop mode or with the crosshair.**
+  Both go through the same `DrawChart`, and the price tag uses the same
+  `axL`/`axR` as the stamp. But neither is captured, because that would move
+  the real pointer or put a surface on the desktop.
+- **History is fetched only when the user asks for it** (phase 18). Freshly
+  opened: 5 hours at 1m. Each hit on the wall gives 300 more candles, up to
+  6000 or the start of history. Desktop mode has no input and never gets
+  more than what it has seen. A gap in Binance's own history (maintenance)
+  is prepended as it is: the candles are index-based, so time is compressed
+  across the gap.
 
 ---
 
-## Avviste forslag, med begrunnelse
+## Rejected proposals, with reasons
 
-- **Sirkulær buffer:** det finnes ingen dynamiske reallokeringer å fjerne.
-  Gevinsten ville vært én `memmove` på 57 KB i minuttet (~5 µs) mot
-  modulo-aritmetikk i all indeksering.
-- **Begrensning til synlig utsnitt:** allerede på plass siden zoom-arbeidet.
-- **DPI-manifest / `SetProcessDpiAwarenessContext`:** «DPI-skalert 1280×720»
-  i mandatet ble tolket som `MulDiv` mot `GetDpiForWindow`, ikke som å gjøre
-  prosessen DPI-bevisst. Hele layouten er i rå piksler, og vannmerkets
-  klemmegrenser ville talt skaleringen to ganger — se DPI-kommentaren i
-  `EnsureWatermark`. Skal det gjøres, er det en egen jobb som må gjennom hver
-  eneste konstant.
-- **Forhåndstegnet knapperad som `BitBlt`:** ville brakt knappetegningen
-  innenfor 0,003 ms (ett kall, ~1–2 µs) mot to GDI-håndtak til og en cache som
-  må ugyldiggjøres ved `WM_SIZE` og ved hvert hover-skifte. Målt koster
-  vektorene 0,015 ms, altså 1,8 % av en opptegning. Ikke verdt kompleksiteten
-  — men mekanismen finnes allerede i `EnsureWatermark` om budsjettet skal
-  holdes bokstavelig.
-- **C++ med STL og nlohmann/json** (arkitekturdirektivet bak fase 24). Målt
-  med prosjektets egne flagg (`/W4 /O2`, x86, statisk CRT) på et minimalt
-  program: C med `strstr` + `atof` **102 400 byte**; samme med `std::vector`
-  og `std::string` **114 176** (+11,8 KB, krever `/EHsc`); samme med
-  nlohmann/json 3.11.3 **222 720** (+120 KB — 62 % av hele `ticker.exe` — og
-  headeren bygger ikke rent på `/W4`). Det nlohmann skulle kjøpe, trygg
-  parsing, koster 512 byte som `strtod` med sluttpeker og `CandleSane`.
-  `std::vector` har ingenting å erstatte: det finnes ingen `malloc`, og en
-  fast `candles[6000]` kan verken lekke eller feile i en allokering etter tre
-  uker i drift — det kan en vektor. Unntak på tvers av `WndProc` er udefinert,
-  så hver meldingshåndterer måtte hatt sin egen `try`. Språkbyttet i seg selv
-  er gratis (`ticker.c` er gyldig C++, se *Bygg*), så avgjørelsen kan tas på
-  nytt når en funksjon trenger en container med ukjent størrelse. Indikatorer
-  (SMA/EMA/RSI) er ikke avvist — de finnes bare ikke ennå, og er en løkke over
-  `candles[]` inn i en statisk `double[MAX_CANDLES]`.
-- **WebView2 + Lightweight Charts:** ville brutt målet om lavt fotavtrykk med
-  50–100× (Edge-subprosesser bruker 100–200 MB mot våre 3,3 MB).
+- **Circular buffer:** there are no dynamic reallocations to remove. The
+  gain would have been one `memmove` of 57 KB per minute (~5 µs) against
+  modulo arithmetic in all indexing.
+- **Limiting to the visible view:** already in place since the zoom work.
+- **DPI manifest / `SetProcessDpiAwarenessContext`:** "DPI-scaled 1280×720"
+  in the mandate was read as `MulDiv` against `GetDpiForWindow`, not as
+  making the process DPI-aware. The whole layout is in raw pixels, and the
+  watermark's clamp limits would count the scaling twice — see the DPI
+  comment in `EnsureWatermark`. If it is to be done, it is a separate job
+  that must go through every single constant.
+- **Pre-drawn button row as a `BitBlt`:** would have brought the button
+  drawing within 0.003 ms (one call, ~1–2 µs) against two more GDI handles
+  and a cache that must be invalidated on `WM_SIZE` and on every hover
+  change. Measured, the vectors cost 0.015 ms, that is 1.8 % of a paint. Not
+  worth the complexity — but the mechanism already exists in
+  `EnsureWatermark` if the budget is to be held literally.
+- **C++ with STL and nlohmann/json** (the architecture directive behind
+  phase 24). Measured with the project's own flags (`/W4 /O2`, x86, static
+  CRT) on a minimal program: C with `strstr` + `atof` **102 400 bytes**; the
+  same with `std::vector` and `std::string` **114 176** (+11.8 KB, requires
+  `/EHsc`); the same with nlohmann/json 3.11.3 **222 720** (+120 KB — 62 %
+  of the whole `ticker.exe` — and the header does not build cleanly at
+  `/W4`). What nlohmann was to buy, safe parsing, costs 512 bytes as
+  `strtod` with an end pointer and `CandleSane`. `std::vector` has nothing to
+  replace: there is no `malloc`, and a fixed `candles[6000]` can neither leak
+  nor fail an allocation after three weeks of running — a vector can.
+  Exceptions across `WndProc` are undefined, so every message handler would
+  have needed its own `try`. The language switch itself is free (`ticker.c`
+  is valid C++, see *Build*), so the decision can be made again when a
+  feature needs a container of unknown size. Indicators (SMA/EMA/RSI) are
+  not rejected — they just do not exist yet, and are a loop over `candles[]`
+  into a static `double[MAX_CANDLES]`.
+- **WebView2 + Lightweight Charts:** would have broken the low-footprint goal
+  by 50–100× (Edge subprocesses use 100–200 MB against our 3.3 MB).
 
 ---
 
-## Fallgruver for agenter
+## Pitfalls for agents
 
-1. **Stopp `ticker.exe` før du linker.** Ellers `LNK1104`.
-2. **Funksjonsrekkefølge.** Filen har ingen forward-deklarasjoner. Nye
-   hjelpefunksjoner må stå *før* første bruk, ellers `C2371: redefinition`.
-   Dette har slått til tre ganger.
-3. **Kun ASCII i kommentarer.** `æøå` gir `C4819` og brøt en heredoc under arbeidet.
-4. **`lParam` i `WM_MOUSEWHEEL` er skjermkoordinater**, ikke klientkoordinater
-   som i `WM_MOUSEMOVE`. `ScreenToClient` er nødvendig.
-5. **Syntetiske museklikk er upålitelige for testing.** `PostMessage(WM_MOUSEMOVE)`
-   trigger `WM_MOUSELEAVE` med én gang fordi den ekte pekeren er utenfor. Flytt
-   den ekte pekeren og *jiggle* den (flere bevegelser) før du måler.
-6. **Tray-klikk via `PostMessage` gir ikke forgrunnsrett.** Panelet kan åpne og
-   straks skjule seg i testoppsett. Sjekk `IsWindowVisible` og prøv på nytt i løkke.
-7. **Ikke stol på øyemål for de subtile kontrollene.** Mål pikselfarger med
-   `GetPixel` — jeg konkluderte feil to ganger på nedskalerte skjermbilder.
-8. **`WaitForMultipleObjects` returnerer mer enn to ting.** `WAIT_TIMEOUT`
-   (`0x102`) er ikke `WAIT_OBJECT_0 + n`. Sjekk den faktiske returverdien;
-   kode som bare tester for stopp-hendelsen og lar resten falle gjennom,
-   behandler hver eneste timeout som en vekking. Se feil #9.
-9. **Blokkering via hosts-fila stopper ikke en åpen forbindelse.** WinHTTP
-   holder på `hConnect` og keep-alive mot en IP som allerede er slått opp, så
-   hentingen fortsetter å lykkes. Skal du bryte linja på en app som *allerede
-   kjører*, må du blokkere IP-en i brannmuren. Hosts-fila virker bare hvis du
-   starter appen etterpå.
-10. **Flere prosesser deler vindusklassenavn.** Mutexen er borte (fase 8),
-    så et testbygg starter fint side om side med den ekte appen. Men alle
-    instanser har `BTCPopupClass` og `BTCTickerWindowClass`, og de deler
-    registernøkkelen. Filtrer vinduer på prosess-id
-    (`GetWindowThreadProcessId`), aldri bare på klassenavn. Fase 7 og eldre
-    nevner «eget mutexnavn» — det gjaldt før fase 8.
-11. **Les `GetWindowRect` rett før du fanger skjermbildet.** Vinduet kan ha
-    flyttet eller endret størrelse siden sist. (Auto-skjul-problemet som
-    gjorde dette til en plage i fase 2 er borte med OS-rammen — `pinned`
-    finnes ikke lenger.)
-12. **Treffdeteksjon må henge på logisk tilstand, ikke på fade-nivå.** Under
-    uttoning er overlayet fortsatt synlig. Sjekker du `overlayF > 0`,
-    svelger boksen klikk den ikke lenger eier.
-13. **Sperrer i `WM_MOUSEMOVE` hører hjemme etter `TrackMouseEvent`.**
-    Returnerer du før armeringen, slutter `WM_MOUSELEAVE` å fyre og
-    `windowHot` henger fast på `TRUE`.
-14. **Tegning og treffdeteksjon må lese samme kilde.** `DrawChart` og
-    `HitCandle` leser begge `disp*`. Leser den ene målet og den andre
-    visningen, peker crosshairet på feil lys midt i en animasjon — feil #7 i
-    ny drakt. Gjelder alt som regner om mellom piksler og lysindekser.
-15. **Gjenopprett klippingen.** `IntersectClipRect` rundt tegneløkka må
-    følges av `SelectClipRgn(hdc, NULL)` før aksetekster og chrome tegnes —
-    de ligger utenfor chart-flaten og ville blitt borte.
-16. **En terskel i «enheter» virker ikke på tvers av symboler.** Fire symboler
-    med tre størrelsesordener mellom seg gjør ethvert fast tall i dollar
-    meningsløst. Regn om fra piksler i stedet, ved hver tikk.
-17. **Hold øye med tomt buffer i all ny tilstand.** Rett etter et
-    symbolbytte er `candleCount = 0`. Tilstand som «synkroniserer seg» da,
-    synkroniserer seg mot ingenting — se feil #15.
-18. **`CopyFromScreen` fanger det som ligger øverst.** Uten `WS_EX_TOPMOST`
-    kan et annet vindu dekke panelet, og skjermbildet blir av *det*. Bruk
-    `PrintWindow` med `PW_RENDERFULLCONTENT` — den tegner vinduet uansett
-    stablerekkefølge.
-19. **`GetGUIThreadInfo` med feil `cbSize` lyver stille.** Den returnerte
-    `TRUE` og `hwndFocus = 0`, altså nøyaktig symptomet på feil #2, mens
-    fokus i virkeligheten var riktig. Sett `cbSize` fra *typen*, ikke fra en
-    bokset instans — og stol mer på et ekte tastetrykk enn på proben.
-20. **Eierskap og oppgavelinje henger sammen.** Et eid vindu får ikke egen
-    knapp i oppgavelinja. Vil du ha knappen, kan vinduet ikke eies — og da
-    må du rive det ned selv ved avslutning.
+1. **Stop `ticker.exe` before you link.** Otherwise `LNK1104`.
+2. **Function order.** The file has no forward declarations. New
+   helper functions must come *before* their first use, otherwise `C2371: redefinition`.
+   This has bitten three times.
+3. **ASCII only in comments.** `æøå` gives `C4819` and broke a heredoc during the work.
+4. **`lParam` in `WM_MOUSEWHEEL` is screen coordinates**, not client coordinates
+   as in `WM_MOUSEMOVE`. `ScreenToClient` is required.
+5. **Synthetic mouse clicks are unreliable for testing.** `PostMessage(WM_MOUSEMOVE)`
+   triggers `WM_MOUSELEAVE` at once because the real pointer is outside. Move
+   the real pointer and *jiggle* it (several movements) before you measure.
+6. **A tray click via `PostMessage` does not grant foreground rights.** The panel can open and
+   hide itself right away in test setups. Check `IsWindowVisible` and retry in a loop.
+7. **Do not trust your eyes for the subtle controls.** Measure pixel colors with
+   `GetPixel` — I drew the wrong conclusion twice from downscaled screenshots.
+8. **`WaitForMultipleObjects` returns more than two things.** `WAIT_TIMEOUT`
+   (`0x102`) is not `WAIT_OBJECT_0 + n`. Check the actual return value;
+   code that only tests for the stop event and lets the rest fall through
+   treats every single timeout as a wake-up. See bug #9.
+9. **Blocking via the hosts file does not stop an open connection.** WinHTTP
+   holds on to `hConnect` and keep-alive against an IP that is already resolved, so
+   the fetch keeps succeeding. To cut the line on an app that is *already
+   running*, you must block the IP in the firewall. The hosts file only works if you
+   start the app afterwards.
+10. **Several processes share window class names.** The mutex is gone (phase 8),
+    so a test build starts fine side by side with the real app. But all
+    instances have `BTCPopupClass` and `BTCTickerWindowClass`, and they share
+    the registry key. Filter windows by process id
+    (`GetWindowThreadProcessId`), never by class name alone. Phase 7 and older
+    mention "own mutex name" — that applied before phase 8.
+11. **Read `GetWindowRect` right before you capture the screenshot.** The window may have
+    moved or changed size since last time. (The auto-hide problem that
+    made this a nuisance in phase 2 is gone with the OS frame — `pinned`
+    no longer exists.)
+12. **Hit testing must depend on logical state, not on fade level.** During
+    the fade-out the overlay is still visible. If you check `overlayF > 0`,
+    the box swallows clicks it no longer owns.
+13. **Guards in `WM_MOUSEMOVE` belong after `TrackMouseEvent`.**
+    If you return before the arming, `WM_MOUSELEAVE` stops firing and
+    `windowHot` gets stuck at `TRUE`.
+14. **Drawing and hit testing must read the same source.** `DrawChart` and
+    `HitCandle` both read `disp*`. If one reads the target and the other
+    the display, the crosshair points at the wrong candle in the middle of an animation — bug #7 in
+    new clothes. Applies to everything that converts between pixels and candle indices.
+15. **Restore the clipping.** `IntersectClipRect` around the drawing loop must
+    be followed by `SelectClipRgn(hdc, NULL)` before axis text and chrome are drawn —
+    they lie outside the chart area and would have disappeared.
+16. **A threshold in "units" does not work across symbols.** Four symbols
+    three orders of magnitude apart make any fixed number in dollars
+    meaningless. Convert from pixels instead, on every tick.
+17. **Watch out for an empty buffer in all new state.** Right after a
+    symbol switch, `candleCount = 0`. State that "syncs itself" then
+    syncs against nothing — see bug #15.
+18. **`CopyFromScreen` captures whatever is on top.** Without `WS_EX_TOPMOST`
+    another window can cover the panel, and the screenshot is of *that*. Use
+    `PrintWindow` with `PW_RENDERFULLCONTENT` — it draws the window regardless of
+    z-order.
+19. **`GetGUIThreadInfo` with the wrong `cbSize` lies silently.** It returned
+    `TRUE` and `hwndFocus = 0`, exactly the symptom of bug #2, while
+    focus was in fact correct. Set `cbSize` from the *type*, not from a
+    boxed instance — and trust a real keystroke more than the probe.
+20. **Ownership and taskbar go together.** An owned window does not get its own
+    button in the taskbar. If you want the button, the window cannot be owned — and then
+    you must tear it down yourself on exit.
 
-21. **En `HTCAPTION`-flate får aldri `WM_LBUTTONDOWN`.** Tegner du egne
-    knapper i en header som returnerer `HTCAPTION`, er de synlige og døde —
-    og et klikk på dem starter en vindusflytting. `WM_NCHITTEST` må
-    returnere `HTCLIENT` over hver knappeboks. Rekkefølgen i den ene
-    funksjonen *er* mekanismen.
-22. **Et rammeløst `WS_POPUP` maksimerer seg til hele skjermen.** Ikke til
-    arbeidsområdet, og OS-et legger rammebredden utenpå: målt
-    −7,−7 3854×1614 mot `rcWork` 0,0 3840×1552 — panelet dekket
-    oppgavelinja. `WM_GETMINMAXINFO` må oppgi `ptMaxPosition` og `ptMaxSize`
-    selv. Å trekke rammebredden fra i `WM_NCCALCSIZE` retter *ikke* dette;
-    det var første forsøk, og de 7 pikslene er ikke de 55 som mangler.
-    La `ptMaxTrackSize` være — den klemmer manuell skalering også.
-23. **`WM_MOUSELEAVE` fyrer når pekeren går fra `HTCLIENT` til `HTCAPTION`
-    i samme vindu.** Den forlater klientområdet uten å forlate vinduet. All
-    hover-tilstand må nullstilles der, ellers blir en knapp stående opplyst
-    når musa går fra den og ut i headeren.
-24. **`Arc` går mot klokka *sett på skjermen*.** Start 3 og slutt 12 gir en
-    bue i øvre høyre kvadrant, ikke tre fjerdedeler. Vil du ha en
-    sirkelpil, start på 12 og slutt på 2. Mål det, ikke resonner om
-    logiske koordinater.
-25. **`FindWindow` fant ikke appens egne vindusklasser** i dette oppsettet,
-    mens den fant `Shell_TrayWnd`. `EnumWindows` med `GetClassName` fungerte
-    hver gang. Bruk den i prober.
-26. **Knappene ligger relativt til høyre kant.** En probe med hardkodede
-    x-verdier gjelder bare den bredden den ble skrevet for, og treffer tom
-    flate så snart vinduet maksimeres. Regn bakover fra `GetWindowRect`,
-    slik `ButtonLayout` gjør.
-27. **Håndtakstellingen må leses i hvile.** Under pågående opptegning står
-    GDI på 34 og USER på 15 — dobbeltbufferet og vannmerket i flukt — mot
-    31/14 når alt har satt seg. Måler du midt i en stresstest, ser du en
-    lekkasje som ikke finnes. **Fra fase 10 er hviletallet 29/14** i vanlig
-    modus og 26/6 i skrivebordsmodus. Dobbeltbufferet lever nå mellom bildene,
-    og fire penner og pensler er erstattet av `DC_PEN`/`DC_BRUSH`. Fase 19
-    og 20 målte 30/14; **fra fase 21 er det 32/14** — de to stolpepenslene
-    lages i `WinMain`. Et modusbytte fram og tilbake gir +1 (33/14), sett
-    også i bygget uten fase 21. Fase 22 la ikke til noe: 34/14 før og
-    etter i både rødt og grønt bygg, målt *etter* første overlay (+2,
-    fallgruve 65). Fase 23 heller ikke: 34/14 i rød og begge grønne
-    kjøringer, etter ti sett/fjern, en ballong og en `MessageBeep`.
+21. **An `HTCAPTION` area never gets `WM_LBUTTONDOWN`.** If you draw your own
+    buttons in a header that returns `HTCAPTION`, they are visible and dead —
+    and a click on them starts a window move. `WM_NCHITTEST` must
+    return `HTCLIENT` over each button box. The order within that one
+    function *is* the mechanism.
+22. **A frameless `WS_POPUP` maximizes to the whole screen.** Not to
+    the work area, and the OS adds the frame width outside it: measured
+    −7,−7 3854×1614 against `rcWork` 0,0 3840×1552 — the panel covered
+    the taskbar. `WM_GETMINMAXINFO` must supply `ptMaxPosition` and `ptMaxSize`
+    itself. Subtracting the frame width in `WM_NCCALCSIZE` does *not* fix this;
+    that was the first attempt, and the 7 pixels are not the 55 that are missing.
+    Leave `ptMaxTrackSize` alone — it clamps manual resizing too.
+23. **`WM_MOUSELEAVE` fires when the pointer moves from `HTCLIENT` to `HTCAPTION`
+    in the same window.** It leaves the client area without leaving the window. All
+    hover state must be reset there, otherwise a button stays lit
+    when the mouse moves off it and out into the header.
+24. **`Arc` goes counterclockwise *as seen on the screen*.** Start 3 and end 12 gives an
+    arc in the upper right quadrant, not three quarters. If you want a
+    circular arrow, start at 12 and end at 2. Measure it, do not reason about
+    logical coordinates.
+25. **`FindWindow` did not find the app's own window classes** in this setup,
+    while it found `Shell_TrayWnd`. `EnumWindows` with `GetClassName` worked
+    every time. Use it in probes.
+26. **The buttons are positioned relative to the right edge.** A probe with hard-coded
+    x values only applies to the width it was written for, and hits empty
+    surface as soon as the window is maximized. Count backwards from `GetWindowRect`,
+    as `ButtonLayout` does.
+27. **The handle count must be read at rest.** During ongoing painting,
+    GDI is at 34 and USER at 15 — the double buffer and the watermark in flight — against
+    31/14 when everything has settled. If you measure in the middle of a stress test, you see a
+    leak that does not exist. **From phase 10 the resting count is 29/14** in panel
+    mode and 26/6 in desktop mode. The double buffer now lives between frames,
+    and four pens and brushes are replaced by `DC_PEN`/`DC_BRUSH`. Phases 19
+    and 20 measured 30/14; **from phase 21 it is 32/14** — the two bar brushes
+    are created in `WinMain`. A mode switch back and forth gives +1 (33/14), also seen
+    in the build without phase 21. Phase 22 added nothing: 34/14 before and
+    after in both the red and the green build, measured *after* the first overlay (+2,
+    pitfall 65). Nor did phase 23: 34/14 in the red and both green
+    runs, after ten set/remove, a balloon and a `MessageBeep`.
 
-28. **`WM_SETCURSOR` må returnere `TRUE` for å holde pekeren, og `break` for
-    alt annet.** Returnerer du `0` i default-grenen, mister kantsonene sine
-    skaleringspekere — de kommer fra `DefWindowProc`. Og uten `return TRUE`
-    setter OS-et vindusklassens peker tilbake ved neste musebevegelse, så et
-    `SetCursor` fra `WM_MOUSEMOVE` blir overskrevet med én gang.
-29. **En hurtigsti må lese bakgrunnen fra samme kilde som den trege.**
-    `FillRect(brBg)` i knappestripa *ville* gitt riktig resultat i dag, men
-    bare fordi vannmerketeksten tilfeldigvis aldri når opp i headeren. Vi
-    blitter fra vannmerkebitmapen i stedet, og beviser likheten: 0 avvik av
-    1980 piksler.
-30. **Et vindu foran panelet ugyldiggjør all skjermbasert måling.** `GetPixel`
-    på skjermen, `GetCursorInfo` og muse-/hjulmeldinger går alle til det som
-    faktisk ligger øverst. Målt: `IDC_HAND` over grafen og `IDC_IBEAM` over
-    headeren — begge fra et Chrome-vindu bak, bekreftet med `WindowFromPoint`.
-    `BringWindowToTop` og `SetForegroundWindow` virker **ikke** fra en probe
-    som ikke eier forgrunnen; `SetWindowPos` med `HWND_TOPMOST` gjør, og må
-    settes tilbake etterpå. `PrintWindow` er immun og skal brukes når man kan.
-31. **Ett piksel er ikke en test.** Tre påstander i regresjonsproben feilet
-    falskt fordi de hang på én koordinat: ett punkt som lå på bakgrunn i
-    begge tilstander, en telling som tilfeldigvis ga samme tall, og ett punkt
-    som var crosshair-farget både før og etter en panorering. Sammenlikn en
-    **region**, og etablér fasit med `PrintWindow` før du tror på et rødt
-    resultat.
-32. **`GetCursorInfo` med feil `cbSize` lyver stille** — returnerer `TRUE` og
-    `hCursor = 0`. Samme felle som fallgruve 19, ny melding. `CURSORINFO` er
-    24 byte i en 64-bits prosess, ikke 20. Sett `cbSize` fra **typen**.
-33. **`IntersectClipRect` er eksklusiv i høyre og nedre kant — sjekk hva som
-    faktisk bor på grensen.** `right + 1` slapp lys inn i aksemargens første
-    kolonne; `bottom` uten `+ 1` ville fjernet nederste rutenettlinje. Samme
-    funksjon, motsatt svar i de to aksene, fordi grafen er `[left, right)` i
-    x og `[top, bottom]` i y.
-34. **En klippefeil viser seg ikke i et stillbilde.** Halve lys i kantene
-    finnes bare når `dStart` er brøk, altså midt i easingen. Post hjulhakk og
-    fang innen ~90 ms, mange ganger, og skann regioner for eksakte lysfarger.
-35. **En postet `WM_MOUSEMOVE` holder ikke hover hvis den ekte pekeren står
-    utenfor klientflaten.** `TrackMouseEvent` ser at pekeren ikke er der og
-    sender `WM_MOUSELEAVE` med én gang, som nullstiller `btnHot`. Det gjelder
-    også når pekeren står i headeren, som er `HTCAPTION` (fallgruve 23).
-    Parker den ekte pekeren på en knapp — `HTCLIENT` — og legg den tilbake
-    etterpå.
-36. **`DrawTextW` klipper mot sitt eget rektangel, ikke mot naboteksten.** To
-    tekster i samme rektangel, venstre- og høyrestilt, tegnes oppi hverandre
-    så snart de møtes. Mål begge og regn grensene selv.
-37. **Et latensbudsjett uten målebetingelser er ikke et budsjett.** 0,462 ms
-    fra del C var median under animasjon på ~380×300. Ved 1280×720 er
-    hele bildet ~0,85 ms, og maksimert ~9,5 ms. Mål alltid før og etter i
-    samme kjøring, vekselvis, og ikke mens en probe tar skjermbilder
-    samtidig: `PrintWindow` gjorde hver runde merkbart tregere.
-38. **`WM_LBUTTONDBLCLK` kommer aldri uten `CS_DBLCLKS`** på vindusklassen —
-    stille. Og når den *er* satt, blir andre klikk i hvert raske dobbeltklikk
-    en `DBLCLK` i stedet for `WM_LBUTTONDOWN`, overalt i klientflaten. Alt som
-    reagerer på klikk, og som ikke skal nullstille visningen, må få
-    dobbeltklikket også — ellers spiser knappene annethvert raske klikk.
-39. **`viewCount == 0` er ikke «vis alt» etter `ClampView`.** `GetView` tolker
-    0 som hele bufferet, men `ClampView` klemmer 0 opp til `MIN_VIEW`. Et
-    utsnitt som skal bli standard når data kommer, må settes *før* klemmingen.
-    Se fase 8.
-40. **Et nyåpnet panel er ingen fasit for standardvisning.** Ta referansen
-    etter en eksplisitt nullstilling, og se på bildet før du tror på et avvik
-    i prosent: 5 % forskjell i grafflaten var 8 lys mot 300.
-41. **Bash-verktøyets heredoc spiser backslash** i dette oppsettet, også med
-    `<<'EOF'`. `'\\'` ble én backslash, og en `rep()` som skulle matche
-    `L"Global\\..."` fant ingenting. Skriv skript med Write-verktøyet og kjør
-    fila.
-42. **`rcNormalPosition` er arbeidsområde-koordinater, ikke skjerm.** De er
-    like så lenge oppgavelinja står nederst eller til høyre. `SpawnInstance`
-    bruker `GetWindowRect` for et vanlig vindu og faller til
-    `rcNormalPosition` bare når vinduet er maksimert.
-43. **PowerShell sender `$null` som `""` til en P/Invoke-`string`.**
-    `FindWindow("Progman", $null)` ga 0, mens `FindWindow("Progman",
-    "Program Manager")` fant vinduet: den første leter etter et vindu med
-    *tom* tittel. Bruk `[NullString]::Value`. Dette er trolig hele forklaringen
-    på fallgruve 25.
-44. **Et vanlig barnevindu under WorkerW blir usynlig på 24H2, og ingenting
-    feiler.** `SetParent` lykkes, `GetParent` stemmer, `IsWindowVisible` er
-    `TRUE`, `WM_PAINT` kommer, og tapetet ligger likevel øverst. Flaten må være
-    lagdelt, med `SetLayeredWindowAttributes` kalt *etter* `SetParent`, og
-    exe-en må ha `supportedOS` Windows 8+ i manifestet. En tilstandsprobe
-    beviser ingenting her. Sjekk piksler på skjermen, der skrivebordet faktisk
-    er synlig.
-45. **`WindowFromPoint`-tester av skrivebordet krever at skrivebordet er
-    synlig.** Brukerens vinduer flytter seg mellom to kjøringer. Tell hvor
-    mange punkter som har Progman som rot, og behandle 0 som «ikke testet»,
-    ikke som grønt eller rødt.
-46. **`0x052C` endrer skrivebordet til alle.** Meldingen lager en WorkerW som
-    blir liggende etter at prosessen er avsluttet. Det er ufarlig, og tapetet
-    ser likt ut, men treet er ikke det samme som før første kjøring. En probe
-    som ser «før»-tilstanden, må kjøre før noe har sendt meldingen.
-47. **En postet `TaskbarCreated` er ikke en omstart av Explorer.** Den postede
-    meldingen kommer med WorkerW intakt. Ved en ekte omstart er flaten allerede
-    borte og gjenoppbygget før meldingen kommer. Testen med postet melding var
-    grønn og skjulte en dobbel gjenoppbygging som bare den ekte omstarten
-    avslørte (fase 9).
-48. **`CreateCompatibleBitmap` er lat.** Kallet tok 0,07 ms for 3840×1600,
-    mens første `BitBlt` inn i bitmapen tok 6,5–7,9 ms og `DeleteObject`
-    1,7 ms. En QPC-markør rundt kallet alene ser en billig allokering. Mål
-    første skriving og frigjøringen også.
-49. **PowerShell-funksjoner kan kollidere med innebygde alias.** En
-    hjelpefunksjon kalt `Move` ble aldri kalt: `Move` er et alias for
-    `Move-Item`, og aliaset vinner. Det kom bare feilmeldinger, og proben
-    fortsatte uten hover. Gi probefunksjoner navn som ikke finnes fra før
+28. **`WM_SETCURSOR` must return `TRUE` to keep the pointer, and `break` for
+    everything else.** If you return `0` in the default branch, the edge zones lose their
+    resize pointers — they come from `DefWindowProc`. And without `return TRUE`
+    the OS sets the window class pointer back on the next mouse movement, so a
+    `SetCursor` from `WM_MOUSEMOVE` is overwritten at once.
+29. **A fast path must read the background from the same source as the slow one.**
+    `FillRect(brBg)` in the button strip *would* give the right result today, but
+    only because the watermark text happens never to reach up into the header. We
+    blit from the watermark bitmap instead, and prove they match: 0 differences out of
+    1980 pixels.
+30. **A window in front of the panel invalidates all screen-based measurement.** `GetPixel`
+    on the screen, `GetCursorInfo` and mouse/wheel messages all go to whatever
+    is actually on top. Measured: `IDC_HAND` over the chart and `IDC_IBEAM` over
+    the header — both from a Chrome window behind, confirmed with `WindowFromPoint`.
+    `BringWindowToTop` and `SetForegroundWindow` do **not** work from a probe
+    that does not own the foreground; `SetWindowPos` with `HWND_TOPMOST` does, and must
+    be reset afterwards. `PrintWindow` is immune and should be used when possible.
+31. **One pixel is not a test.** Three assertions in the regression probe failed
+    falsely because they depended on one coordinate: one point that was on background in
+    both states, a count that happened to give the same number, and one point
+    that was crosshair-colored both before and after a pan. Compare a
+    **region**, and establish ground truth with `PrintWindow` before you believe a red
+    result.
+32. **`GetCursorInfo` with the wrong `cbSize` lies silently** — returns `TRUE` and
+    `hCursor = 0`. Same trap as pitfall 19, new message. `CURSORINFO` is
+    24 bytes in a 64-bit process, not 20. Set `cbSize` from the **type**.
+33. **`IntersectClipRect` is exclusive at the right and bottom edges — check what
+    actually lives on the boundary.** `right + 1` let candles into the first column of the axis
+    margin; `bottom` without `+ 1` would have removed the bottom grid line. Same
+    function, opposite answer in the two axes, because the chart is `[left, right)` in
+    x and `[top, bottom]` in y.
+34. **A clipping bug does not show in a still image.** Half candles at the edges
+    exist only when `dStart` is fractional, that is, in the middle of the easing. Post wheel notches and
+    capture within ~90 ms, many times, and scan regions for exact candle colors.
+35. **A posted `WM_MOUSEMOVE` does not hold hover if the real pointer is
+    outside the client area.** `TrackMouseEvent` sees that the pointer is not there and
+    sends `WM_MOUSELEAVE` at once, which resets `btnHot`. This also applies
+    when the pointer is in the header, which is `HTCAPTION` (pitfall 23).
+    Park the real pointer on a button — `HTCLIENT` — and put it back
+    afterwards.
+36. **`DrawTextW` clips against its own rectangle, not against the neighboring text.** Two
+    texts in the same rectangle, left- and right-aligned, are drawn on top of each other
+    as soon as they meet. Measure both and compute the boundaries yourself.
+37. **A latency budget without measurement conditions is not a budget.** 0.462 ms
+    from part C was the median during animation at ~380×300. At 1280×720
+    the whole frame is ~0.85 ms, and maximized ~9.5 ms. Always measure before and after in
+    the same run, alternating, and not while a probe is taking screenshots
+    at the same time: `PrintWindow` made every round noticeably slower.
+38. **`WM_LBUTTONDBLCLK` never arrives without `CS_DBLCLKS`** on the window class —
+    silently. And when it *is* set, the second click in every fast double click becomes
+    a `DBLCLK` instead of `WM_LBUTTONDOWN`, everywhere in the client area. Everything that
+    reacts to clicks, and that should not reset the view, must receive the
+    double click too — otherwise the buttons eat every other fast click.
+39. **`viewCount == 0` is not "show all" after `ClampView`.** `GetView` interprets
+    0 as the whole buffer, but `ClampView` clamps 0 up to `MIN_VIEW`. A
+    view that is to become the default when data arrives must be set *before* the clamping.
+    See phase 8.
+40. **A newly opened panel is no ground truth for the default view.** Take the reference
+    after an explicit reset, and look at the frame before you believe a deviation
+    in percent: a 5 % difference in the chart area was 8 candles against 300.
+41. **The Bash tool's heredoc eats backslashes** in this setup, even with
+    `<<'EOF'`. `'\\'` became one backslash, and a `rep()` that was meant to match
+    `L"Global\\..."` found nothing. Write scripts with the Write tool and run
+    the file.
+42. **`rcNormalPosition` is in work-area coordinates, not screen.** They are
+    equal as long as the taskbar is at the bottom or on the right. `SpawnInstance`
+    uses `GetWindowRect` for a normal window and falls back to
+    `rcNormalPosition` only when the window is maximized.
+43. **PowerShell passes `$null` as `""` to a P/Invoke `string`.**
+    `FindWindow("Progman", $null)` gave 0, while `FindWindow("Progman",
+    "Program Manager")` found the window: the first one looks for a window with an
+    *empty* title. Use `[NullString]::Value`. This is probably the whole explanation
+    for pitfall 25.
+44. **A plain child window under WorkerW becomes invisible on 24H2, and nothing
+    fails.** `SetParent` succeeds, `GetParent` matches, `IsWindowVisible` is
+    `TRUE`, `WM_PAINT` arrives, and the wallpaper is still on top. The surface must be
+    layered, with `SetLayeredWindowAttributes` called *after* `SetParent`, and
+    the exe must have `supportedOS` Windows 8+ in the manifest. A state probe
+    proves nothing here. Check pixels on the screen, where the desktop is actually
+    visible.
+45. **`WindowFromPoint` tests of the desktop require the desktop to be
+    visible.** The user's windows move between two runs. Count how
+    many points have Progman as root, and treat 0 as "not tested",
+    not as green or red.
+46. **`0x052C` changes the desktop for everyone.** The message creates a WorkerW that
+    stays after the process has exited. It is harmless, and the wallpaper
+    looks the same, but the tree is not the same as before the first run. A probe
+    that looks at the "before" state must run before anything has sent the message.
+47. **A posted `TaskbarCreated` is not a restart of Explorer.** The posted
+    message arrives with WorkerW intact. In a real restart the surface is already
+    gone and rebuilt before the message arrives. The test with a posted message was
+    green and hid a double rebuild that only the real restart
+    revealed (phase 9).
+48. **`CreateCompatibleBitmap` is lazy.** The call took 0.07 ms for 3840×1600,
+    while the first `BitBlt` into the bitmap took 6.5–7.9 ms and `DeleteObject`
+    1.7 ms. A QPC marker around the call alone sees a cheap allocation. Measure
+    the first write and the release too.
+49. **PowerShell functions can collide with built-in aliases.** A
+    helper function named `Move` was never called: `Move` is an alias for
+    `Move-Item`, and the alias wins. Only error messages came out, and the probe
+    continued without hover. Give probe functions names that do not already exist
     (`PostMove`).
-50. **Pikselsammenlikning mellom to bygg krever at data og input står stille.**
-    Levende priser endrer bildet, og en ekte peker konkurrerer med
-    `TrackMouseEvent` (fallgruve 35). Hvilken av dem som vinner, varierer fra
-    kjøring til kjøring, og master avvek fra seg selv. Det som virket: lik
-    patch i begge bygg, med `HttpGet` som leser en fil og `TrackMouseEvent`
-    som no-op, og vinduet nesten helt utenfor skjermen. Fang først når to
-    bilder på rad er like, og bekreft tilstanden mot hvile før du tror på et
-    avvik. Testvinduet tar forgrunnen, så et tastetrykk fra brukeren (ESC)
-    kan lukke et duplikat midt i en kjøring.
-51. **Et rammeløst `WS_THICKFRAME`-vindu får den klassiske rammen tegnet oppå
-    klientflaten.** Når `WM_NCCALCSIZE` returnerer 0, er vindus-DC og klient
-    samme flate, og `DefWindowProc` for `WM_NCACTIVATE` og `WM_SETTEXT` tegner
-    rammen rett inn i grafen. Den blir stående til neste `WM_PAINT`. Svar
-    `WM_NCACTIVATE` med `DefWindowProc(…, -1)`. Den er målt fra skjermen;
-    om `PrintWindow` ser den, er ikke prøvd.
-52. **`DWMNCRP_DISABLED` fjerner ikke NC-tegning — den slår av DWM-rammen og
-    slipper den klassiske til.** Målt: rammepiksler tilbake, og
-    `SetForegroundWindow` feilet i to av tre sykluser.
-53. **DPI-konteksten til et vindu settes idet det lages.** Et vindu som skal
-    bytte mellom DPI-uvitende panel og per-monitor-bevisst skrivebordsflate,
-    må lages på nytt. `SetParent` og stilendringer flytter det, men konteksten
-    følger ikke med.
-54. **En skjermprobe må forkaste samples der andre vinduer er med.** Brukeren
-    kan ha Chrome eller andre vinduer i bruk mens proben går. Den første
-    kjøringen etter fletting viste 4 121 «rammepiksler», som var Chrome over
-    panelets høyre kant, og `SetForegroundWindow` feilet i 3 av 5 sykluser.
-    Sjekk per sample at forgrunnen er ditt eget vindu og at `WindowFromPoint`
-    i kantpunktene treffer panelet. Kjør en kontroll uten rettelsen i samme
-    kjøring, så du vet at proben ser det den skal.
-55. **Ikke skriv C-escapes gjennom en bash-heredoc.** På veien gjennom
-    Bash-verktøyet og heredocen ble `\\x00e5` til `\x00e5` før Python så
-    strengen, og Python skrev en ekte
-    NUL-byte inn i `ticker.c`. Bygget var rent på `/W4`, og `file` kalte
-    kilden «ASCII text». Bare `grep` («Binary file matches») og menyteksten
-    («pe5logging») viste feilen. Skriv skriptet til fil med Write-verktøyet,
-    og sjekk `grep -c $'\x00'` etter maskinelle endringer.
-56. **En menyprobe åpner ekte menyer ved pekeren.** `TrackPopupMenu` viser
-    menyen der brukerens peker står, og et ekte museklikk velger et punkt. Én
-    kjøring med 80 menyer fikk ett autostart-klikk for mye, og det lot seg ikke
-    gjenskape. Logg tilstanden etter hver blokk, og kjør proben flere ganger
-    før du tror på et avvik.
-57. **`EnumWindows` finner ikke skrivebordsflaten.** Den er et barn av WorkerW,
-    ikke et toppnivåvindu, så en probe som bare enumererer toppnivå ser
-    «ingen flate» i skrivebordsmodus — og `GetParent(NULL)` gir 0, som ser ut
-    som «panel uten forelder». Fire falske feil og én falsk grønn kom av dette.
-    Søk også i barna av `Progman` og `WorkerW` med `EnumChildWindows`.
-58. **En probe må lese modus fra registret, ikke anta panel.** Appen starter i
-    den modusen `DesktopMode` sier. Testen antok panel, mens appen startet i
-    skrivebordsmodus, og alle modus-assertene ble speilvendt.
-59. **Siste-pris-stempelet har samme farge som lysene.** Det er fylt med
-    `CLR_UP`/`CLR_DOWN` og dekker `yLast ± 8`. En probe som leter etter
-    «ytterste lyspiksel» måler derfor stempelet, ikke lysene, og fase 15 ga
-    falskt rødt til hele båndet ble utelatt. Prisen inni stempelet er tegnet i
-    `CLR_BG`, så raden er heller ikke heldekket.
-60. **En probe mot panelet må bruke `PrintWindow`, ikke skjermdump.** Et vindu
-    som ligger oppå panelet måles ellers i stedet for panelet, og fase 15 fikk
-    null lyspiksler i luftrommet av den grunn. `PrintWindow(hwnd, dc, 2)` ber
-    vinduet tegne seg selv. Samme lærdom som fallgruve 54, nå på et panel i
-    stedet for skjermbildet.
-61. **Seks sekunder er ikke nok til at lysene er på plass.** En dump tatt for
-    tidlig har bakgrunn, vannmerke og ingen lys, og alle pikselsjekker blir
-    røde uten at noe er galt. Fase 15 traff dette én gang; med 14 sekunder var
-    de samme sjekkene grønne. Vent på data, ikke på klokka.
-62. **PowerShell `[int]` runder, den gulver ikke.** BMP-radlengden
-    `[int]((800 * 3 + 3) / 4) * 4` ga 2404 i stedet for 2400, og bildet ble
-    skjevt og fargeforvridd. Bruk `[Math]::Floor` der C ville brukt
-    heltallsdivisjon.
-63. **En postet `WM_KEYDOWN` kan ikke teste `Ctrl`-kombinasjoner.**
-    `GetKeyState(VK_CONTROL)` leser trådens virkelige tastetilstand, som en
-    postet melding ikke rører. Bruk `SendInput` med panelet i forgrunnen — og
-    bekreft forgrunn *og* `GetGUIThreadInfo`-fokus før hvert trykk, ellers
-    havner `Ctrl`+`W` i det vinduet som tilfeldigvis står foran. Legg en
-    **kontroll med en snarvei som finnes fra før** (`Ctrl`+`0`) først i
-    proben: uten den kan en rød kjøring ikke skille «funksjonen mangler» fra
-    «proben leverer ikke taster».
-64. **`Alt`+`Tab` er ingen pålitelig capture-tyv.** I fem kjøringer tok
-    oppgavebytteren capture fra et panel midt i et drag to ganger og lot det
-    være tre ganger, mens forgrunnen byttet hver gang. En test av
-    `WM_CAPTURECHANGED` som henger på `Alt`+`Tab` er derfor rød eller grønn
-    etter vær. Bruk noe som tar capture *hver* gang: appens egen
-    `TrackPopupMenu` (tray-menyen) i samme tråd. Og les capture-tilstanden
-    fra appens tråd (`GetCapture` er per tråd), ikke fra proben. Husk at
-    menyen åpner ved pekeren med museknappen nede: `ESC` før slipp, ellers
-    kan slippet velge «Avslutt Ticker» (fallgruve 56).
-65. **GDI-tallet hopper én gang ved første overlay og første meny.** +2
-    etter første overlay (to pensler lages og slettes per bilde; GDI holder
-    slettede pensler i en liten cache per prosess) og +3 etter første
-    tray-meny (USER tegner den i vår prosess). Begge er uendret over tre
-    sykluser til og gjennom 30 runder tastetrykk, og like i bygget uten
-    endringen. En «før/etter»-sjekk som tar «før» før første overlay og
-    «etter» etter første meny, ser en lekkasje som ikke finnes. Ta «før»
-    etter at hver mekanisme har vært brukt én gang, og legg til en
-    syklus-test (åpne/lukke ×3) som skiller engangshopp fra vekst. Les
-    dessuten minimum over flere sekunder, ikke ett sample: midt i en
-    opptegning ligger tallet to høyere (fallgruve 27).
-66. **Proben må vente på at maskinen er inaktiv, og fokuskontrollen må ha
-    en reservesti.** En kjøring gikk rød på 18 sjekker fordi et Chrome-vindu
-    tok forgrunnen etter kontrollen; proben nektet korrekt å sende taster,
-    men `SetForegroundWindow` fra proben virket ikke lenger. Reserven som
-    virker er appens egen `ForceForeground` via et postet tray-klikk (bare
-    når panelet *ikke* er forgrunn, ellers skjuler klikket det). Og
-    `GetLastInputInfo` før start: 25 s uten inndata, ellers vent. Proben
-    lager selv inndata med `SendInput`, så målingen gjelder bare før den
-    begynner.
+50. **Pixel comparison between two builds requires data and input to hold still.**
+    Live prices change the frame, and a real pointer competes with
+    `TrackMouseEvent` (pitfall 35). Which of them wins varies from
+    run to run, and master differed from itself. What worked: the same
+    patch in both builds, with `HttpGet` reading a file and `TrackMouseEvent`
+    as a no-op, and the window almost entirely off screen. Capture only when two
+    frames in a row are identical, and confirm the state against rest before you believe a
+    deviation. The test window takes the foreground, so a keystroke from the user (ESC)
+    can close a duplicate in the middle of a run.
+51. **A frameless `WS_THICKFRAME` window gets the classic frame drawn on top of
+    the client area.** When `WM_NCCALCSIZE` returns 0, the window DC and the client are
+    the same surface, and `DefWindowProc` for `WM_NCACTIVATE` and `WM_SETTEXT` draws
+    the frame straight into the chart. It stays until the next `WM_PAINT`. Answer
+    `WM_NCACTIVATE` with `DefWindowProc(…, -1)`. It is measured from the screen;
+    whether `PrintWindow` sees it has not been tried.
+52. **`DWMNCRP_DISABLED` does not remove NC painting — it turns off the DWM frame and
+    lets the classic one in.** Measured: frame pixels back, and
+    `SetForegroundWindow` failed in two of three cycles.
+53. **A window's DPI context is set when it is created.** A window that is to
+    switch between a DPI-unaware panel and a per-monitor-aware desktop surface
+    must be created anew. `SetParent` and style changes move it, but the context
+    does not follow.
+54. **A screen probe must discard samples where other windows are involved.** The user
+    may have Chrome or other windows in use while the probe runs. The first
+    run after the merge showed 4 121 "frame pixels", which were Chrome over
+    the panel's right edge, and `SetForegroundWindow` failed in 3 of 5 cycles.
+    Check per sample that the foreground is your own window and that `WindowFromPoint`
+    at the edge points hits the panel. Run a control without the fix in the same
+    run, so you know the probe sees what it should.
+55. **Do not write C escapes through a bash heredoc.** On the way through
+    the Bash tool and the heredoc, `\\x00e5` became `\x00e5` before Python saw
+    the string, and Python wrote a real
+    NUL byte into `ticker.c`. The build was clean at `/W4`, and `file` called
+    the source "ASCII text". Only `grep` ("Binary file matches") and the menu text
+    ("pe5logging") showed the bug. Write the script to a file with the Write tool,
+    and check `grep -c $'\x00'` after machine edits.
+56. **A menu probe opens real menus at the pointer.** `TrackPopupMenu` shows
+    the menu where the user's pointer is, and a real mouse click selects an item. One
+    run with 80 menus got one autostart click too many, and it could not be
+    reproduced. Log the state after each block, and run the probe several times
+    before you believe a deviation.
+57. **`EnumWindows` does not find the desktop surface.** It is a child of WorkerW,
+    not a top-level window, so a probe that only enumerates top level sees
+    "no surface" in desktop mode — and `GetParent(NULL)` gives 0, which looks
+    like "panel without parent". Four false failures and one false green came from this.
+    Also search the children of `Progman` and `WorkerW` with `EnumChildWindows`.
+58. **A probe must read the mode from the registry, not assume panel.** The app starts in
+    the mode `DesktopMode` says. The test assumed panel, while the app started in
+    desktop mode, and all the mode asserts were mirrored.
+59. **The last-price stamp has the same color as the candles.** It is filled with
+    `CLR_UP`/`CLR_DOWN` and covers `yLast ± 8`. A probe that looks for the
+    "outermost candle pixel" therefore measures the stamp, not the candles, and phase 15 gave
+    a false red until the whole band was excluded. The price inside the stamp is drawn in
+    `CLR_BG`, so the row is not fully covered either.
+60. **A probe against the panel must use `PrintWindow`, not a screen dump.** A window
+    that lies on top of the panel is otherwise measured instead of the panel, and phase 15 got
+    zero candle pixels in the headroom for that reason. `PrintWindow(hwnd, dc, 2)` asks
+    the window to draw itself. Same lesson as pitfall 54, now on a panel instead
+    of the screenshot.
+61. **Six seconds is not enough for the candles to be in place.** A dump taken too
+    early has background, watermark and no candles, and all pixel checks turn
+    red without anything being wrong. Phase 15 hit this once; with 14 seconds
+    the same checks were green. Wait for data, not for the clock.
+62. **PowerShell `[int]` rounds, it does not floor.** The BMP row length
+    `[int]((800 * 3 + 3) / 4) * 4` gave 2404 instead of 2400, and the image came out
+    skewed and color-distorted. Use `[Math]::Floor` where C would have used
+    integer division.
+63. **A posted `WM_KEYDOWN` cannot test `Ctrl` combinations.**
+    `GetKeyState(VK_CONTROL)` reads the thread's real key state, which a
+    posted message does not touch. Use `SendInput` with the panel in the foreground — and
+    confirm the foreground *and* `GetGUIThreadInfo` focus before each press, otherwise
+    `Ctrl`+`W` ends up in whatever window happens to be in front. Put a
+    **control with a shortcut that already exists** (`Ctrl`+`0`) first in
+    the probe: without it a red run cannot tell "the feature is missing" from
+    "the probe does not deliver keys".
+64. **`Alt`+`Tab` is no reliable capture thief.** In five runs the
+    task switcher took capture from a panel in the middle of a drag twice and left it
+    alone three times, while the foreground switched every time. A test of
+    `WM_CAPTURECHANGED` that depends on `Alt`+`Tab` is therefore red or green
+    depending on the weather. Use something that takes capture *every* time: the app's own
+    `TrackPopupMenu` (the tray menu) in the same thread. And read the capture state
+    from the app's thread (`GetCapture` is per thread), not from the probe. Remember that
+    the menu opens at the pointer with the mouse button down: `ESC` before release, otherwise
+    the release can select "Quit" (pitfall 56).
+65. **The GDI count jumps once at the first overlay and the first menu.** +2
+    after the first overlay (two brushes are created and deleted per frame; GDI keeps
+    deleted brushes in a small per-process cache) and +3 after the first
+    tray menu (USER draws it in our process). Both are unchanged over three
+    cycles up to and through 30 rounds of keystrokes, and the same in the build without
+    the change. A "before/after" check that takes "before" before the first overlay and
+    "after" after the first menu sees a leak that does not exist. Take "before"
+    after each mechanism has been used once, and add a
+    cycle test (open/close ×3) that separates one-time jumps from growth. Also read
+    the minimum over several seconds, not one sample: in the middle of a
+    repaint the count is two higher (pitfall 27).
+66. **The probe must wait for the machine to be idle, and the focus check must have
+    a fallback path.** A run went red on 18 checks because a Chrome window
+    took the foreground after the check; the probe correctly refused to send keys,
+    but `SetForegroundWindow` from the probe no longer worked. The fallback that
+    works is the app's own `ForceForeground` via a posted tray click (only
+    when the panel is *not* the foreground, otherwise the click hides it). And
+    `GetLastInputInfo` before starting: 25 s without input, otherwise wait. The probe
+    itself creates input with `SendInput`, so the measurement only applies before it
+    starts.
 
-67. **Egne makronavn kan kollidere med `commctrl.h`.** `TB_TOP` finnes der
-    (`TB_*` er verktøylinje-meldingene), og `windows.h` drar den inn selv
-    med `WIN32_LEAN_AND_MEAN`. Resultatet er `C4005`, ikke en feil — bygget
-    lykkes med *deres* verdi om rekkefølgen er en annen. Fase 22 bruker
-    `TBAR_*`. Hold deg unna `TB_`, `LV_`, `TV_`, `SB_`, `WM_`, `CB_`, `LB_`.
-68. **Python `read_text`/`write_text` normaliserer linjeskift.** Repoet har
-    `core.autocrlf=true`: alle tekstfiler er LF i indeksen og **CRLF i
-    arbeidskopien** (`git ls-files --eol`), `ticker.c` inkludert. Et
-    redigeringsskript som leser med `read_text` og skriver med
-    `newline="\n"`, gjør fila til LF på disk. Git skjuler det (diffen er
-    ren, bare advarselen «LF will be replaced by CRLF» røper det), `cl`
-    bryr seg ikke, og neste `checkout`/`merge` skriver CRLF tilbake — men en
-    sikkerhetskopi tatt imellom har feil linjeskift. Fase 22 tok `bak17`
-    slik og måtte ta den på nytt. Skriv med `newline="\r\n"`, og ta
-    `.bakN` etter flettingen.
-69. **En probe som tar «GDI før» må varme opp det *røde* bygget med noe det
-    har.** Overlayet åpnes med postet `WM_RBUTTONUP` i grafen og lukkes med
-    postet `ESC` — begge finnes i alle bygg siden fase 2 — så «før» er
-    sammenliknbart mellom rød og grønn kjøring (fallgruve 65).
-70. **En skrivende probe må bære verdien i meldingen, ikke legge den i et
-    delt felt.** Den nærliggende løsningen er å skrive `lastPrice` under
-    låsen og så sende `WM_APP_DATA`, som leser feltet på nytt.
-    Arbeidertråden skriver det samme feltet hvert tredje sekund, så
-    injeksjonen ville blitt borte når en ekte henting landet imellom —
-    sjelden, altså en test som feiler av og til (resonnert, ikke målt).
-    Fase 23 sender prisen i `lParam` (`wParam` = 1), og
-    `SendMessage` returnerer først når utløseren er prøvd. De skrivende
-    feltene (100–103) bor på **hovedvinduet**, så de virker med panelet
-    skjult; de lesende bor fortsatt på panelet.
-71. **Et postet klikk etterlater hover-tilstand.** `OnAxisClick` setter
-    `axisHotY` fordi et ekte klikk har pekeren der; et postet klikk har
-    ingen `WM_MOUSEMOVE` foran seg og ingen `WM_MOUSELEAVE` etter. Bildet
-    etter et postet klikk i priskolonnen har derfor et spøkelse (linje og
-    rammet merke) på klikkets rad. Pikselsjekker må enten regne med det
-    eller poste `WM_MOUSELEAVE` først.
-72. **`grep -c $'\x00'` teller alle linjer.** I bash er `$'\x00'` en tom
-    streng, og den tomme strengen finnes på hver linje — sjekken fra
-    fallgruve 55 svarer «4837» på en ren fil. `grep -P '\x00'` virker ikke
-    i dette oppsettet («supports only unibyte and UTF-8 locales»). Bruk
-    Python: `open(f, 'rb').read().count(b'\x00')`, og tell ikke-ASCII og
-    rene LF i samme slengen (fallgruve 3 og 68).
-73. **Pris → y → pris går ikke rundt.** Lysene kutter y med `(int)`, og
-    varslene må gjøre det samme for å ligge på lysenes rader (fallgruve
-    14). Et klikk på rad 300 ga nivået 80 832,00, som tegnes på rad 299.
-    En probe som leter etter linja, må lete i `y ± 2` og godta ± 1.
-74. **Beskrivelsen i en `Check` er ikke en formatstreng.** `%%` skrives ut
-    som to prosenttegn. Rød kjøring sa «2 %% over prisen».
-75. **Se på exe-størrelsen etter produksjonsbygget, og bygg det før
-    flettingen.** Ett kall til `pow` og ett til `log10` la 21 KB på exe-en
-    (statisk CRT, `pow` har tabeller); `exp`, `sqrt`, `floor`, `ceil` og
-    `fabs` var der fra før og koster lite. `/W4` sier ingenting, testbygget
-    er større av andre grunner, og fase 23 oppdaget det først etter
-    `--no-ff`-flettingen. Sammenlikn `ticker.exe` med forrige fases tall
-    (187 392 etter fase 22, 195 072 etter fase 23, 195 584 etter fase 24)
-    før du fletter.
-76. **`atof` kan ikke feile.** Tekst gir 0.0, `"1e999"` gir inf, `"nan"` gir
-    NaN (UCRT leser den), og `"12x"` gir 12 — alt uten et ord. Bruk `strtod`
-    med sluttpeker og krev at den står på det lukkende hermetegnet, og slipp
-    verdien gjennom et *område* (`v > 0.0 && v < 1e15`): sammenlikningene er
-    usanne for NaN og taket tar inf, uten `isnan`/`isfinite` og uten noe nytt
-    fra CRT-en (fallgruve 75).
-77. **Hovedvinduet lages før `InitializeCriticalSection`.** En ny
-    meldingshåndterer i `WndProc` som går inn i låsen, kan få en *sendt*
-    melding i vinduet mellom `CreateWindowExW` og låsen i `WinMain`.
-    `WM_POWERBROADCAST` verner seg med `g_Ctx.hWakeEvent` — den settes etter
-    låsen, så er den satt, finnes låsen.
-78. **Sammenlikn håndtak i samme tilstand.** Fase 24-proben målte GDI/USER
-    med panelet lukket, åpnet panelet, og målte igjen: 23/5 → 32/12, rød
-    sjekk, ingen lekkasje. «Før» og «etter» må være samme vindussett.
-79. **Les koden før du tar et direktiv på ordet.** Fase 24-mandatet ba om å
-    erstatte `malloc` med `std::vector` i en kodebase uten `malloc`. To
-    `grep` og tre små bygg i scratchpad avgjorde det; tallene står i
-    *Avviste forslag*. Mål midlene, lever målet.
-80. **Mål det lille direkte, ikke som differansen mellom to store.** Fase
-    25-proben målte hele opptegningen (~1,9 ms) med og uten glidende snitt
-    og fikk «overlegget koster −61 µs» — og −239 µs mot et bygg *uten*
-    overlegg. Fem vekslende runder med minste median per tilstand hjalp
-    ikke: −139, +63, +78, +80, +196 µs i fem kjøringer. QPC rundt selve
-    blokka (probe-felt 39) gir 52 og 59 µs i to kjøringer.
-81. **`MA_` er tatt, som `TB_`.** `winuser.h` definerer `MA_ACTIVATE` …
-    `MA_NOACTIVATEANDEAT` (svarene på `WM_MOUSEACTIVATE`). Indikatorene heter
-    `IND_*`. Fallgruve 67 i ny drakt: sjekk prefikset mot SDK-et før du
-    velger det.
-82. **Se på første skjermbilde før du skriver proben.** Tallene var riktige
-    og linjene sammenhengende, men EMA 50 begynte en sjettedel inn i
-    standardutsnittet — 300 av 300 lys synlige, de første 49 udefinert.
-    Ingen pikselsjekk ville lett etter det. Rettet ved kilden
-    (`SEED_COUNT` 360), og *så* fikk proben sjekken «definert på første
-    synlige lys».
-83. **Et vern i `Init` verner ikke søsknene.** `IndInit` klemte perioden til
-    1; `IndFeedStart` tok den rå og regnet startindeksen forbi målet, så
-    løkka aldri gikk. Funnet av en enhetstest på periode 0, ikke av noe
-    brukeren kan nå — men neste fase gjør periodene valgbare.
-84. **En postet tast er ikke uavhengig av brukeren.** `WM_KEYDOWN` kan
-    postes til et vindu uten fokus, men appen leser `Ctrl` med
-    `GetKeyState` — den EKTE tasten. Holder brukeren `Ctrl` i et annet
-    vindu, blir probens `M` til `Ctrl`+`M` (fallgruve 63 sa at postede
-    taster ikke kan *teste* Ctrl; dette er motsatsen: de kan heller ikke
-    *unngå* den). «Ingen `SendInput`» betyr ikke «trenger ikke inaktiv
-    maskin». Og en fangst skal sjekke størrelsen den fikk før den indekserer
-    med størrelsen den ventet: et minimert panel er 0×0.
-85. **Prøv en ny ting mot regelen, ikke mot en formulering av den.** Fase 25
-    tegnet snittlinjene på skrivebordet fordi «en kurve er ikke tekst» —
-    sant, men fase 14s regel er at flaten leses *perifert*, og et snitt er
-    noe man leser av. Brukeren sa fra dagen etter. Og volumstolpene hadde
-    stått der siden fase 21 fordi ingen spurte i det hele tatt. Ny tegning
-    i `DrawChart`: avgjør for skrivebordet uttrykkelig, og se på flaten.
-86. **Oppstartstilstand som avhenger av modus, må settes etter at modusen
-    er kjent.** `dispVolF` ble snappet rett etter `LoadConfig`, men
-    `g_desktopMode` leses 35 linjer lenger ned (`--desktop-mode`, så
-    `DesktopMode`). Usynlig så lenge valget var felles for begge modi.
-87. **En linjefarge må ikke ligge på blandingslinja mellom bakgrunnen og en
-    tekstfarge.** Første valg for dagens høy/lav (fase 27) var 8A93A0 — som
-    er *eksakt* `CLR_BG` + 0,85 × (`CLR_AXIS` − `CLR_BG`) i alle tre kanaler.
-    Kantutjevnede aksetall inneholder da samme farge, og en pikselprobe som
-    teller «eksakt linjefarge» teller tekst. Regn ut t per kanal før fargen
-    tas i bruk; 90939E ligger ikke på linja til noen av tekstfargene.
-88. **En forklaring i linjas farge ER piksler i linjas farge.** Proben i fase
-    27 telte gull i hele vinduet for å vise at VWAP *ikke* tegnes på 1d — og
-    fant forklaringens «VWAP  -», som er gull med vilje. Rød kjøring var
-    grønn på den sjekken av feil grunn (ingen forklaring i commit 1). Let
-    etter linja der linja går, ikke i hele fangsten.
-89. **En sti som avhenger av klokka, må øves med vilje.** Bakfyllingen til
-    døgnskiftet (fase 27) kjører bare når døgnet er eldre enn de 360 lysene
-    fra første henting — ved 1m etter 06:00 UTC. De første kjøringene gikk
-    05:30 og øvde den aldri; proben skriver derfor UTC-tiden og om stien ble
-    tatt, og én grønn kjøring ble lagt etter 06:00.
-90. **«For det synlige utsnittet» i en bestilling er et forslag til
-    forankring, ikke et krav** (samme klasse som 79). VWAP fra første synlige
-    lys hopper for hvert lys under panorering, og høy/lav for utsnittet står
-    alltid 8 % fra kantene (`PriceRange`). Les hva koden gjør med utsnittet
-    før et tall forankres i det.
-91. **Et probe-felt skal avrunde, ikke trunkere — og ensidige avvik er
-    aldri avrundingsstøy.** Felt 14 var `(LRESULT)(volume * 100.0)`. Probens
-    VWAP holdt 5 cent med 360 lys i sessionen (fase 27, kl. 06 UTC) og røk
-    med 1152 (fase 28, kl. 19: 0, +4,0, +2,6, +5,7 cent — alle samme vei).
-    Første forklaring var «avrundingsfeil som vokser med N», og toleransen
-    ble løftet til 15 cent; men avrunding av prisen til cent kan aldri gi mer
-    enn 0,5 cent i et vektet snitt, uansett N. Trunkerte *vekter* kan.
-    `floor(x * 100 + 0.5)` i feltet: under 0,5 cent. Løft ikke en toleranse
-    før fortegnet på avvikene er sett på, og kjør klokkeavhengige prober
-    sent i døgnet også (89).
-92. **Når en venteregel i appen utvides, må probene som venter på den gamle
-    regelen utvides samtidig.** Fase 27-probene ventet på felt 46 (dagens
-    døgn dekket) og leste så indekser; fra fase 28 går bakfyllingen videre,
-    og indeksene flytter seg under dem. Felt 54 er nå «appen vil ha mer
-    historikk» — definert som det `WM_APP_DATA` avgjør, med `ShowIndNow()`,
-    ellers venter skrivebordsproben (indikatorer av) til evig tid.
-93. **`\t` i en Python-heredoc er en tabulator.** `"$s\ticker_test.exe"`
-    skrevet fra en bash-heredoc ble `$s<TAB>icker_test.exe`. Samme klasse som
-    41/55: skript med omvendt skråstrek skrives med Write-verktøyet.
-94. **Tekst som skal ligge over lysene, kan ikke tegnes i blokka som ligger
-    bak dem.** Nivålinjene (fase 27/28) tegnes før lysløkka; merkelappene
-    (fase 29) måtte bære `yLine[]` og `lvlXs` ned til forklaringens blokk.
-    Spør «hva tegnes etter dette?» før ny tekst får en plass i `DrawChart`.
-95. **Kollisjon mellom tekster avgjøres på rektangler, ikke på y-avstand.**
-    Første utkast til merkelappene sa «under 12 px unna» — aksefonten er
-    15–16 px høy, og en lapp kan stå over eller under linja si. Aksemerkene
-    kan bruke `abs(dy) < 16` fordi de alle er 16 px høye og står i én kolonne.
-96. **`CountNear` (±48 per kanal) skiller ikke `CLR_AXIS` fra `CLR_TEXT`
-    eller `CLR_SESSION`.** En stripe som skal være tom for etikett-tekst må
-    ligge *helt* utenfor trådkorsmerkets flate, og etiketten som prøves må
-    velges fra en fangst (den kan ha veket for stempelet), minst 40 px fra
-    stempelet og nivåene.
+67. **Your own macro names can collide with `commctrl.h`.** `TB_TOP` exists there
+    (`TB_*` are the toolbar messages), and `windows.h` pulls it in even
+    with `WIN32_LEAN_AND_MEAN`. The result is `C4005`, not an error — the build
+    succeeds with *their* value if the order is different. Phase 22 uses
+    `TBAR_*`. Stay away from `TB_`, `LV_`, `TV_`, `SB_`, `WM_`, `CB_`, `LB_`.
+68. **Python `read_text`/`write_text` normalize line endings.** The repo has
+    `core.autocrlf=true`: all text files are LF in the index and **CRLF in
+    the working copy** (`git ls-files --eol`), `ticker.c` included. An
+    edit script that reads with `read_text` and writes with
+    `newline="\n"` turns the file into LF on disk. Git hides it (the diff is
+    clean, only the warning "LF will be replaced by CRLF" gives it away), `cl`
+    does not care, and the next `checkout`/`merge` writes CRLF back — but a
+    backup taken in between has the wrong line endings. Phase 22 took `bak17`
+    that way and had to take it again. Write with `newline="\r\n"`, and take
+    `.bakN` after the merge.
+69. **A probe that takes "GDI before" must warm up the *red* build with something it
+    has.** The overlay is opened with a posted `WM_RBUTTONUP` in the chart and closed with
+    a posted `ESC` — both exist in every build since phase 2 — so "before" is
+    comparable between the red and the green run (pitfall 65).
+70. **A writing probe must carry the value in the message, not put it in a
+    shared field.** The obvious solution is to write `lastPrice` under
+    the lock and then send `WM_APP_DATA`, which reads the field again.
+    The worker thread writes the same field every third second, so
+    the injection would be lost when a real fetch landed in between —
+    rarely, that is, a test that fails now and then (reasoned, not measured).
+    Phase 23 sends the price in `lParam` (`wParam` = 1), and
+    `SendMessage` returns only once the trigger has been tried. The writing
+    fields (100–103) live on the **main window**, so they work with the panel
+    hidden; the reading ones still live on the panel.
+71. **A posted click leaves hover state behind.** `OnAxisClick` sets
+    `axisHotY` because a real click has the pointer there; a posted click has
+    no `WM_MOUSEMOVE` before it and no `WM_MOUSELEAVE` after. The frame
+    after a posted click in the price column therefore has a ghost (line and
+    framed tag) on the click's row. Pixel checks must either allow for it
+    or post `WM_MOUSELEAVE` first.
+72. **`grep -c $'\x00'` counts every line.** In bash `$'\x00'` is an empty
+    string, and the empty string is found on every line — the check from
+    pitfall 55 answers "4837" on a clean file. `grep -P '\x00'` does not work
+    in this setup ("supports only unibyte and UTF-8 locales"). Use
+    Python: `open(f, 'rb').read().count(b'\x00')`, and count non-ASCII and
+    bare LF in the same go (pitfalls 3 and 68).
+73. **Price → y → price does not round-trip.** The candles truncate y with `(int)`, and
+    the alerts must do the same to lie on the candles' rows (pitfall
+    14). A click on row 300 gave the level 80 832.00, which is drawn on row 299.
+    A probe that looks for the line must search in `y ± 2` and accept ± 1.
+74. **The description in a `Check` is not a format string.** `%%` is printed
+    as two percent signs. The red run said "2 %% above the price".
+75. **Look at the exe size after the production build, and build it before
+    the merge.** One call to `pow` and one to `log10` added 21 KB to the exe
+    (static CRT, `pow` has tables); `exp`, `sqrt`, `floor`, `ceil` and
+    `fabs` were there already and cost little. `/W4` says nothing, the test build
+    is larger for other reasons, and phase 23 discovered it only after
+    the `--no-ff` merge. Compare `ticker.exe` with the previous phase's number
+    (187 392 after phase 22, 195 072 after phase 23, 195 584 after phase 24)
+    before you merge.
+76. **`atof` cannot fail.** Text gives 0.0, `"1e999"` gives inf, `"nan"` gives
+    NaN (UCRT parses it), and `"12x"` gives 12 — all without a word. Use `strtod`
+    with an end pointer and require it to stop at the closing quote, and pass
+    the value through a *range* (`v > 0.0 && v < 1e15`): the comparisons are
+    false for NaN and the ceiling catches inf, without `isnan`/`isfinite` and without anything new
+    from the CRT (pitfall 75).
+77. **The main window is created before `InitializeCriticalSection`.** A new
+    message handler in `WndProc` that enters the lock can get a *sent*
+    message in the window between `CreateWindowExW` and the lock in `WinMain`.
+    `WM_POWERBROADCAST` guards itself with `g_Ctx.hWakeEvent` — it is set after
+    the lock, so if it is set, the lock exists.
+78. **Compare handles in the same state.** The phase 24 probe measured GDI/USER
+    with the panel closed, opened the panel, and measured again: 23/5 → 32/12, a red
+    check, no leak. "Before" and "after" must be the same set of windows.
+79. **Read the code before you take a directive at its word.** The phase 24 mandate asked to
+    replace `malloc` with `std::vector` in a codebase without `malloc`. Two
+    `grep` runs and three small builds in the scratchpad settled it; the numbers are in
+    *Rejected proposals*. Measure the means, deliver the goal.
+80. **Measure the small thing directly, not as the difference between two large ones.** The phase
+    25 probe measured the whole repaint (~1.9 ms) with and without moving averages
+    and got "the overlay costs −61 µs" — and −239 µs against a build *without*
+    the overlay. Five alternating rounds with the lowest median per state did not
+    help: −139, +63, +78, +80, +196 µs in five runs. QPC around the
+    block itself (probe field 39) gives 52 and 59 µs in two runs.
+81. **`MA_` is taken, like `TB_`.** `winuser.h` defines `MA_ACTIVATE` …
+    `MA_NOACTIVATEANDEAT` (the answers to `WM_MOUSEACTIVATE`). The indicators are named
+    `IND_*`. Pitfall 67 in new clothes: check the prefix against the SDK before you
+    choose it.
+82. **Look at the first screenshot before you write the probe.** The numbers were right
+    and the lines continuous, but EMA 50 started one sixth into
+    the default view — 300 of 300 candles visible, the first 49 undefined.
+    No pixel check would have looked for that. Fixed at the source
+    (`SEED_COUNT` 360), and *then* the probe got the check "defined on the first
+    visible candle".
+83. **A guard in `Init` does not guard the siblings.** `IndInit` clamped the period to
+    1; `IndFeedStart` took it raw and computed the start index past the target, so
+    the loop never ran. Found by a unit test on period 0, not by anything
+    the user can reach — but the next phase makes the periods selectable.
+84. **A posted key is not independent of the user.** `WM_KEYDOWN` can
+    be posted to a window without focus, but the app reads `Ctrl` with
+    `GetKeyState` — the REAL key. If the user holds `Ctrl` in another
+    window, the probe's `M` becomes `Ctrl`+`M` (pitfall 63 said that posted
+    keys cannot *test* Ctrl; this is the converse: they cannot *avoid*
+    it either). "No `SendInput`" does not mean "does not need an idle
+    machine". And a capture should check the size it got before it indexes
+    with the size it expected: a minimized panel is 0×0.
+85. **Test a new thing against the rule, not against one wording of it.** Phase 25
+    drew the average lines on the desktop because "a curve is not text" —
+    true, but phase 14's rule is that the surface is read *peripherally*, and an average is
+    something you read off. The user spoke up the next day. And the volume bars had
+    been there since phase 21 because nobody asked at all. New drawing
+    in `DrawChart`: decide explicitly for the desktop, and look at the surface.
+86. **Startup state that depends on the mode must be set after the mode
+    is known.** `dispVolF` was snapped right after `LoadConfig`, but
+    `g_desktopMode` is read 35 lines further down (`--desktop-mode`, then
+    `DesktopMode`). Invisible as long as the choice was shared by both modes.
+87. **A line color must not lie on the blend line between the background and a
+    text color.** The first choice for today's high/low (phase 27) was 8A93A0 — which
+    is *exactly* `CLR_BG` + 0.85 × (`CLR_AXIS` − `CLR_BG`) in all three channels.
+    Anti-aliased axis numbers then contain the same color, and a pixel probe that
+    counts "exact line color" counts text. Compute t per channel before the color
+    is put to use; 90939E does not lie on the line of any of the text colors.
+88. **A legend in the line's color IS pixels in the line's color.** The probe in phase
+    27 counted gold in the whole window to show that VWAP is *not* drawn on 1d — and
+    found the legend's "VWAP  -", which is gold on purpose. The red run was
+    green on that check for the wrong reason (no legend in commit 1). Look
+    for the line where the line runs, not in the whole capture.
+89. **A path that depends on the clock must be exercised on purpose.** The backfill to
+    the day rollover (phase 27) runs only when the day is older than the 360 candles
+    from the first fetch — on 1m after 06:00 UTC. The first runs went at
+    05:30 and never exercised it; the probe therefore prints the UTC time and whether the path was
+    taken, and one green run was scheduled after 06:00.
+90. **"For the visible view" in a request is a suggestion for an
+    anchor, not a requirement** (same class as 79). VWAP from the first visible
+    candle jumps with every candle during panning, and high/low for the view is
+    always 8 % from the edges (`PriceRange`). Read what the code does with the view
+    before a number is anchored in it.
+91. **A probe field should round, not truncate — and one-sided deviations are
+    never rounding noise.** Field 14 was `(LRESULT)(volume * 100.0)`. The probe's
+    VWAP held within 5 cents with 360 candles in the session (phase 27, at 06 UTC) and broke
+    with 1152 (phase 28, at 19: 0, +4.0, +2.6, +5.7 cents — all in the same direction).
+    The first explanation was "rounding error that grows with N", and the tolerance
+    was raised to 15 cents; but rounding the price to cents can never give more
+    than 0.5 cents in a weighted average, whatever N is. Truncated *weights* can.
+    `floor(x * 100 + 0.5)` in the field: under 0.5 cents. Do not raise a tolerance
+    before the sign of the deviations has been looked at, and run clock-dependent probes
+    late in the day too (89).
+92. **When a wait rule in the app is extended, the probes that wait for the old
+    rule must be extended at the same time.** The phase 27 probes waited for field 46 (today's
+    day covered) and then read indices; from phase 28 the backfill continues,
+    and the indices move under them. Field 54 is now "the app wants more
+    history" — defined as what `WM_APP_DATA` decides, with `ShowIndNow()`,
+    otherwise the desktop probe (indicators off) waits forever.
+93. **`\t` in a Python heredoc is a tab.** `"$s\ticker_test.exe"`
+    written from a bash heredoc became `$s<TAB>icker_test.exe`. Same class as
+    41/55: scripts with backslashes are written with the Write tool.
+94. **Text that is to lie over the candles cannot be drawn in the block that lies
+    behind them.** The level lines (phase 27/28) are drawn before the candle loop; the labels
+    (phase 29) had to carry `yLine[]` and `lvlXs` down to the legend's block.
+    Ask "what is drawn after this?" before new text gets a place in `DrawChart`.
+95. **Collision between texts is decided on rectangles, not on y distance.**
+    The first draft of the labels said "less than 12 px away" — the axis font is
+    15–16 px tall, and a label can sit above or below its line. The axis tags
+    can use `abs(dy) < 16` because they are all 16 px tall and sit in one column.
+96. **`CountNear` (±48 per channel) does not tell `CLR_AXIS` from `CLR_TEXT`
+    or `CLR_SESSION`.** A strip that is to be empty of label text must
+    lie *entirely* outside the crosshair tag's area, and the label being tested must
+    be chosen from a capture (it may have made way for the stamp), at least 40 px from
+    the stamp and the levels.
 97. **`RegCopyTreeW` needs more than `KEY_WRITE` on the target.** With the
     target opened for `KEY_WRITE` it returns `ERROR_ACCESS_DENIED` (5);
     `KEY_ALL_ACCESS` gives 0 (measured with `dbg_copy.c`, phase 30). The
@@ -3751,17 +3838,17 @@ Exe 206 336 bytes, unchanged.
 
 ---
 
-## Sikkerhetskopier
+## Backups
 
-**Only `tickc.c.bak27` is left** (22.09.2026). It is identical to `tickc.c`
+**Only `tickc.c.bak27` is left** (2026-09-22). It is identical to `tickc.c`
 as it stands after phase 32, and is the rollback reference for the build that
 is running. `ticker.c.bak` … `.bak24` and `tickc.c.bak25`/`.bak26` are deleted: they covered phases 1 to
 31, and that history is in git.
 
-Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
-(fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
-`.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27), `.bak23` (fase 28), `.bak24` (fase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31) and `.bak27` (phase 32). Filene er ignorert av
-git; mønsteret
-er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
-gjennom.
+The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
+(phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
+`.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31) and `.bak27` (phase 32). The files are ignored by
+git; the pattern
+is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
+through.
