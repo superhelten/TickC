@@ -1,6 +1,7 @@
-# BTC Ticker — arbeidslogg
+# TickC — arbeidslogg
 
-Status per 19.09.2026. Skrevet for agenter som jobber videre på `ticker.c`.
+Status per 22.09.2026. Skrevet for agenter som jobber videre på `tickc.c`
+(`ticker.c` til og med fase 29).
 Fase 1 er ferdig. Fase 2 del A (animasjonsklokke, backoff, stale-indikator)
 del B (symbol/intervall, overlay, vannmerke, registret) og del C (siste-pris-
 indikator, skalert vannmerke, view- og Y-akse-easing) er ferdige. **Hele fase 2
@@ -67,6 +68,11 @@ samme bryter — og bakfyllingen går nå til *forrige* døgnskifte.
 **Fase 29** gjør nivåene lesbare: merkelapper (HOD, LOD, PDC, PDH, PDL) ved
 linjenes venstre ende, og trådkorsets aksemerke får plass i kolonnens rang,
 så det ikke lenger kutter tallet under seg.
+**Phase 30** renames the app to **TickC** ahead of the open-source release:
+`HKCU\Software\TickC`, Run value `TickC`, `TickC.exe`, `tickc.c` and
+`tickc.manifest`, with settings and autostart migrated on first start. From
+phase 30 on, new text in this repo is written in English (see the phase 30
+section).
 Se **Vinduet** under. Planer:
 `docs/superpowers/plans/2026-09-16-ticker-rammelost-vindu.md`,
 `docs/superpowers/plans/2026-09-16-ticker-glyf-hover-cursor.md`,
@@ -97,8 +103,8 @@ Se **Vinduet** under. Planer:
 «Avvik under utførelse»:
 `docs/superpowers/plans/2026-09-16-ticker-fase2-del-b.md` og `...-del-c.md`.
 
-All kode ligger i **én fil**, `ticker.c` (~6500 linjer). Ved siden av ligger
-`ticker.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
+All kode ligger i **én fil**, `tickc.c` (~6600 linjer). Ved siden av ligger
+`tickc.manifest`, som bygget bygger inn (fase 9). Ingen eksterne avhengigheter
 utover Win32 og WinHTTP.
 
 ---
@@ -107,7 +113,7 @@ utover Win32 og WinHTTP.
 
 ```
 "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars32.bat"
-cl /nologo /W4 /O2 ticker.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:ticker.manifest /OUT:ticker.exe
+cl /nologo /W4 /O2 tickc.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
 ```
 
 **Manifestet er ikke valgfritt** (fase 9). Uten `supportedOS` Windows 8+ blir
@@ -118,17 +124,18 @@ Bygger **rent på `/W4`** — hold det sånn. Målarkitektur er **x86** (matcher
 den opprinnelige exe-en). Prosessen kan kjøre i flere instanser (fase 8), så
 **stopp alle kjørende instanser før linking** — også duplikater startet med
 `[ + ]` — ellers feiler
-`LNK1104: cannot open file 'ticker.exe'`.
+`LNK1104: cannot open file 'TickC.exe'`.
 
-Fotavtrykk: ~3,5 MB private bytes, 201 KB exe etter fase 29 (205 824 byte;
-204 800 etter fase 28,
+Fotavtrykk: ~3,5 MB private bytes, 202 KB exe etter fase 30 (206 336 byte;
+205 824 etter fase 29, 204 800 etter fase 28,
 203 776 etter fase 27,
 199 680 etter fase 26, 199 168 etter fase 25, 195 584 etter fase 24;
 195 072 etter fase 23, 187 KB etter fase 22, ~164 KB i fase 9). (Panelet er 1280×720 nå, mot
 380×300 i fase 1 — dobbeltbufferet er 8× større.)
 
-**`ticker.c` er også gyldig C++** (målt i fase 24): `cl /TP /W4 /O2` gir
-0 feil, 0 advarsler og en exe på byte-identisk størrelse. Fila bygges fortsatt
+**`tickc.c` er også gyldig C++** (målt i fase 24): `cl /TP /W4 /O2` gir
+0 feil, 0 advarsler og en exe på byte-identisk størrelse til og med fase 29.
+Phase 30: the `/TP` build is 206 848 bytes, 512 more than the C build. Fila bygges fortsatt
 som C — et språkbytte alene gir ingenting — men døra står åpen den dagen en
 funksjon faktisk trenger en container. Se *Avviste forslag* for hva STL og
 nlohmann/json koster.
@@ -2883,10 +2890,89 @@ Regresjon: `probe_prev` 52/52, `probe_sess` 52/52, `probe_ind` 54/54,
 **Ikke testet:** trådkorsmerket mot et *varselmerke* og et nivåmerke er lest,
 ikke fanget (samme `yTag`-løkke som rutenettetikettene, som er fanget).
 
+### Phase 30 — the name TickC: registry, autostart and exe renamed, with migration
+
+Plan: `docs/superpowers/plans/2026-09-22-ticker-navnet-tickc.md`. Branch
+`fase30-navnet-tickc`, merged with `--no-ff`. The user chose "fully, with
+migration" out of three options before the GitHub release.
+
+**What changed.** `HKCU\Software\Ticker` became `HKCU\Software\TickC`, the
+Run value `Ticker` became `TickC`, `ticker.exe` became `TickC.exe`, and
+`ticker.c`/`ticker.manifest` became `tickc.c`/`tickc.manifest` (`git mv`, part
+3). Visible text: tray menu "Avslutt TickC", window titles "TickC" (were "BTC
+Chart" and "BTC Core Engine"), User-Agent `TickC/1.0` (was `BTCTicker
+Engine/2.0`). README.md and LICENSE (MIT) were added.
+
+**Kept on purpose:** the window classes `BTCTickerWindowClass` and
+`BTCPopupClass` (invisible to users, and every probe finds windows by them),
+and the macro `TICKER_PROBE`.
+
+**`MigrateLegacyNames`** runs on every start, just before `LoadConfig`. The
+settings tree is copied with `RegCopyTreeW` only when the new key does *not*
+exist; if both exist, the new one wins and the old one is left alone. The old
+key is deleted only after the copy succeeded; a failed copy deletes the
+half-written new key so the next start retries. Price alerts ride along in the
+tree. Autostart is written with the path of the exe that is *running*, since
+the old value points at `ticker.exe`. The old Run value is also removed when a
+new one already exists (otherwise both programs start at sign-in), but never
+before the new one is in place.
+
+**The test build can no longer touch real keys.** The test names now live in
+the source under `#ifdef TICKER_PROBE`: `REG_PATH` `Software\TickerTest` (as
+before, so no older probe had to change), `REG_PATH_OLD`
+`Software\TickerTestOld`, `AUTOSTART_KEY` `Software\TickerTestRun`, values
+`TickerTest`/`TickerTestOld`. Before phase 30, `mk_test_src.py` rewrote the
+`REG_PATH` line; with migration in the code, a test build given the real old
+names would have moved the user's settings into the test key and pointed the
+user's autostart at `ticker_test.exe`. `mk_test_src.py` is now a plain copy
+that refuses a source without the test names.
+
+**Probe field 115** on the main window: the migration bitmask (bit 0 settings
+copied, 1 old key deleted, 2 autostart written under the new name, 3 old Run
+value deleted).
+
+**Verified.** `probe_migrate.c`, standalone (no keys or clicks, needs no idle
+machine), five scenarios: A old key plus old autostart (mask 15, `SymbolIndex`
+2 still there after `SaveConfig` wrote on exit, so the moved values were
+*read*; the alert came along; autostart points at the running exe), B second
+start (mask 0, nothing changed), C both keys present (mask 8, both keys
+untouched, old Run value removed), D only old autostart (mask 12), E no
+autostart before (mask 3, none written). **24/24 in two runs**, red against
+part 1: **19 FAIL**. The first green attempt gave 10 FAIL: `RegCopyTreeW`
+answered `ERROR_ACCESS_DENIED` with the target opened for `KEY_WRITE`
+(pitfall 97).
+Regression: `probe_lbl` 27/27, `probe_sess` 51/51, `probe_ind` 54/54,
+`probe_desk` 49/49, `probe_prev` 51/52. All three differences from phase 29
+depend on the market or the clock, not on this phase: the `probe_prev` FAIL is
+the dash pattern of yesterday's close, which lay one row (148 vs 149) from
+today's high (86 625.82 vs 86 620.00), so the lines overlapped; `probe_lbl`
+skips "LOD and PDC close together" when they are not, and `probe_sess` skips
+the backfill check before 06:00 UTC.
+**Production:** the user's registry and Run value were exported to the
+scratchpad first. `ticker.exe` (pid 3100) was stopped cleanly *before*
+`TickC.exe` started, since the old process writes `Software\Ticker` on exit.
+After the start, all 12 values were in `Software\TickC` (`DesktopMode` 1,
+the desktop surface visible), `Software\Ticker` was gone, and Run held
+`TickC` = `"C:\Users\sysadmin\Desktop\Ticker\TickC.exe"` with no `Ticker`
+value. The stale `ticker.exe` was deleted: started again, it would recreate
+`Software\Ticker`.
+**Exe 205 824 → 206 336 bytes (+512)**, part 1: 0.
+
+**Language from here on.** The user wants the whole repo in English (UI text,
+comments, this log, the plans) before the release. New commits and new text
+are English from phase 30 on; translating what exists is the next phases.
+
 ---
 
 ## Kjente begrensninger
 
+- **Windows sees `TickC.exe` as a new tray program** (phase 30). The
+  notification-area choice "always show this icon" is stored per exe path,
+  so after the rename the icon may start out in the overflow menu once.
+- **An old `ticker.exe` started after the migration** creates
+  `Software\Ticker` again with default settings and does not know about
+  `TickC`. The next `TickC.exe` start leaves that key alone (the new key
+  wins) but removes a `Ticker` Run value if it finds one.
 - **Første gang panelet åpnes** vises «Laster data fra Binance...» i ~300 ms til
   tråden har hentet. Alle senere åpninger har data fra bufferet umiddelbart.
 - **Størrelse og posisjon overlever omstart** (registret). `Ctrl`+`0` og
@@ -3589,20 +3675,31 @@ ikke fanget (samme `yTag`-løkke som rutenettetikettene, som er fanget).
     ligge *helt* utenfor trådkorsmerkets flate, og etiketten som prøves må
     velges fra en fangst (den kan ha veket for stempelet), minst 40 px fra
     stempelet og nivåene.
+97. **`RegCopyTreeW` needs more than `KEY_WRITE` on the target.** With the
+    target opened for `KEY_WRITE` it returns `ERROR_ACCESS_DENIED` (5);
+    `KEY_ALL_ACCESS` gives 0 (measured with `dbg_copy.c`, phase 30). The
+    docs only mention `KEY_CREATE_SUB_KEY`. `RegDeleteTreeW(HKCU, path)`
+    deletes the key itself, not only its contents.
+98. **A backslash in a path can defeat both a Python heredoc and `sed`.**
+    `Ticker\\ticker.c` in a `bash` heredoc and `sed 's/Ticker\\ticker/.../'`
+    both left `Desktop\Ticker\ticker.c` unchanged in phase 30, and only a
+    printed "changed?" flag per file showed it. Match the
+    separator with `.` (`sed -E 's/(Desktop.Ticker.)ticker/...'`) or write
+    the script with the Write tool, as in 93.
 
 ---
 
 ## Sikkerhetskopier
 
-**Bare `ticker.c.bak24` ligger igjen** (19.09.2026). Den er identisk med
-`ticker.c` slik den står etter fase 29, og er rollback-referansen for bygget som
-kjører. `ticker.c.bak` … `.bak23` er slettet: de dekket fase 1 til 28, og den
-historikken ligger i git.
+**Only `tickc.c.bak25` is left** (22.09.2026). It is identical to `tickc.c`
+as it stands after phase 30, and is the rollback reference for the build that
+is running. `ticker.c.bak` … `.bak24` are deleted: they covered phases 1 to
+29, and that history is in git.
 
 Rekkefølgen var `.bak` … `.bak7` (fase 1–8), `.bak8` (fase 13), `.bak9`
 (fase 14), `.bak10` (fase 15), `.bak11` (fase 16), `.bak12` (fase 17),
 `.bak13` (fase 18), `.bak14` (fase 19), `.bak15` (fase 20), `.bak16`
-(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27), `.bak23` (fase 28) og `.bak24` (fase 29). Filene er ignorert av
+(fase 21), `.bak17` (fase 22), `.bak18` (fase 23), `.bak19` (fase 24), `.bak20` (fase 25), `.bak21` (fase 26), `.bak22` (fase 27), `.bak23` (fase 28), `.bak24` (fase 29) og `tickc.c.bak25` (phase 30). Filene er ignorert av
 git; mønsteret
 er `*.bak[0-9]*`, med stjerne, fordi `*.bak[0-9]` alene slapp de tosifrede
 gjennom.
