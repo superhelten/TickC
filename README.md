@@ -67,7 +67,7 @@ In the chart panel:
 | `Esc` | Close the symbol picker, then reset the view, then hide the panel |
 | `Ctrl`+`0` | Reset window size and position |
 | `Ctrl`+`N` | Open another panel |
-| `Ctrl`+`M` / `F11` / `Ctrl`+`W` | Minimise / maximise / close |
+| `Ctrl`+`M` / `F11` / `Ctrl`+`W` | Minimize / maximize / close |
 
 ## What it writes to your system
 
