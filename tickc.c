@@ -5220,6 +5220,20 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 39: r = (LRESULT)g_probeIndUs; break;
                 // Phase 26: the height the stamp font is built for (desktop mode).
                 case 40: r = g_Ctx.pillFontH; break;
+                // 104 (phase 34): WRITING. Sets the hover as a mouse move at
+                // client (LOWORD, HIWORD) would, without a pointer in the
+                // window - WM_MOUSELEAVE clears a posted move within a tick,
+                // and a golden capture needs the crosshair to stand still.
+                case 104: {
+                    RECT rcH;
+                    GetClientRect(hwnd, &rcH);
+                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom);
+                    g_Ctx.hoverIdx = HitCandle(&g_Ctx, &gH, LOWORD(lParam), HIWORD(lParam));
+                    g_Ctx.hoverY   = HIWORD(lParam);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    r = g_Ctx.hoverIdx;
+                    break;
+                }
                 // Phase 27: today's session. 41 is VWAP at the candle index
                 // in lParam, x100, -1 when it is not defined there. 42/43 are
                 // today's high/low x100. 44 is the session's first candle
