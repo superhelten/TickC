@@ -21,159 +21,163 @@
 #pragma comment(lib, "shell32.lib")
 
 #define WM_TRAYICON      (WM_USER + 1)
-#define WM_APP_DATA      (WM_APP + 1)   // arbeidertraden har nye data
+#define WM_APP_DATA      (WM_APP + 1)   // the worker thread has new data
 #ifdef TICKER_PROBE
-#define WM_APP_PROBE     (WM_APP + 2)   // bare testbygg: les indre tilstand (fase 18)
+#define WM_APP_PROBE     (WM_APP + 2)   // test build only: read internal state (phase 18)
 #endif
 #define ID_TRAY_EXIT     1001
 #define ID_TRAY_RESET    1002
-#define ID_TRAY_DESKTOP  1003   // skrivebordsmodus av/paa (fase 12)
-#define IDM_TOGGLE_AUTOSTART 1004   // start ved paalogging av/paa (fase 13)
-#define ID_TRAY_VOLUME   1005   // volumstolper av/paa (fase 22)
-#define ID_TRAY_ALERTS_CLEAR 1006   // fjern prisvarslene for symbolet (fase 23)
-#define ID_TRAY_INDICATORS 1007   // glidende snitt av/paa (fase 25)
-// Symbol og intervall fra tray-menyen (fase 17). Punkt i faar FIRST + i.
-// Omraadene er 100 brede; #error under tabellene sikrer at de aldri overlapper.
+#define ID_TRAY_DESKTOP  1003   // desktop mode on/off (phase 12)
+#define IDM_TOGGLE_AUTOSTART 1004   // start at sign-in on/off (phase 13)
+#define ID_TRAY_VOLUME   1005   // volume bars on/off (phase 22)
+#define ID_TRAY_ALERTS_CLEAR 1006   // remove the price alerts for the symbol (phase 23)
+#define ID_TRAY_INDICATORS 1007   // moving averages on/off (phase 25)
+// Symbol and interval from the tray menu (phase 17). Item i gets FIRST + i.
+// The ranges are 100 wide; #error below the tables ensures they never overlap.
 #define ID_TRAY_SYMBOL_FIRST   1100
 #define ID_TRAY_INTERVAL_FIRST 1200
 #define ID_TRAY_RANGE_W        100
-#define TIMER_INTERVAL   3000 // 3 sekunder
+#define TIMER_INTERVAL   3000 // 3 seconds
 
-// --- Popup / graf ---
+// --- Popup / chart ---
 #define POPUP_W          1280
 #define POPUP_H          720
-// Minste storrelse ved manuell skalering, i logiske piksler (96 dpi).
-// 400x250 er der headeren fortsatt har plass til pris, prosent og knapperad
-// paa en rad, og chart-flaten til hover-boksen (104x74).
+// Minimum size when resizing manually, in logical pixels (96 dpi).
+// 400x250 is where the header still has room for price, percent and the
+// button row on one line, and the chart area for the hover box (104x74).
 #define POPUP_MIN_W      400
 #define POPUP_MIN_H      250
-#define RESIZE_BORDER    6     // bredde pa sonen som starter storrelsesendring
-// 6000 lys a 40 byte = 240 KB. Fire dager paa 1m, seksten aar paa 1d. Fylles
-// bakover paa forespoersel (fase 18) og framover mens panelet staar aapent.
-// Fullt buffer stopper bakfyllingen (histDone) - levende lys kastes aldri
-// for aa gi plass til gamle. Var 1440 (ett dogn paa 1m) til og med fase 17.
+#define RESIZE_BORDER    6     // width of the zone that starts a resize
+// 6000 candles at 48 bytes = 288 KB. Four days on 1m, sixteen years on 1d.
+// Filled backwards on request (phase 18) and forwards while the panel is open.
+// A full buffer stops the backfill (histDone) - live candles are never
+// discarded to make room for old ones. Was 1440 (one day on 1m) up to and
+// including phase 17.
 #define MAX_CANDLES      6000
-// Forste henting, og hver bakfylling: 6 timer i ett jafs (~60 KB svar av
-// s_httpBuf paa 96). 60 lys mer enn standardutsnittet (fase 25): EMA 50 er
-// foerst definert paa lys 49, og med 300 av 300 lys synlige begynte linja en
-// sjettedel inn i grafen. Oppvarmingen ligger naa utenfor venstre kant.
+// First fetch, and every backfill: 6 hours in one go (~60 KB response of
+// s_httpBuf's 96). 60 candles more than the default view (phase 25): EMA 50 is
+// first defined on candle 49, and with 300 of 300 candles visible the line
+// began one sixth into the chart. The warm-up now lies beyond the left edge.
 #define SEED_COUNT       360
-#define DEFAULT_VIEW     300   // synlig utsnitt ved apning
-#define MIN_VIEW         8     // minste antall synlige lys ved full zoom
-#define ZOOM_STEP        1.2   // per musehjul-hakk
+#define DEFAULT_VIEW     300   // visible view on open
+#define MIN_VIEW         8     // minimum number of visible candles at full zoom
+#define ZOOM_STEP        1.2   // per mouse wheel notch
 #define TIMER_ANIM_ID    2
-#define TIMER_EMBED_ID   3      // skrivebordsmodus: prov WorkerW igjen
-#define TIMER_REFIT_ID   4      // skrivebordsmodus: legg flaten paa nytt etter skjermbytte (fase 26)
+#define TIMER_EMBED_ID   3      // desktop mode: try WorkerW again
+#define TIMER_REFIT_ID   4      // desktop mode: place the surface again after a display change (phase 26)
 #define REFIT_SETTLE_MS  1000
-// 250 ms: ved omstart av Explorer er ny Progman paa plass etter 290-480 ms
-// (maalt). Med 1000 ms sto skrivebordet uten graf i 1,1 s. Timeren gaar bare
-// mens flaten mangler.
+// 250 ms: when Explorer restarts, the new Progman is in place after 290-480 ms
+// (measured). With 1000 ms the desktop stood without a chart for 1.1 s. The
+// timer only runs while the surface is missing.
 #define EMBED_RETRY_MS   250
 #define ANIM_INTERVAL    16     // ~60 fps
-// Tidsbasert interpolasjon, ikke fast steg per tikk: SetTimer(16) fyrer i
-// praksis hver ~15,6 ms og slaas sammen under last. Fast steglengde ville
-// gitt ulik hastighet avhengig av systembelastning.
-// Eksponentiell kurve har en hale: tau=55 gir ~90 % pa 130 ms (der oyet
-// ser faden som ferdig) og full innsetting paa ~340 ms. Halen koster kun
-// timer-tikk, ikke opptegninger - vi tegner bare naar det avrundede
-// niva faktisk endrer seg.
-#define ANIM_TAU_FADE    55.0   // tidskonstant overlay-fade (ms)
-#define ANIM_DT_MAX      100.0  // klemmer dt, saa en lang pause gir ett hopp
+// Time-based interpolation, not a fixed step per tick: SetTimer(16) in
+// practice fires every ~15.6 ms and is coalesced under load. A fixed step
+// length would give different speeds depending on system load.
+// An exponential curve has a tail: tau=55 gives ~90 % at 130 ms (where the
+// eye sees the fade as finished) and full settling at ~340 ms. The tail only
+// costs timer ticks, not repaints - we only paint when the rounded level
+// actually changes.
+#define ANIM_TAU_FADE    55.0   // time constant for the overlay fade (ms)
+#define ANIM_DT_MAX      100.0  // clamps dt, so a long pause gives one jump
 
-// View-easing. Litt lengre tau enn overlay-faden - en panorering er en storre
-// bevegelse enn en fade - men ikke mye: 2,3*tau er der oyet ser den som
-// ferdig, altsaa ~160 ms.
+// View easing. Slightly longer tau than the overlay fade - panning is a larger
+// movement than a fade - but not by much: 2.3*tau is where the eye sees it as
+// finished, i.e. ~160 ms.
 #define ANIM_TAU_VIEW    70.0
 
-// Snapp naar det som gjenstaar er mindre enn en kvart piksel PAA SKJERMEN.
-// Terskelen regnes derfor om fra piksler til lys (X) og til pris (Y) ved hver
-// tikk, i stedet for a vaere et fast tall i enhetene.
+// Snap when what remains is less than a quarter pixel ON SCREEN.
+// The threshold is therefore converted from pixels to candles (X) and to price
+// (Y) on every tick, instead of being a fixed number in those units.
 //
-// Maalt hvorfor: med en fast terskel paa 0,01 lys tok en panorering paa 300
-// lys 71 tikk - 1,14 s - for klokka kunne do, og de siste 40 tikkene flyttet
-// under en tidels piksel. Og et fast tall i PRIS virker ikke i det hele tatt
-// paa tvers av fire symboler: 0,5 dollar er en tredel av SOLs hele spenn og
-// under en tusendel av BTCs.
+// Measured why: with a fixed threshold of 0.01 candles, a pan of 300 candles
+// took 71 ticks - 1.14 s - before the clock could die, and the last 40 ticks
+// moved less than a tenth of a pixel. And a fixed number in PRICE does not
+// work at all across four symbols: 0.5 dollars is a third of SOL's whole range
+// and less than a thousandth of BTC's.
 #define SNAP_PX          0.25
 
-// --- Nettverksrobusthet ---
-#define NET_RETRY_MAX    60000  // tak for eksponentiell backoff (ms)
-#define NET_RECONNECT_AT 3      // antall feil for hConnect slippes (ny DNS)
-#define STALE_AFTER      (3 * TIMER_INTERVAL)  // 9 s = to tapte sykluser
+// --- Network robustness ---
+#define NET_RETRY_MAX    60000  // cap for exponential backoff (ms)
+#define NET_RECONNECT_AT 3      // number of failures before hConnect is dropped (new DNS)
+#define STALE_AFTER      (3 * TIMER_INTERVAL)  // 9 s = two missed cycles
 
-// Layout innenfor popup-vinduet
+// Layout inside the popup window
 #define PAD_L            10
-// Hoyre marg = prisaksens kolonne (AXIS_Y_W) + kantsikring (AXIS_PAD_R).
-// Aksetekst begynner paa rcChart.right + AXIS_LBL_GAP og slutter senest paa
-// W - AXIS_PAD_R. Kolonnen har plass til AXIS_Y_CHARS tegn i aksefonten, som
-// er monospace: 8 x 9 px = 72, akkurat "75812.34" (maalt, Lucida Console
-// em 15). Bredden er FAST, ikke maalt paa etikettene: PriceDecimals kan skifte
-// midt i Y-easingen, og en marg som fulgte teksten ville latt hele grafen
-// rykke sideveis mens prisaksen glir.
+// Right margin = the price axis column (AXIS_Y_W) + edge guard (AXIS_PAD_R).
+// Axis text begins at rcChart.right + AXIS_LBL_GAP and ends no later than
+// W - AXIS_PAD_R. The column has room for AXIS_Y_CHARS characters in the axis
+// font, which is monospace: 8 x 9 px = 72, exactly "75812.34" (measured,
+// Lucida Console em 15). The width is FIXED, not measured on the labels:
+// PriceDecimals can change in the middle of the Y easing, and a margin that
+// followed the text would make the whole chart jerk sideways while the price
+// axis glides.
 //
-// AXIS_PAD_R holder seg ogsaa over RESIZE_BORDER, saa ingen siffer staar i
-// sonen der pekeren blir en storrelsespil.
+// AXIS_PAD_R also stays above RESIZE_BORDER, so no digit stands in the zone
+// where the pointer becomes a resize arrow.
 #define AXIS_Y_CHARS     8
 #define AXIS_CHAR_W      9
 #define AXIS_LBL_GAP     4
 #define AXIS_Y_W         (AXIS_LBL_GAP + AXIS_Y_CHARS * AXIS_CHAR_W)
 #define AXIS_PAD_R       8
 #define PAD_R            (AXIS_Y_W + AXIS_PAD_R)
-// Luft mellom siste lys og aksekanten (fase 15). Lysene slutter paa
-// rcChart.right; rutenettet, den stiplede siste-pris-linja og traadkorset
-// gaar helt inn til rcChart.edge, der stempelet og etikettene begynner. Uten
-// dette kunne kroppen eller veken til siste lys staa klint mot stempelflaten.
-// Gjelder begge modi fra fase 16, da skrivebordet ogsaa fikk stempel.
+// Space between the last candle and the axis edge (phase 15). The candles end
+// at rcChart.right; the grid, the dashed last-price line and the crosshair
+// run all the way to rcChart.edge, where the stamp and the labels begin.
+// Without this, the body or wick of the last candle could stand flush against
+// the stamp area. Applies to both modes from phase 16, when the desktop also
+// got a stamp.
 #define PLOT_PAD_R       10
 #if PLOT_PAD_R < 8 || PLOT_PAD_R > 12
-#error PLOT_PAD_R skal ligge i [8, 12] px
+#error PLOT_PAD_R must be in [8, 12] px
 #endif
-// Stempelet paa skrivebordet (fase 16). Hoyden folger flatens hoyde, som
-// vannmerket: en 16 px pille er uleselig paa 1600 px, og en fast stor pille
-// ville sprengt en liten flate. Gulv og tak er i enhetspiksler - flaten er
-// per-monitor-bevisst, saa H er allerede fysiske piksler, og den
-// proporsjonale delen skalerer seg selv.
+// The stamp on the desktop (phase 16). Its height follows the surface height,
+// like the watermark: a 16 px pill is unreadable at 1600 px, and a fixed large
+// pill would burst a small surface. Floor and ceiling are in device pixels -
+// the surface is per-monitor aware, so H is already physical pixels, and the
+// proportional part scales itself.
 #define DESK_PILL_DIV    40
 #define DESK_PILL_MIN    16
 #define DESK_PILL_MAX    48
 #if AXIS_PAD_R < 6 || AXIS_PAD_R > 10
-#error AXIS_PAD_R skal ligge i [6, 10] px
+#error AXIS_PAD_R must be in [6, 10] px
 #endif
 #define HEADER_H         44
-// rcChart.top = HEADER_H. Grafen skal aldri kunne krype opp i headerteksten
-// eller kontrollknappene (de slutter paa BTN_TOP + BTN_H = 24), saa et gulv
-// sjekkes ved kompilering i stedet for aa klemmes ved kjoring.
+// rcChart.top = HEADER_H. The chart must never be able to creep up into the
+// header text or the control buttons (they end at BTN_TOP + BTN_H = 24), so a
+// floor is checked at compile time instead of being clamped at run time.
 #define CHART_TOP_MIN    32
 #if HEADER_H < CHART_TOP_MIN
-#error HEADER_H maa gi rcChart minst CHART_TOP_MIN px klaring fra toppen
+#error HEADER_H must leave rcChart at least CHART_TOP_MIN px below the top
 #endif
 
-// Kontrollknapper i headeren. Ultrakompakt: 26x18 er nok til en 9 px glyf
-// med luft rundt, og lar headerens 44 px fortsatt baere to tekstlinjer.
+// Control buttons in the header. Ultra-compact: 26x18 is enough for a 9 px
+// glyph with space around it, and still lets the header's 44 px carry two
+// lines of text.
 #define BTN_W            26
 #define BTN_H            18
 #define BTN_GAP          2
 #define BTN_TOP          6
 #define BTN_MARGIN_R     8
-#define SPAWN_OFFSET     30    // [ + ]: ny instans forskyves saa mye ned og til hoyre
-// Knapperadens venstre kant leses fra ButtonStrip, ikke fra en egen
-// breddekonstant - DrawChart maaler headeren mot den.
+#define SPAWN_OFFSET     30    // [ + ]: a new instance is offset this much down and to the right
+// The button row's left edge is read from ButtonStrip, not from a separate
+// width constant - DrawChart measures the header against it.
 //
-// Minste luft mellom to headertekster paa samme rad, og mellom tekst og
-// knapperaden.
+// Minimum space between two header texts on the same line, and between text
+// and the button row.
 #define HDR_GAP          8
-// Bunnmargen er tidsaksens baand, ikke luft. Aksefonten er 15 px hoy
-// (tmHeight), saa 18 px gir tekst fra bottom + 2 til bottom + 17 = H - 1 uten
-// aa beroere raden y = bottom, der den laveste veken og nederste
-// rutenettlinje staar (klippet er inklusivt der, se DrawChart).
+// The bottom margin is the time band, not empty space. The axis font is 15 px
+// high (tmHeight), so 18 px gives text from bottom + 2 to bottom + 17 = H - 1
+// without touching the row y = bottom, where the lowest wick and the bottom
+// grid line stand (the clip is inclusive there, see DrawChart).
 #define PAD_B            18
-// Minste avstand mellom to tidsetiketter. Brukes som
-// max(TIME_DX_MIN, etikettbredde + TIME_LBL_GAP): "DD.MM HH:MM" er 99 px i
-// aksefonten, bredere enn 80, og ville ellers kollidert paa 1t og 4t.
+// Minimum distance between two time labels. Used as
+// max(TIME_DX_MIN, label width + TIME_LBL_GAP): "DD.MM HH:MM" is 99 px in the
+// axis font, wider than 80, and would otherwise collide on 1h and 4h.
 #define TIME_DX_MIN      80
 #define TIME_LBL_GAP     12
 
-// Palett (matcher tray-ikonet)
+// Palette (matches the tray icon)
 #define CLR_BG           RGB(0x0D, 0x11, 0x17)
 #define CLR_GRID         RGB(0x1C, 0x22, 0x2B)
 #define CLR_UP           RGB(0x00, 0xFF, 0x66)
@@ -183,78 +187,79 @@
 #define CLR_CROSS        RGB(0x55, 0x5F, 0x6E)
 #define CLR_BOX          RGB(0x16, 0x1D, 0x27)
 #define CLR_BOXEDGE      RGB(0x33, 0x3D, 0x4B)
-#define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)   // rod bakgrunn paa krysset
-#define CLR_BTNHOT       RGB(0xFF, 0xFF, 0xFF)   // glyf paa rod bakgrunn
-// Aksetekst: 8,05:1 mot CLR_BG (WCAG AA krever 4,5:1 for liten tekst).
-// CLR_DIM, som aksene brukte foer, gir 4,12:1. Bare aksene - CLR_DIM styrer
-// ogsaa knapper, header og overlay, og de er ikke en del av denne endringen.
+#define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)   // red background on the close cross
+#define CLR_BTNHOT       RGB(0xFF, 0xFF, 0xFF)   // glyph on red background
+// Axis text: 8.05:1 against CLR_BG (WCAG AA requires 4.5:1 for small text).
+// CLR_DIM, which the axes used before, gives 4.12:1. Only the axes - CLR_DIM
+// also drives buttons, header and overlay, and they are not part of this
+// change.
 #define CLR_AXIS         RGB(0xA0, 0xAA, 0xB8)
 
-// Volumstolper (fase 21): nederste VOL_FRAC av grafflaten, bak lysene.
-// Fargene er CLR_UP/CLR_DOWN blandet ~28 % mot CLR_BG - dempet nok til aa
-// ligge bak lysene, mettet nok til aa skille retning. Eksakte verdier, saa
-// en probe kan telle dem.
+// Volume bars (phase 21): bottom VOL_FRAC of the chart area, behind the
+// candles. The colors are CLR_UP/CLR_DOWN blended ~28 % towards CLR_BG -
+// muted enough to sit behind the candles, saturated enough to tell direction.
+// Exact values, so a probe can count them.
 #define VOL_FRAC         0.22
 #define CLR_VOL_UP       RGB(0x09, 0x54, 0x2D)
 #define CLR_VOL_DOWN     RGB(0x51, 0x21, 0x2D)
-// Glidende snitt (fase 25): SMA 20 og EMA 50 paa lukkekursen, tegnet som
-// 1 px linjer over lysene. Dempet staalblaa og dempet fiolett: ingen av dem
-// finnes ellers i flaten (groenn/roed er lys, rav er varsler, graatt er
-// rutenett og traadkors), saa en linje kan aldri leses som noe annet.
-// Eksakte verdier, saa en probe kan telle dem. Prefikset er IND_, ikke MA_:
-// winuser.h eier MA_ACTIVATE og MA_NOACTIVATE (fallgruve 67).
+// Moving averages (phase 25): SMA 20 and EMA 50 on the close, drawn as
+// 1 px lines over the candles. Muted steel blue and muted violet: neither
+// appears elsewhere on the surface (green/red are candles, amber is alerts,
+// gray is grid and crosshair), so a line can never be read as something else.
+// Exact values, so a probe can count them. The prefix is IND_, not MA_:
+// winuser.h owns MA_ACTIVATE and MA_NOACTIVATE (pitfall 67).
 #define IND_SMA_PERIOD   20
 #define IND_EMA_PERIOD   50
 #define CLR_SMA          RGB(0x3D, 0x8F, 0xBF)
 #define CLR_EMA          RGB(0xA0, 0x72, 0xD0)
-#define IND_TAU_FADE     ANIM_TAU_FADE   // MA-bryteren toner linjene, som overlayet
-// Dagens session (fase 27). VWAP er gull og en KURVE; varslene er rav og
-// vannrette (CLR_ALERT FFB020, linja 86601B) - gulere og lysere her, saa de
-// to ikke leses som det samme. Dagens hoy/lav er noeytral graa og stiplet:
-// heltrukket rav er et varsel, stiplet groenn/roed er siste pris, prikket
-// graa er traadkorset. Graafargen ligger med vilje IKKE paa blandingslinja
-// mellom CLR_BG og CLR_AXIS (8A93A0 gjoer det): kantutjevnede aksetall ville
-// da inneholdt eksakt samme farge, og en pikselprobe kunne ikke skille linja
-// fra teksten. Moensteret er 6 paa / 6 av, forankret i flatens
-// venstre kant, saa strekene ikke kryper under panorering.
+#define IND_TAU_FADE     ANIM_TAU_FADE   // the MA toggle fades the lines, like the overlay
+// Today's session (phase 27). VWAP is gold and a CURVE; the alerts are amber
+// and horizontal (CLR_ALERT FFB020, the line 86601B) - yellower and lighter
+// here, so the two are not read as the same thing. Today's high/low is
+// neutral gray and dashed: solid amber is an alert, dashed green/red is the
+// last price, dotted gray is the crosshair. The gray deliberately does NOT
+// lie on the blend line between CLR_BG and CLR_AXIS (8A93A0 does): antialiased
+// axis numbers would then contain exactly the same color, and a pixel probe
+// could not tell the line from the text. The pattern is 6 on / 6 off, anchored
+// at the surface's left edge, so the dashes do not crawl during panning.
 #define CLR_VWAP         RGB(0xF2, 0xD1, 0x4B)
 #define CLR_SESSION      RGB(0x90, 0x93, 0x9E)
 #define SESS_DASH_ON     6
 #define SESS_DASH_PERIOD 12
-// Gaarsdagens nivaaer (fase 28): samme spraak, ett trinn lenger bak. Kjoeligere
-// og moerkere enn CLR_SESSION - "samme ting, eldre" - og heller ikke den paa
-// blandingslinja fra CLR_BG eller CLR_BOX til noen tekstfarge (regnet per
-// kanal, fallgruve 87). Samme periode og samme anker som dagens linjer, saa
-// moenstrene staar i takt: hoy/lav er 2 paa / 10 av (glisne prikker; PS_DOT i
-// traadkorset er tettere og foelger pekeren), sluttkursen 10 paa / 2 av
-// (nesten heltrukket - det er nivaaet dagens endring regnes fra).
+// Yesterday's levels (phase 28): same language, one step further back. Cooler
+// and darker than CLR_SESSION - "same thing, older" - and it too is not on
+// the blend line from CLR_BG or CLR_BOX to any text color (computed per
+// channel, pitfall 87). Same period and same anchor as today's lines, so the
+// patterns stay in step: high/low is 2 on / 10 off (sparse dots; PS_DOT in
+// the crosshair is denser and follows the pointer), the close 10 on / 2 off
+// (almost solid - it is the level today's change is computed from).
 #define CLR_PREV         RGB(0x6F, 0x7B, 0x95)
 #define PREV_DASH_HL     2
 #define PREV_DASH_CLOSE  10
-// Nivaaene i prisaksens rang, hoyest foerst: dagens hoy og lav, saa
-// gaarsdagens slutt, hoy og lav. Et merke viker for alle foran seg.
+// The levels in the price axis rank, highest first: today's high and low,
+// then yesterday's close, high and low. A tag yields to all ahead of it.
 #define LVL_COUNT        5
-// Begge snitt skal vaere definert paa foerste synlige lys naar panelet
-// aapner paa standardutsnittet (se SEED_COUNT).
+// Both averages must be defined on the first visible candle when the panel
+// opens on the default view (see SEED_COUNT).
 C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_EMA_PERIOD);
 C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_SMA_PERIOD);
-// Vannmerket blandes mot hvitt med alfa fra WatermarkAlpha(W). Hvitt fordi
-// den gamle faste fargen #15191F var noytral: CLR_BG + 8 i alle kanaler,
-// altsaa ~3,3 % mot hvitt.
+// The watermark is blended towards white with alpha from WatermarkAlpha(W).
+// White because the old fixed color #15191F was neutral: CLR_BG + 8 in all
+// channels, i.e. ~3.3 % towards white.
 #define CLR_WM_INK       RGB(0xFF, 0xFF, 0xFF)
 #define WM_ALPHA_BASE    0.08
 #define WM_ALPHA_MIN     0.04
 #define WM_ALPHA_MAX     0.10
 #define WM_W_NOMINAL     1920.0
-// Vannmerkets fonthoyde = klemt(chart-hoyde / 5, 32, 120), grensene i
-// logiske piksler.
+// The watermark's font height = clamp(chart height / 5, 32, 120), the limits
+// in logical pixels.
 #define WM_FONT_DIV      5
 #define WM_FONT_MIN      32
 #define WM_FONT_MAX      120
 
-// Kuratert, ikke fritekst. En fast liste betyr at vi kjenner prisomraadet og
-// kan formatere ikon, header og prisakse riktig uten a gjette, og at ingen
-// henting kan feile paa et ukjent symbol.
+// Curated, not free text. A fixed list means we know the price range and can
+// format the icon, header and price axis correctly without guessing, and that
+// no fetch can fail on an unknown symbol.
 typedef struct { const wchar_t* api; const wchar_t* label; } SymbolDef;
 typedef struct { const wchar_t* api; const wchar_t* label; long long ms; } IntervalDef;
 
@@ -274,50 +279,52 @@ static const IntervalDef INTERVALS[] = {
 };
 #define SYMBOL_COUNT   ((int)(sizeof(SYMBOLS) / sizeof(SYMBOLS[0])))
 #define INTERVAL_COUNT ((int)(sizeof(INTERVALS) / sizeof(INTERVALS[0])))
-// Tray-menyens ID-omraader (fase 17). sizeof kan ikke staa i #if, saa vakten
-// er C_ASSERT: vokser en tabell forbi omraadet, stopper bygget her.
+// The tray menu's ID ranges (phase 17). sizeof cannot appear in #if, so the
+// guard is C_ASSERT: if a table grows past its range, the build stops here.
 C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 
-// Prisvarsler (fase 23): faste plasser per symbol, ingen malloc. Aatte er
-// flere enn prisaksen rommer uten at merkene dekker hverandre ved 250 px
-// hoyde (16 px per merke), og 4 x 8 doubler er 256 byte.
+// Price alerts (phase 23): fixed slots per symbol, no malloc. Eight is more
+// than the price axis holds without the tags covering each other at 250 px
+// height (16 px per tag), and 4 x 8 doubles is 256 bytes.
 #define ALERT_MAX          8
-// Rav: ikke blant de elleve faste fargene, saa en probe kan telle piksler,
-// og verken opp (groenn) eller ned (roed) - et varsel har ingen retning foer
-// det fyrer. Linja over dataflaten er samme farge blandet halvveis ned mot
-// CLR_BG: et nivaa er en referanse som rutenettet, ikke et signal, og skal
-// ikke rope hoyere enn lysene. Merket paa aksen baerer den mettede fargen.
+// Amber: not among the eleven fixed colors, so a probe can count pixels,
+// and neither up (green) nor down (red) - an alert has no direction before
+// it fires. The line over the data area is the same color blended halfway
+// down towards CLR_BG: a level is a reference like the grid, not a signal,
+// and must not shout louder than the candles. The tag on the axis carries
+// the saturated color.
 #define CLR_ALERT          RGB(0xFF, 0xB0, 0x20)
 #define CLR_ALERT_LINE     RGB(0x86, 0x60, 0x1B)
-#define ALERT_HIT_PX       8      // halve merkehoyden: treff = det som er tegnet
-#define ALERT_TAU_FLASH    900.0  // etterglooden naar et varsel fyrer (ms)
-#define ALERT_PRICE_MAX    1.0e9  // vern mot et register redigert for haand
+#define ALERT_HIT_PX       8      // half the tag height: hit = what is drawn
+#define ALERT_TAU_FLASH    900.0  // the afterglow when an alert fires (ms)
+#define ALERT_PRICE_MAX    1.0e9  // guard against a hand-edited registry
 
-// Verktoylinja (fase 22): symbolpille, en pille per intervall og VOL, i
-// headerens rad 2 - der symbollinja sto som ren tekst. Faste bredder, ikke
-// maalt tekst: WM_NCHITTEST maa kunne regne ut pillene uten en DC, og
-// tegning og treff skal lese samme tall (fallgruve 14). 15 px hoye, fra
-// y = 28: prisens sifre i rad 1 slutter paa grunnlinja ved y ~ 27, saa en
-// opplyst pille aldri dekker dem, og y = 43 er siste rad over grafflaten.
+// The toolbar (phase 22): symbol pill, one pill per interval and VOL, in
+// the header's row 2 - where the symbol line stood as plain text. Fixed
+// widths, not measured text: WM_NCHITTEST must be able to compute the pills
+// without a DC, and painting and hit testing must read the same numbers
+// (pitfall 14). 15 px high, from y = 28: the price digits in row 1 end at
+// the baseline at y ~ 27, so a highlighted pill never covers them, and
+// y = 43 is the last row above the chart area.
 #define TBAR_TOP           28
 #define TBAR_H             15
-#define TBAR_SYM_W         74    // "BNB/USDT" + pil
+#define TBAR_SYM_W         74    // "BNB/USDT" + arrow
 #define TBAR_IV_W          28    // "15m"
 #define TBAR_VOL_W         32
-#define TBAR_IND_W         26    // "MA" (fase 25)
-#define TBAR_GAP           2     // mellom intervallpillene
-#define TBAR_GROUP_GAP     8     // mellom symbol, intervaller og VOL
+#define TBAR_IND_W         26    // "MA" (phase 25)
+#define TBAR_GAP           2     // between the interval pills
+#define TBAR_GROUP_GAP     8     // between symbol, intervals and VOL
 #define TBAR_SYM           0
 #define TBAR_IV_FIRST      1
 #define TBAR_VOL           (TBAR_IV_FIRST + INTERVAL_COUNT)
-#define TBAR_IND           (TBAR_VOL + 1)   // samme gruppe som VOL: overlegg
+#define TBAR_IND           (TBAR_VOL + 1)   // same group as VOL: overlays
 #define TBAR_COUNT         (TBAR_IND + 1)
 
-// 4x9 piksel-font. En rad per byte, bit 3 = venstre kolonne, bit 0 = hoyre.
-// Ett linje med 9px hoye sifre er nesten dobbelt saa lesbart som to linjer
-// med 5px sifre, og "75.8" fyller noyaktig 16px naar punktumet er 1px bredt.
+// 4x9 pixel font. One row per byte, bit 3 = left column, bit 0 = right.
+// One line of 9px high digits is almost twice as readable as two lines of
+// 5px digits, and "75.8" fills exactly 16px when the dot is 1px wide.
 #define GLYPH_H   9
 #define GLYPH_W   4
 #define IDX_DOT   10
@@ -334,26 +341,26 @@ static const unsigned char FONT_4X9[13][GLYPH_H] = {
     {0xF,0x1,0x1,0x1,0x1,0x1,0x1,0x1,0x1}, // 7
     {0xF,0x9,0x9,0x9,0xF,0x9,0x9,0x9,0xF}, // 8
     {0xF,0x9,0x9,0x9,0xF,0x1,0x1,0x1,0xF}, // 9
-    {0,0,0,0,0,0,0,0,0},                   // . (1px bred, tegnes spesielt)
+    {0,0,0,0,0,0,0,0,0},                   // . (1px wide, drawn specially)
     {0x8,0x8,0x8,0x9,0xA,0xC,0xA,0x9,0x9}, // k
     {0,0,0,0,0,0,0,0,0}                    // ' ' (space)
 };
 
 typedef struct {
-    long long openTime; // Unix-tid i millisekunder
+    long long openTime; // Unix time in milliseconds
     double open;
     double high;
     double low;
     double close;
-    double volume;      // basisvolum i lyset (fase 21). 48 byte per lys.
+    double volume;      // base volume in the candle (phase 21). 48 bytes per candle.
 } Candle;
 
-// Chart-flaten regnes ut to steder (tegning og muse-treff) - de MA
-// vaere enige, ellers peker crosshairet pa feil lys.
-// right/cw er LYSENES flate. edge er aksekanten: stempelet begynner paa
-// edge + 1 og etikettene paa edge + AXIS_LBL_GAP. Begge modi har luft mellom
-// dem (PLOT_PAD_R); i skrivebordsmodus er margen utenfor edge smalere, fordi
-// den bare rommer stempelet og ingen akseetiketter.
+// The chart area is computed in two places (painting and mouse hit testing) -
+// they MUST agree, otherwise the crosshair points at the wrong candle.
+// right/cw is the CANDLES' area. edge is the axis edge: the stamp begins at
+// edge + 1 and the labels at edge + AXIS_LBL_GAP. Both modes have space
+// between them (PLOT_PAD_R); in desktop mode the margin outside edge is
+// narrower, because it only holds the stamp and no axis labels.
 typedef struct { int left, top, right, bottom, cw, ch, edge; } ChartRect;
 
 typedef struct {
@@ -365,277 +372,285 @@ typedef struct {
     wchar_t fullPriceStr[64];
     double lastPrice;
 
-    // --- Runtime-konfig. Laasebeskyttet: UI skriver, arbeidertraden leser. ---
-    int  symIdx;          // indeks i SYMBOLS
-    int  ivIdx;           // indeks i INTERVALS
-    long long intervalMs; // INTERVALS[ivIdx].ms, kopiert ut for rask lesing
-    // Teller opp ved hvert konfigbytte. Arbeidertraden tar en kopi for
-    // hentingen og forkaster svaret hvis telleren har endret seg naar den
-    // kommer tilbake. Uten dette flettes BTC-lys inn i et ETH-buffer.
+    // --- Runtime config. Lock-protected: the UI writes, the worker thread reads. ---
+    int  symIdx;          // index into SYMBOLS
+    int  ivIdx;           // index into INTERVALS
+    long long intervalMs; // INTERVALS[ivIdx].ms, copied out for fast reading
+    // Counts up on every config change. The worker thread takes a copy for
+    // the fetch and discards the response if the counter has changed when it
+    // comes back. Without this, BTC candles get merged into an ETH buffer.
     unsigned configGen;
 
     Candle candles[MAX_CANDLES];
     int candleCount;
 
-    // Synlig utsnitt av lys-arrayet. viewCount = 0 betyr "vis alt".
+    // Visible view of the candle array. viewCount = 0 means "show all".
     int viewStart;
     int viewCount;
-    BOOL followLive;     // utsnittet ligger ytterst til hoyre og folger nye lys
-    BOOL panning;        // drar grafen sideveis akkurat na
-    int  panAnchorX;     // muse-X da panoreringen startet
-    int  panAnchorView;  // viewStart da panoreringen startet
+    BOOL followLive;     // the view sits at the far right and follows new candles
+    BOOL panning;        // dragging the chart sideways right now
+    int  panAnchorX;     // mouse X when the panning started
+    int  panAnchorView;  // viewStart when the panning started
 
     HFONT hFontBig;
     HFONT hFontSmall;
-    // Pris- og tidsaksen. Monospace, saa etikettene staar stille naar
-    // sifrene skifter, og AXIS_Y_W kan regnes i tegn. Graaskala-kantutjevning
-    // (ANTIALIASED_QUALITY), ikke ClearType: ingen fargefransing paa tall.
+    // The price and time axes. Monospace, so the labels stand still when
+    // the digits change, and AXIS_Y_W can be computed in characters. Grayscale
+    // antialiasing (ANTIALIASED_QUALITY), not ClearType: no color fringing on
+    // numbers.
     HFONT hFontAxis;
 
-    int hoverIdx;        // indeks til lyset under pekeren, -1 = ingen
-    int hoverY;          // muse-Y i klientkoordinater
-    BOOL trackingMouse;  // om WM_MOUSELEAVE er bestilt
+    int hoverIdx;        // index of the candle under the pointer, -1 = none
+    int hoverY;          // mouse Y in client coordinates
+    BOOL trackingMouse;  // whether WM_MOUSELEAVE has been requested
 
-    // --- Animasjonsklokke ---
-    // En timer driver alt tidsavhengig: overlay-fade, stale-telleren,
-    // view- og Y-akse-easing. Den lever bare mens noe faktisk
-    // er i bevegelse, og drepes naar alt har satt seg.
+    // --- Animation clock ---
+    // One timer drives everything time-dependent: overlay fade, the stale
+    // counter, view and Y-axis easing. It only lives while something is
+    // actually moving, and is killed when everything has settled.
     ULONGLONG lastAnimTick;
     BOOL   animRunning;
-    int    staleSecsShown;   // sist tegnede sekundtall, hindrer 60 fps paa en teller
+    int    staleSecsShown;   // last painted seconds value, prevents 60 fps on a counter
 
-    // --- Overlay for symbol-/intervallvalg ---
-    // overlayOpen er den LOGISKE tilstanden og styrer treffdeteksjon.
-    // overlayF er fade-nivaet og styrer bare tegning. Under uttoning er
-    // overlayF > 0 mens overlayOpen er FALSE - da skal klikk ga til grafen.
+    // --- Overlay for symbol/interval selection ---
+    // overlayOpen is the LOGICAL state and drives hit detection.
+    // overlayF is the fade level and only drives painting. During fade-out,
+    // overlayF > 0 while overlayOpen is FALSE - clicks must then go to the chart.
     BOOL   overlayOpen;
     double overlayF;      // 0-255
-    int    overlayHot;    // indeks i rows[], -1 = ingen
+    int    overlayHot;    // index into rows[], -1 = none
 
-    // --- View- og Y-akse-easing ---
-    // Rene UI-doubler. Arbeidertraden ser dem ALDRI. viewStart/viewCount er
-    // maalet og er laasebeskyttet; disse er visningen og eies av UI-traden
-    // alene. Det er derfor easingen ikke rorer traadkontrakten.
-    double dispStart, dispCount;   // brokdels-utsnitt
-    double dispMin, dispMax;       // animert prisakse
-    double dispVolMax;             // animert volumskala (fase 21), 0 = ingen stolper
-    BOOL   dispValid;              // FALSE = snap ved neste oppdatering
-    long long dispShiftSeen;       // frontShift UI har kompensert for
+    // --- View and Y-axis easing ---
+    // Pure UI doubles. The worker thread NEVER sees them. viewStart/viewCount
+    // are the target and are lock-protected; these are the display and are
+    // owned by the UI thread alone. That is why the easing does not touch the
+    // thread contract.
+    double dispStart, dispCount;   // fractional view
+    double dispMin, dispMax;       // animated price axis
+    double dispVolMax;             // animated volume scale (phase 21), 0 = no bars
+    BOOL   dispValid;              // FALSE = snap on next update
+    long long dispShiftSeen;       // frontShift the UI has compensated for
 
-    // --- Arbeidertrad ---
-    // Laasen dekker candles[], candleCount, viewStart, viewCount,
-    // followLive, lastPrice, hPopup, frontShift, histPending og histDone.
-    // Alt annet rores kun av UI-traden.
+    // --- Worker thread ---
+    // The lock covers candles[], candleCount, viewStart, viewCount,
+    // followLive, lastPrice, hPopup, frontShift, histPending and histDone.
+    // Everything else is touched only by the UI thread.
     CRITICAL_SECTION lock;
     HANDLE hThread;
-    HANDLE hStopEvent;   // manuell reset: signaliserer avslutning
-    HANDLE hWakeEvent;   // auto reset: hent NA (panelet ble apnet)
+    HANDLE hStopEvent;   // manual reset: signals shutdown
+    HANDLE hWakeEvent;   // auto reset: fetch NOW (the panel was opened)
 
-    // Nettverkshelse. Laasebeskyttet - arbeidertraden skriver, UI leser.
-    ULONGLONG lastOkTick;    // GetTickCount64 ved siste vellykkede henting
-    ULONGLONG nextRetryTick; // naar neste forsok er planlagt
-    int       netFailures;   // sammenhengende feil, driver backoffen
-    // Netto endring FORAN i bufferet, med fortegn: +1 per lys som faller ut
-    // (utkasting), -k per k lys lagt foran (bakfylling, fase 18). UI-traden
-    // flytter visning, hover og pan-anker like mye (ApplyFrontShift). Var
-    // evictedTotal, monoton, til og med fase 17.
+    // Network health. Lock-protected - the worker thread writes, the UI reads.
+    ULONGLONG lastOkTick;    // GetTickCount64 at the last successful fetch
+    ULONGLONG nextRetryTick; // when the next attempt is scheduled
+    int       netFailures;   // consecutive failures, drives the backoff
+    // Net change at the FRONT of the buffer, signed: +1 per candle that drops
+    // out (eviction), -k per k candles prepended (backfill, phase 18). The UI
+    // thread moves the display, hover and pan anchor by the same amount
+    // (ApplyFrontShift). Was evictedTotal, monotonic, up to and including
+    // phase 17.
     long long frontShift;
-    // Bakfylling (fase 18). histPending: UI vil ha eldre lys, traden har ikke
-    // hentet enda. histDone: serveren svarte 2xx uten lys, eller bufferet er
-    // fullt - ikke spor igjen for denne konfigen.
+    // Backfill (phase 18). histPending: the UI wants older candles, the thread
+    // has not fetched yet. histDone: the server answered 2xx with no candles,
+    // or the buffer is full - do not ask again for this config.
     BOOL      histPending;
     BOOL      histDone;
-    // Oppvaakning fra dvale (fase 24). UI-traaden ber om at forbindelsen
-    // slippes; hConnect eies av arbeidertraaden, saa den gjoer det selv
-    // foerst i neste syklus. I laasedomenet.
+    // Wake from sleep (phase 24). The UI thread asks for the connection to be
+    // dropped; hConnect is owned by the worker thread, so it does it itself
+    // at the start of the next cycle. In the lock domain.
     BOOL      dropConn;
 
-    // --- Bufrede GDI-objekter ---
-    // Faste farger lages en gang ved oppstart i stedet for 16 ganger
-    // per opptegning.
+    // --- Cached GDI objects ---
+    // Fixed colors are created once at startup instead of 16 times per
+    // repaint.
     HPEN   penGrid, penCross;
     HPEN   penBtn, penBtnHot, penBtnWhite;
-    // Standardpekere. LoadCursorW returnerer et DELT handtak for disse - de
-    // telles ikke som vaare, og skal ikke gjennom DestroyCursor. Bufres
-    // likevel: WM_SETCURSOR fyrer ved hver musebevegelse, og et oppslag per
-    // melding er unodig arbeid i en sti som ellers er gratis.
-    HCURSOR curPan, curArrow, curHand;   // curHand: priskolonnen (fase 23)
+    // Standard cursors. LoadCursorW returns a SHARED handle for these - they
+    // do not count as ours, and must not go through DestroyCursor. Cached
+    // anyway: WM_SETCURSOR fires on every mouse move, and a lookup per
+    // message is needless work in a path that is otherwise free.
+    HCURSOR curPan, curArrow, curHand;   // curHand: the price column (phase 23)
     HBRUSH brClose;
-    // Hvilken knapp musa staar paa, -1 for ingen. UI-eid, aldri roert av
-    // arbeidertraden. Treffdeteksjonen henger paa DENNE, ikke paa noe
-    // fade-niva - knappene har ingen fade, de skifter farge momentant.
+    // Which button the mouse is over, -1 for none. UI-owned, never touched by
+    // the worker thread. Hit detection hangs on THIS, not on any fade
+    // level - the buttons have no fade, they change color instantly.
     int    btnHot;
-    // Verktoylinja i headerens rad 2 (fase 22). tbHot er pillen musa staar
-    // paa, -1 for ingen - samme regel som btnHot: logisk tilstand, ingen
-    // fade. showVol er brukerens valg og lagres i registret; dispVolF er
-    // VISNINGEN av det, 0..1, og eases i WM_TIMER saa stolpene synker ned i
-    // stedet for aa blinke bort. Alle tre er UI-eid.
+    // The toolbar in the header's row 2 (phase 22). tbHot is the pill the
+    // mouse is over, -1 for none - same rule as btnHot: logical state, no
+    // fade. showVol is the user's choice and is saved in the registry;
+    // dispVolF is the DISPLAY of it, 0..1, and is eased in WM_TIMER so the
+    // bars sink down instead of blinking away. All three are UI-owned.
     int    tbHot;
     BOOL   showVol;
     double dispVolF;
-    // Glidende snitt (fase 25): SMA 20 og EMA 50 over lysene. Samme par som
-    // showVol/dispVolF: showInd er valget og lagres i registret, dispIndF
-    // er visningen, 0..1, og eases av klokka - her som FARGE mot bakgrunnen,
-    // ikke som geometri. UI-eid. Selve snittene lagres ikke: de regnes ut
-    // av candles[] i hver opptegning (se IndStep).
+    // Moving averages (phase 25): SMA 20 and EMA 50 over the candles. Same
+    // pair as showVol/dispVolF: showInd is the choice and is saved in the
+    // registry, dispIndF is the display, 0..1, and is eased by the clock -
+    // here as COLOR towards the background, not as geometry. UI-owned. The
+    // averages themselves are not stored: they are computed from candles[]
+    // in every repaint (see IndStep).
     BOOL   showInd;
     double dispIndF;
-    // Overleggene har ett valg PER MODUS (fase 26). showVol/showInd er
-    // panelets; disse to er skrivebordsflatens, og de er AV som standard:
-    // flaten leses perifert bak ikonene (fase 14), og stolper og snitt er
-    // maaleverktoey, ikke tapet. Tray-menyen bytter den som gjelder modusen
-    // prosessen staar i. Les gjennom ShowVolNow/ShowIndNow, aldri direkte.
+    // The overlays have one choice PER MODE (phase 26). showVol/showInd are
+    // the panel's; these two are the desktop surface's, and they are OFF by
+    // default: the surface is read peripherally behind the icons (phase 14),
+    // and bars and averages are measuring tools, not wallpaper. The tray menu
+    // toggles the one for the mode the process is in. Read through
+    // ShowVolNow/ShowIndNow, never directly.
     BOOL   showVolDesk;
     BOOL   showIndDesk;
-    // Prisvarsler (fase 23). Alt er UI-eid: varslene settes fra musa og
-    // proeves i WM_APP_DATA, begge paa UI-traaden, saa traadkontrakten er
-    // uroert. Per symbol - et nivaa i dollar er meningsloest paa tvers av
-    // symboler (fallgruve 16). Fortegnet baerer SIDEN: +nivaa fyrer naar
-    // prisen er >= nivaaet (varselet ble satt over prisen), -nivaa naar den
-    // er <= (satt under). Siden lagres, i stedet for aa sammenlikne forrige
-    // og neste pris, saa et nivaa som ble krysset mens appen sto av eller
-    // maskinen sov fyrer ved foerste pris etterpaa, og et symbolbytte ikke
-    // kan sammenlikne SOL mot BTC.
-    // alertHot og axisHotY er hover-tilstand i priskolonnen, samme regel som
-    // btnHot: logisk tilstand, -1 for ingen. alertFlashF er etterglooden til
-    // et varsel som har fyrt, 1..0, og eases av klokka.
+    // Price alerts (phase 23). Everything is UI-owned: the alerts are set
+    // from the mouse and tested in WM_APP_DATA, both on the UI thread, so the
+    // thread contract is untouched. Per symbol - a level in dollars is
+    // meaningless across symbols (pitfall 16). The sign carries the SIDE:
+    // +level fires when the price is >= the level (the alert was set above
+    // the price), -level when it is <= (set below). The side is stored,
+    // instead of comparing the previous and next price, so a level that was
+    // crossed while the app was off or the machine was asleep fires on the
+    // first price afterwards, and a symbol change cannot compare SOL against
+    // BTC.
+    // alertHot and axisHotY are hover state in the price column, same rule as
+    // btnHot: logical state, -1 for none. alertFlashF is the afterglow of an
+    // alert that has fired, 1..0, and is eased by the clock.
     double alerts[SYMBOL_COUNT][ALERT_MAX];
     int    alertCount[SYMBOL_COUNT];
     int    alertHot;
     int    axisHotY;
-    // Nivaaet til varselet som NETTOPP ble satt med et klikk, 0 = ingen.
-    // Pekeren staar da paa det nye merket, og alertHot sier (korrekt) at et
-    // klikk til fjerner det - men et merke som blir roedt i det det settes,
-    // leser som en feil. Det tegnes derfor rav til pekeren har forlatt det
-    // en gang. Bare tegningen leser feltet; treffet henger paa alertHot
-    // (fallgruve 12). Et nivaa, ikke en indeks: fjerning flytter indeksene.
+    // The level of the alert that was JUST set with a click, 0 = none.
+    // The pointer then stands on the new tag, and alertHot says (correctly)
+    // that one more click removes it - but a tag that turns red the moment it
+    // is set reads as an error. It is therefore drawn amber until the pointer
+    // has left it once. Only the painting reads the field; the hit hangs on
+    // alertHot (pitfall 12). A level, not an index: removal moves the indices.
     double alertFresh;
     double alertFlashLevel;
     double alertFlashF;
-    int    alertFired;       // antall varsler som har fyrt siden oppstart
-    double alertLastFired;   // nivaaet til det siste
-    BOOL   alertNotifyOk;    // svaret fra Shell_NotifyIconW paa siste ballong
-    HPEN   penLastUp, penLastDown;   // stiplet siste-pris-linje
+    int    alertFired;       // number of alerts that have fired since startup
+    double alertLastFired;   // the level of the last one
+    BOOL   alertNotifyOk;    // the result from Shell_NotifyIconW on the last balloon
+    HPEN   penLastUp, penLastDown;   // dashed last-price line
     HBRUSH brBg, brBox, brBoxEdge;
-    HBRUSH brVolUp, brVolDown;       // volumstolper (fase 21)
+    HBRUSH brVolUp, brVolDown;       // volume bars (phase 21)
 
 
-    // --- Vedvarende dobbeltbuffer ---
-    // Lever mellom bildene og bygges paa nytt bare naar storrelsen endres.
-    // Et nytt buffer per bilde kostet 3840x1600: 7,9 ms paa foerste skriving
-    // i den nye bitmapen og 1,7 ms paa frigjoeringen, av 13,2 ms totalt
-    // (maalt). bbValid: bufferet inneholder et fullt bilde i denne
-    // storrelsen, saa hurtigstien kan tegne knappene rett inn i det.
+    // --- Persistent double buffer ---
+    // Lives between frames and is rebuilt only when the size changes.
+    // A new buffer per frame at 3840x1600 cost 7.9 ms on the first write
+    // to the new bitmap and 1.7 ms on the release, out of 13.2 ms in total
+    // (measured). bbValid: the buffer holds a full frame at this size, so
+    // the fast path can draw the buttons straight into it.
     HBITMAP bbBmp;
     HDC     bbDC;
     HBITMAP bbOldBmp;
     int     bbW, bbH;
     BOOL    bbValid;
 
-    // --- Vannmerke-cache ---
-    // Bakgrunn + vannmerke bakt sammen i en bitmap. Denne ERSTATTER dagens
-    // FillRect - den legger ikke til et steg. En DrawTextW med stor font
-    // koster 0,05-0,30 ms og hoerer ikke hjemme per bilde. Proevd paa nytt
-    // sammen med det vedvarende bufferet: tegnet per bilde kostet vannmerket
-    // 0,50-0,53 ms ved 1280x720, mot ~0,28 ms for bliten (maalt).
+    // --- Watermark cache ---
+    // Background + watermark baked together in one bitmap. This REPLACES the
+    // current FillRect - it does not add a step. A DrawTextW with a large font
+    // costs 0.05-0.30 ms and does not belong in every frame. Tried again
+    // together with the persistent buffer: drawn per frame, the watermark cost
+    // 0.50-0.53 ms at 1280x720, against ~0.28 ms for the blit (measured).
     HBITMAP wmBmp;
     HDC     wmDC;
     HBITMAP wmOldBmp;
     HFONT   hFontWm;
-    HFONT   hFontPill;      // stempelfont i skrivebordsmodus (fase 16)
-    int     pillFontH;      // hoyden hFontPill er bygget for
-    int     wmFontH;       // fonthoyden cachen ble bygget for
-    int     wmW, wmH;      // storrelsen bitmapen ble bygget for
-    int     wmSym, wmIv;   // konfigen den ble bygget for
+    HFONT   hFontPill;      // stamp font in desktop mode (phase 16)
+    int     pillFontH;      // the height hFontPill was built for
+    int     wmFontH;       // the font height the cache was built for
+    int     wmW, wmH;      // the size the bitmap was built for
+    int     wmSym, wmIv;   // the config it was built for
     BOOL    wmValid;
 } AppContext;
 
 static AppContext g_Ctx;
-static int g_savedPanelW = 0;   // panelstorrelse fra registret, 0 = ubrukt
+static int g_savedPanelW = 0;   // panel size from the registry, 0 = unused
 static int g_savedPanelH = 0;
-static int g_savedPanelX = 0;   // settes av LoadConfig, GEOM_UNSET = ubrukt
+static int g_savedPanelX = 0;   // set by LoadConfig, GEOM_UNSET = unused
 static int g_savedPanelY = 0;
-// Startet via [ + ]. Et duplikat skriver aldri til registret - verken
-// geometri eller symbol - og avslutter prosessen naar panelet lukkes.
-// Registret er hovedinstansens hukommelse; ellers ville den som lukkes sist
-// bestemt hvor neste oppstart legger panelet.
+// Started via [ + ]. A duplicate never writes to the registry - neither
+// geometry nor symbol - and exits the process when the panel is closed.
+// The registry is the main instance's memory; otherwise whichever closed last
+// would decide where the next startup places the panel.
 static BOOL g_isDuplicate = FALSE;
-// --desktop-mode: flaten er barn av skrivebordets WorkerW, bak ikonene, over
-// hele primaerskjermen. Samme vindusklasse og samme opptegning som panelet,
-// men ingen ramme, ingen knapper, ingen input og ingen geometri i registret.
+// --desktop-mode: the surface is a child of the desktop's WorkerW, behind the
+// icons, covering the whole primary monitor. Same window class and same
+// painting as the panel, but no frame, no buttons, no input and no geometry
+// in the registry.
 static BOOL g_desktopMode = FALSE;
-// Overleggsvalgene for modusen vi staar i (fase 26). Alt som tegner, easer,
-// haker av i menyen eller svarer en probe leser disse.
+// The overlay choices for the mode we are in (phase 26). Everything that
+// paints, eases, checks items in the menu or answers a probe reads these.
 static BOOL ShowVolNow(const AppContext* ctx) {
     return g_desktopMode ? ctx->showVolDesk : ctx->showVol;
 }
 static BOOL ShowIndNow(const AppContext* ctx) {
     return g_desktopMode ? ctx->showIndDesk : ctx->showInd;
 }
-static UINT g_msgTaskbarCreated = 0;   // Explorer startet paa nytt
-static char s_httpBuf[98304];    // 360 lys gir ~60 KB svar
+static UINT g_msgTaskbarCreated = 0;   // Explorer restarted
+static char s_httpBuf[98304];    // 360 candles give a ~60 KB response
 static Candle s_incoming[SEED_COUNT];
-// Volumstolper (fase 21) tegnes med PolyPolygon i bolker: ett kall per 256
-// stolper i stedet for ett FillRect per lys. Maalt ved 1280x720 med 300
-// synlige lys: FillRect per lys la 0,40 ms paa en opptegning paa 1,44 ms.
-// Statisk, ikke stakk - som resten av bufrene i fila.
+// Volume bars (phase 21) are drawn with PolyPolygon in batches: one call per
+// 256 bars instead of one FillRect per candle. Measured at 1280x720 with 300
+// visible candles: FillRect per candle added 0.40 ms to a 1.44 ms repaint.
+// Static, not stack - like the rest of the buffers in the file.
 //
-// Glidende snitt (fase 25) laaner s_volPts til Polyline, i bolker paa
-// IND_BATCH punkter. Stolpene er ferdig tegnet naar linjene begynner, og
-// alt skjer paa UI-traaden under samme laas, saa de to kan ikke moetes.
+// Moving averages (phase 25) borrow s_volPts for Polyline, in batches of
+// IND_BATCH points. The bars are finished drawing when the lines begin, and
+// everything happens on the UI thread under the same lock, so the two cannot
+// meet.
 #define VOL_BATCH 256
 #define IND_BATCH (VOL_BATCH * 4)
 static POINT s_volPts[VOL_BATCH * 4];
 static INT   s_volCnt[VOL_BATCH];
 #ifdef TICKER_PROBE
-// Bare testbygg (fase 21): varigheten av siste fulle opptegning i
-// mikrosekunder, QPC rundt den trege stien i PaintPopup. Leses med
-// WM_APP_PROBE 15, saa en probe kan maale median over mange bilder uten
-// aa ta skjermbilder samtidig (fallgruve 37).
+// Test build only (phase 21): the duration of the last full repaint in
+// microseconds, QPC around the slow path in PaintPopup. Read with
+// WM_APP_PROBE 15, so a probe can measure the median over many frames
+// without taking screenshots at the same time (pitfall 37).
 static LONGLONG g_probePaintUs = 0;
-// Bare testbygg (fase 25): tiden de to DrawIndicator-kallene tok i siste
-// fulle opptegning, i mikrosekunder. Leses med WM_APP_PROBE 39. Overlegget
-// koster mindre enn stoeyen mellom to maaleserier av hele opptegningen
-// (fallgruve 80), saa det maales for seg.
+// Test build only (phase 25): the time the two DrawIndicator calls took in
+// the last full repaint, in microseconds. Read with WM_APP_PROBE 39. The
+// overlay costs less than the noise between two measurement series of the
+// whole repaint (pitfall 80), so it is measured on its own.
 static LONGLONG g_probeIndUs = 0;
-// Bare testbygg (fase 23): demper ballong og lyd naar et varsel fyrer, saa en
-// probe kan fyre mange varsler uten aa plage den som sitter ved maskinen.
-// Settes med WM_APP_PROBE 101 til hovedvinduet. En kjoering fyrer ett varsel
-// udempet og leser svaret fra Shell_NotifyIconW (felt 29).
+// Test build only (phase 23): mutes balloon and sound when an alert fires, so
+// a probe can fire many alerts without bothering whoever sits at the machine.
+// Set with WM_APP_PROBE 101 to the main window. One run fires one alert
+// unmuted and reads the result from Shell_NotifyIconW (field 29).
 static BOOL g_probeMute = FALSE;
-// Bare testbygg (fase 24): tellere som leses fra hovedvinduet med
-// WM_APP_PROBE 110-112. Hentesykluser i arbeidertraaden (Interlocked: den
-// skrives der og leses paa UI-traaden), oppvaakninger sett i
-// WM_POWERBROADCAST, og priser/lys parserne har forkastet som usunne.
+// Test build only (phase 24): counters read from the main window with
+// WM_APP_PROBE 110-112. Fetch cycles in the worker thread (Interlocked: it
+// is written there and read on the UI thread), wake-ups seen in
+// WM_POWERBROADCAST, and prices/candles the parsers have rejected as unsound.
 static volatile LONG g_probeFetches = 0;
 static volatile LONG g_probeResumes = 0;
 static volatile LONG g_probeRejects = 0;
-// 113: forbindelser arbeidertraaden har sluppet etter en oppvaakning.
+// 113: connections the worker thread has dropped after a wake-up.
 static volatile LONG g_probeConnDrops = 0;
-// Bare testbygg (fase 26): WM_DISPLAYCHANGE sett paa hovedvinduet. Leses med
-// WM_APP_PROBE 114 der.
+// Test build only (phase 26): WM_DISPLAYCHANGE seen on the main window. Read
+// with WM_APP_PROBE 114 there.
 static volatile LONG g_probeDisplayChanges = 0;
-// Bare testbygg (fase 27): tiden sessionblokkene (dagens hoy/lav og VWAP)
-// tok i siste fulle opptegning, i mikrosekunder. WM_APP_PROBE 45. Maalt for
-// seg av samme grunn som g_probeIndUs.
+// Test build only (phase 27): the time the session blocks (today's high/low
+// and VWAP) took in the last full repaint, in microseconds. WM_APP_PROBE 45.
+// Measured on its own for the same reason as g_probeIndUs.
 static LONGLONG g_probeSessUs = 0;
-// Bare testbygg (fase 28): tiden gaarsdagsblokka tok i siste fulle
-// opptegning, i mikrosekunder. WM_APP_PROBE 56.
+// Test build only (phase 28): the time the yesterday block took in the last
+// full repaint, in microseconds. WM_APP_PROBE 56.
 static LONGLONG g_probePrevUs = 0;
-// Bare testbygg (fase 29). 57: bitmaske over nivaaene (bit q i LVL-rangen)
-// som fikk merkelapp i siste opptegning. 58: ble traadkorsets aksemerke
-// tegnet. 59: tiden merkelappblokka tok (us).
+// Test build only (phase 29). 57: bitmask over the levels (bit q in the LVL
+// rank) that got a label in the last repaint. 58: whether the crosshair's
+// axis tag was drawn. 59: the time the label block took (us).
 static int      g_probeLblMask  = 0;
 static int      g_probeCrossTag = 0;
 static LONGLONG g_probeLblUs    = 0;
-// Bare testbygg (fase 30): hva navnemigreringen gjorde ved oppstart, som
-// bitmaske. WM_APP_PROBE 115 paa hovedvinduet. Bit 0 gamle innstillinger
-// kopiert, 1 gammel nokkel slettet, 2 autostart skrevet under nytt navn,
-// 3 gammel autostartverdi slettet.
+// Test build only (phase 30): what the name migration did at startup, as a
+// bitmask. WM_APP_PROBE 115 on the main window. Bit 0 old settings copied,
+// 1 old key deleted, 2 autostart written under the new name, 3 old autostart
+// value deleted.
 static int      g_probeMigrate  = 0;
 #endif
 
-// Holder utsnittet innenfor dataene.
+// Keeps the view within the data.
 static void ClampView(AppContext* ctx) {
     int n = ctx->candleCount;
     if (n <= 0) { ctx->viewStart = 0; ctx->viewCount = 0; return; }
@@ -645,7 +660,7 @@ static void ClampView(AppContext* ctx) {
     if (ctx->viewStart < 0)        ctx->viewStart = 0;
 }
 
-// Leser ut gjeldende utsnitt, med "vis alt" som standard.
+// Reads out the current view, with "show all" as the default.
 static void GetView(const AppContext* ctx, int* vs, int* vc) {
     if (ctx->viewCount <= 0) { *vs = 0; *vc = ctx->candleCount; }
     else                     { *vs = ctx->viewStart; *vc = ctx->viewCount; }
@@ -659,13 +674,14 @@ static long long NowUnixMs(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Animasjon og nettverkshelse - rene funksjoner, ingen tilstand.
-// Begge er enhetstestbare uten Win32.
+// Animation and network health - pure functions, no state.
+// Both are unit-testable without Win32.
 // ---------------------------------------------------------------------------
 
-// Eksponentiell interpolasjon mot et mal. Rammeratefri: dobbelt saa lang dt
-// gir samme resultat som to halve steg, saa animasjonen gaar like fort enten
-// timeren fyrer jevnt eller meldingene slaas sammen under last.
+// Exponential interpolation toward a target. Frame-rate independent: a dt
+// twice as long gives the same result as two half steps, so the animation
+// runs equally fast whether the timer fires evenly or the messages are
+// coalesced under load.
 static double AnimStep(double cur, double target, double dt, double tau, double snap) {
     if (dt <= 0.0) return cur;
     if (dt > ANIM_DT_MAX) dt = ANIM_DT_MAX;
@@ -675,10 +691,11 @@ static double AnimStep(double cur, double target, double dt, double tau, double 
     return cur;
 }
 
-// Vannmerkets alfa som funksjon av vindusbredden:
+// The watermark's alpha as a function of the window width:
 //   clamp(WM_ALPHA_BASE * sqrt(W / WM_W_NOMINAL), WM_ALPHA_MIN, WM_ALPHA_MAX)
-// W er klientbredden i enhetspiksler. Med 400 px (minstebredden) gir formelen
-// 0,037 og gulvet tar over; ved 1280 er den 0,065; over 3000 px tar taket.
+// W is the client width in device pixels. At 400 px (the minimum width) the
+// formula gives 0.037 and the floor takes over; at 1280 it is 0.065; above
+// 3000 px the ceiling takes over.
 static double WatermarkAlpha(int W) {
     if (W <= 0) return WM_ALPHA_MIN;
     double a = WM_ALPHA_BASE * sqrt((double)W / WM_W_NOMINAL);
@@ -687,13 +704,13 @@ static double WatermarkAlpha(int W) {
     return a;
 }
 
-// Steglengde S (i lys) mellom tidsetikettene.
+// Step length S (in candles) between the time labels.
 //   N = floor(chartW / minDx),  M = ceil(dispCount),
 //   S = max(1, ceil((M - 1) / (N - 1)))
-// CEIL, ikke floor: med floor gir M = 9, chartW = 320, minDx = 80 S = 2 og
-// 71 px mellom etikettene - kollisjon. Med ceil er avstanden S * chartW /
-// dispCount >= minDx for alle M og N >= 2 (M >= N: (M-1)N >= (N-1)M; M < N:
-// S = 1 og ett lys er alt bredere enn minDx). N < 2 gir en etikett.
+// CEIL, not floor: with floor, M = 9, chartW = 320, minDx = 80 gives S = 2 and
+// 71 px between the labels - collision. With ceil the spacing S * chartW /
+// dispCount >= minDx for all M and N >= 2 (M >= N: (M-1)N >= (N-1)M; M < N:
+// S = 1 and one candle is already wider than minDx). N < 2 gives one label.
 static int TimeTickStep(double dispCount, int chartW, int minDx) {
     if (dispCount < 1.0) dispCount = 1.0;
     if (chartW <= 0 || minDx <= 0) return 1;
@@ -704,12 +721,12 @@ static int TimeTickStep(double dispCount, int chartW, int minDx) {
     return (s < 1) ? 1 : s;
 }
 
-// Runder S opp til et steg som er et helt antall lys OG et rundt tidsrom
-// (5 min, 15 min, 1 t, 6 t, 1 d ...). TimeTickStep alene gir S = 23 paa 300
-// 1m-lys ved 1280 px, altsaa etiketter paa 02:48, 03:11, 03:34 (sett i
-// PrintWindow). Oppover-avrunding kan bare gjore avstanden STORRE, saa
-// kollisjonsgarantien i TimeTickStep holder. Er S storre enn tabellen,
-// brukes S som den er.
+// Rounds S up to a step that is a whole number of candles AND a round time
+// span (5 min, 15 min, 1 h, 6 h, 1 d ...). TimeTickStep alone gives S = 23 on
+// 300 1m candles at 1280 px, i.e. labels at 02:48, 03:11, 03:34 (seen in
+// PrintWindow). Rounding up can only make the spacing LARGER, so the
+// collision guarantee in TimeTickStep holds. If S is larger than the table,
+// S is used as is.
 static int NiceTimeStep(int step, long long intervalMs) {
     static const long long NICE_MIN[] = {
         1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
@@ -725,50 +742,51 @@ static int NiceTimeStep(int step, long long intervalMs) {
     return step;
 }
 
-// Eksponentiell backoff med jitter. 3s, 6s, 12s, 24s, 48s, deretter tak paa
-// 60s. Jitteren hindrer at mange klienter synkroniserer seg mot serveren
-// etter et felles avbrudd - den hentes fra klokkas lavbiter, saa vi slipper
-// rand() og global tilstand.
+// Exponential backoff with jitter. 3s, 6s, 12s, 24s, 48s, then capped at
+// 60s. The jitter keeps many clients from synchronizing against the server
+// after a shared outage - it is taken from the clock's low bits, so we avoid
+// rand() and global state.
 static DWORD NetBackoffMs(int failures, ULONGLONG tickSeed) {
     if (failures <= 0) return TIMER_INTERVAL;
 
-    // Skift i stedet for pow, og stopp for overflow kan bli et tema.
+    // Shift instead of pow, and stop before overflow can become an issue.
     DWORD base = TIMER_INTERVAL;
     for (int i = 0; i < failures && base < NET_RETRY_MAX; ++i) base *= 2;
     if (base > NET_RETRY_MAX) base = NET_RETRY_MAX;
 
-    // +/- 12,5 %: base/8 spredt over 256 trinn.
+    // +/- 12.5 %: base/8 spread over 256 steps.
     DWORD span  = base / 4;
     DWORD delta = (DWORD)(tickSeed & 0xFF) * span / 255;
     DWORD out   = base - span / 2 + delta;
 
-    // Jitteren legges PAA basen, saa den kan skyve oss over taket. Uten
-    // denne klemmingen ga failures>=5 opptil 67,5 s - maalt, ikke antatt.
+    // The jitter is added ON TOP of the base, so it can push us over the cap.
+    // Without this clamp, failures>=5 gave up to 67.5 s - measured, not
+    // assumed.
     if (out > NET_RETRY_MAX) out = NET_RETRY_MAX;
     return out;
 }
 
-// Prisvarsler (fase 23). Har et varsel fyrt? signedLevel baerer siden i
-// fortegnet: +nivaa ble satt OVER prisen og fyrer naar prisen er >= nivaaet,
-// -nivaa ble satt UNDER og fyrer naar den er <=. now <= 0 er "ingen pris
-// enda" (rett etter et symbolbytte er lastPrice 0) og fyrer aldri - uten
-// vernet ville hvert nedre varsel fyrt paa 0 (fallgruve 17).
+// Price alerts (phase 23). Has an alert fired? signedLevel carries the side in
+// its sign: +level was set ABOVE the price and fires when the price is >= the
+// level, -level was set BELOW and fires when it is <=. now <= 0 is "no price
+// yet" (right after a symbol switch lastPrice is 0) and never fires - without
+// the guard every lower alert would have fired on 0 (pitfall 17).
 static BOOL AlertHit(double now, double signedLevel) {
     if (now <= 0.0 || signedLevel == 0.0) return FALSE;
     return (signedLevel > 0.0) ? (now >= signedLevel) : (now <= -signedLevel);
 }
 
-// Runder et nivaa pekt ut med musa til den stoerste tierpotensen som ikke er
-// stoerre enn en piksel i pris (pxStep), saa varselet flytter seg under en
-// piksel fra der det ble satt, men leser 75120 og ikke 75123.4567. Gulvet er
-// 0,01: finere enn det vises ikke noe sted (fallgruve 16 - terskelen regnes
-// fra piksler, ikke fra et fast tall i dollar).
+// Rounds a level pointed out with the mouse to the largest power of ten that
+// is not larger than one pixel in price (pxStep), so the alert moves less
+// than a pixel from where it was set, but reads 75120 and not 75123.4567. The
+// floor is 0.01: nothing finer is shown anywhere (pitfall 16 - the threshold
+// is computed from pixels, not from a fixed dollar amount).
 //
-// En trapp, ikke pow(10, floor(log10(x))): de to kallene alene la 28 KB paa
-// exe-en (187 -> 216 KB, maalt - CRT-ens pow med tabeller), for en avrunding
-// som har ni mulige svar. Under 1 deles det paa 10 eller 100 i stedet for aa
-// gange med 0,1 eller 0,01, som ikke finnes eksakt: 751235 / 10 er riktig
-// avrundet, 751235 * 0,1 er 75123,500000000015.
+// A staircase, not pow(10, floor(log10(x))): those two calls alone added
+// 28 KB to the exe (187 -> 216 KB, measured - the CRT's pow with tables), for
+// a rounding that has nine possible answers. Below 1 it divides by 10 or 100
+// instead of multiplying by 0.1 or 0.01, which do not exist exactly:
+// 751235 / 10 is correctly rounded, 751235 * 0.1 is 75123.500000000015.
 static double AlertRound(double price, double pxStep) {
     if (price <= 0.0 || pxStep <= 0.0) return price;
     double r;
@@ -783,23 +801,23 @@ static double AlertRound(double price, double pxStep) {
     return (r > 0.0) ? r : price;
 }
 
-// Glidende snitt (fase 25). En stegmaskin, ikke en tabell: snittene lagres
-// ikke noe sted. Opptegningen mater lysene gjennom IndStep og tegner verdien
-// i det den faller ut, saa overlegget koster 40 byte stakk og ingen
-// double[MAX_CANDLES] ved siden av candles[].
+// Moving averages (phase 25). A step machine, not a table: the averages are
+// not stored anywhere. The painting feeds the candles through IndStep and
+// draws the value as it comes out, so the overlay costs 40 bytes of stack and
+// no double[MAX_CANDLES] next to candles[].
 //
-// SMA: rullende sum over de siste period lukkekursene. c er HELE bufferet,
-// ikke bare lyset, fordi steget maa trekke fra lyset som faller ut av
-// vinduet. Maskinen kan startes paa et hvilket som helst lys; verdien er
-// definert fra og med det period-te lyset den har faatt.
-// EMA: saadd med SMA av de foerste period lysene, deretter
-// v += k * (close - v) med k = 2 / (period + 1) - den vanlige definisjonen
-// (TradingView, Binance). EMA har uendelig hukommelse, saa den mates ALLTID
-// fra lys 0: startet midt i bufferet ville linja avhenge av hvor utsnittet
-// begynner, og flytte seg under panorering.
+// SMA: rolling sum over the last period closes. c is the WHOLE buffer, not
+// just the candle, because the step must subtract the candle that drops out
+// of the window. The machine can be started on any candle; the value is
+// defined from the period-th candle it has been fed onward.
+// EMA: seeded with the SMA of the first period candles, then
+// v += k * (close - v) with k = 2 / (period + 1) - the usual definition
+// (TradingView, Binance). EMA has infinite memory, so it is ALWAYS fed from
+// candle 0: started in the middle of the buffer, the line would depend on
+// where the view begins, and move during panning.
 //
-// Returnerer TRUE naar s->val er definert. Ingen pow, ingen log: bare
-// + - * /, saa CRT-en vokser ikke (fallgruve 75).
+// Returns TRUE when s->val is defined. No pow, no log: only
+// + - * /, so the CRT does not grow (pitfall 75).
 typedef struct { int period; BOOL ema; int fed; double sum; double val; } IndState;
 
 static void IndInit(IndState* s, int period, BOOL ema) {
@@ -828,19 +846,19 @@ static BOOL IndStep(IndState* s, const Candle* c, int i) {
     return TRUE;
 }
 
-// Foerste lys maskinen maa mates fra for at verdien paa lys idx (og alle
-// etter) skal vaere den riktige: 0 for EMA, idx - period + 1 for SMA.
+// First candle the machine must be fed from for the value on candle idx (and
+// all after it) to be the correct one: 0 for EMA, idx - period + 1 for SMA.
 static int IndFeedStart(int idx, int period, BOOL ema) {
-    if (period < 1) period = 1;   // samme vern som IndInit, ellers mates ingenting
+    if (period < 1) period = 1;   // same guard as IndInit, otherwise nothing is fed
     int s = ema ? 0 : idx - period + 1;
     return (s > 0) ? s : 0;
 }
 
 #ifdef TICKER_PROBE
-// Bare testbygg: snittet paa ett lys, FALSE naar det ikke er definert der
-// (for faa lys foran). Probe-felt 36/37 og enhetstestene leser denne;
-// opptegningen bruker maskinen direkte og faar hele utsnittet, og
-// forklaringens verdi, i ett gjennomloep.
+// Test build only: the average on one candle, FALSE when it is not defined
+// there (too few candles before it). Probe fields 36/37 and the unit tests
+// read this; the painting uses the machine directly and gets the whole view,
+// and the legend's value, in one pass.
 static BOOL IndValueAt(const Candle* c, int n, int period, BOOL ema, int idx, double* out) {
     if (idx < 0 || idx >= n) return FALSE;
     IndState s;
@@ -852,27 +870,29 @@ static BOOL IndValueAt(const Candle* c, int n, int period, BOOL ema, int idx, do
 }
 #endif
 
-// Dagens session, VWAP og dagens hoy/lav (fase 27). Rene funksjoner av
-// candles[], som snittene over: ingenting lagres, alt regnes ut under
-// opptegningen.
+// Today's session, VWAP and today's high/low (phase 27). Pure functions of
+// candles[], like the averages above: nothing is stored, everything is
+// computed during painting.
 //
-// Sessionen er UTC-DOEGNET - Binance sine dagslys og 24-timerstall bryter
-// ved 00:00 UTC, og det samme gjoer VWAP hos Bloomberg og TradingView. Ikke
-// det synlige utsnittet: PriceRange legger 8 % luft rundt utsnittets hoy og
-// lav, saa to linjer paa utsnittets ekstremer ville staatt paa noeyaktig
-// samme sted i hvert eneste bilde, og en VWAP forankret i foerste synlige
-// lys ville hoppet for hvert lys under panorering (samme avgjoerelse som
-// tidsaksen: forankret i tiden, ikke i indeksen).
+// The session is the UTC DAY - Binance's daily candles and 24-hour figures
+// break at 00:00 UTC, and so does VWAP at Bloomberg and TradingView. Not the
+// visible view: PriceRange adds 8 % padding around the view's high and low,
+// so two lines at the view's extremes would have stood in exactly the same
+// place in every single frame, and a VWAP anchored in the first visible
+// candle would have jumped with every candle during panning (same decision
+// as the time axis: anchored in time, not in the index).
 //
-// SessionStartAt gir indeksen til foerste lys i doegnet lys idx hoerer til,
-// -1 naar sessionen ikke finnes: tomt buffer, eller lys paa et doegn eller
-// mer (da ER lyset sessionen, og hoy/lav staar alt i hover-boksen).
-// Binaersoek - openTime er sortert, og et lineaert soek bakover ville vaert
-// 1440 64-bits sammenlikninger per bilde sent paa doegnet ved 1m.
-// *complete: bufferet rekker tilbake til doegnets start. Det gjoer det naar
-// det ligger et eldre lys foran, naar foerste lys aapner paa doegnskiftet,
-// eller naar historikken er slutt. Er sessionen ufullstendig, tegnes
-// ingenting: en "dagens hoy" regnet av de siste seks timene er et feil tall.
+// SessionStartAt gives the index of the first candle in the day that candle
+// idx belongs to, -1 when the session does not exist: empty buffer, or
+// candles of a day or more (then the candle IS the session, and high/low are
+// already in the hover box).
+// Binary search - openTime is sorted, and a linear search backward would be
+// 1440 64-bit comparisons per frame late in the day at 1m.
+// *complete: the buffer reaches back to the start of the day. It does when
+// there is an older candle before it, when the first candle opens on the day
+// rollover, or when the history has ended. If the session is incomplete,
+// nothing is drawn: a "today's high" computed from the last six hours is a
+// wrong number.
 #define DAY_MS 86400000LL
 
 static int SessionStartAt(const Candle* c, int n, int idx, long long intervalMs,
@@ -881,7 +901,7 @@ static int SessionStartAt(const Candle* c, int n, int idx, long long intervalMs,
     if (n <= 0 || idx < 0 || idx >= n) return -1;
     if (intervalMs <= 0 || intervalMs >= DAY_MS) return -1;
     long long dayStart = (c[idx].openTime / DAY_MS) * DAY_MS;
-    int lo = 0, hi = idx;                 // foerste i med openTime >= dayStart
+    int lo = 0, hi = idx;                 // first i with openTime >= dayStart
     while (lo < hi) {
         int mid = lo + (hi - lo) / 2;
         if (c[mid].openTime >= dayStart) hi = mid; else lo = mid + 1;
@@ -890,13 +910,13 @@ static int SessionStartAt(const Candle* c, int n, int idx, long long intervalMs,
     return lo;
 }
 
-// Dagens session: doegnet til det siste lyset.
+// Today's session: the day of the last candle.
 static int SessionStart(const Candle* c, int n, long long intervalMs,
                         BOOL histDone, BOOL* complete) {
     return SessionStartAt(c, n, n - 1, intervalMs, histDone, complete);
 }
 
-// Hoyeste high og laveste low over [s, n).
+// Highest high and lowest low over [s, n).
 static void SessionHiLo(const Candle* c, int s, int n, double* outHi, double* outLo) {
     double hi = c[s].high, lo = c[s].low;
     for (int i = s + 1; i < n; ++i) {
@@ -907,12 +927,13 @@ static void SessionHiLo(const Candle* c, int s, int n, double* outHi, double* ou
     *outLo = lo;
 }
 
-// VWAP: sum(typisk pris x volum) / sum(volum) fra doegnets start, med typisk
-// pris (H + L + C) / 3 - den vanlige definisjonen paa lys. Stegmaskin som
-// IndState: mates fra sessionens foerste lys, og verdien faller ut per lys.
-// FALSE til det finnes volum aa dele paa. Den som mater, nullstiller ved
-// hvert doegnskifte (se DrawVwap): hvert doegn har sin egen VWAP, saa linja
-// og hover-verdien er definert ogsaa naar utsnittet staar i gaarsdagen.
+// VWAP: sum(typical price x volume) / sum(volume) from the start of the day,
+// with typical price (H + L + C) / 3 - the usual definition on candles. Step
+// machine like IndState: fed from the session's first candle, and the value
+// comes out per candle. FALSE until there is volume to divide by. The feeder
+// resets at every day rollover (see DrawVwap): each day has its own VWAP, so
+// the line and the hover value are defined also when the view is in
+// yesterday.
 typedef struct { double pv; double v; double val; } VwapState;
 
 static void VwapInit(VwapState* s) { s->pv = 0.0; s->v = 0.0; s->val = 0.0; }
@@ -926,9 +947,9 @@ static BOOL VwapStep(VwapState* s, const Candle* c) {
 }
 
 #ifdef TICKER_PROBE
-// Bare testbygg: VWAP paa ett lys i lysets eget doegn, FALSE naar doegnet
-// ikke er helt i bufferet eller er uten volum. Probe-felt 41 og
-// enhetstestene leser denne.
+// Test build only: VWAP on one candle within the candle's own day, FALSE when
+// the day is not wholly in the buffer or has no volume. Probe field 41 and
+// the unit tests read this.
 static BOOL VwapValueAt(const Candle* c, int n, long long intervalMs,
                         BOOL histDone, int idx, double* out) {
     BOOL full = FALSE;
@@ -943,16 +964,18 @@ static BOOL VwapValueAt(const Candle* c, int n, long long intervalMs,
 }
 #endif
 
-// Gaarsdagen (fase 28): forrige UTC-doegns hoy, lav og sluttkurs som
-// referansenivaaer. Rene funksjoner av candles[] som resten av sessionkoden.
+// Yesterday (phase 28): the previous UTC day's high, low and close as
+// reference levels. Pure functions of candles[] like the rest of the session
+// code.
 //
-// PrevSession gir gaarsdagens foerste lys, og i *outEnd dagens foerste (lyset
-// ETTER gaarsdagens siste) - sessionen er [retur, *outEnd). -1 naar den ikke
-// finnes: ingen session i dag (tomt buffer, 1d-lys), dagens foerste lys
-// ligger forrest i bufferet, eller lyset foran det ligger ikke i doegnet foer
-// (et hull paa et doegn eller mer - da finnes ingen gaarsdag aa vise).
-// *complete som i SessionStartAt: en "gaarsdagens hoy" regnet av de siste ti
-// timene av gaarsdagen er et feil tall, og tegnes ikke.
+// PrevSession gives yesterday's first candle, and in *outEnd today's first
+// (the candle AFTER yesterday's last) - the session is [return, *outEnd). -1
+// when it does not exist: no session today (empty buffer, 1d candles), today's
+// first candle is at the front of the buffer, or the candle before it is not
+// in the previous day (a gap of a day or more - then there is no yesterday to
+// show).
+// *complete as in SessionStartAt: a "yesterday's high" computed from the last
+// ten hours of yesterday is a wrong number, and is not drawn.
 static int PrevSession(const Candle* c, int n, long long intervalMs, BOOL histDone,
                        int* outEnd, BOOL* complete) {
     *complete = FALSE;
@@ -965,37 +988,37 @@ static int PrevSession(const Candle* c, int n, long long intervalMs, BOOL histDo
     return SessionStartAt(c, n, s1 - 1, intervalMs, histDone, complete);
 }
 
-// Maa bufferet fylles bakover for at dagens OG gaarsdagens session skal
-// vaere hele? Fase 27 stoppet paa dagens doegnskifte; gaarsdagen trenger ett
-// doegn til (ved 1m hoeyst 2880 lys, aatte hentinger). FALSE naar historikken
-// er slutt, naar det ikke finnes sessioner (1d), og naar gaarsdagen ikke
-// finnes (hull) - da er det ingenting aa hente seg fram til.
+// Must the buffer be filled backward for today's AND yesterday's session to
+// be whole? Phase 27 stopped at today's day rollover; yesterday needs one more
+// day (at 1m at most 2880 candles, eight fetches). FALSE when the history has
+// ended, when there are no sessions (1d), and when yesterday does not exist
+// (gap) - then there is nothing to fetch toward.
 static BOOL SessionsNeedHistory(const Candle* c, int n, long long intervalMs, BOOL histDone) {
     if (histDone) return FALSE;
     BOOL full = FALSE;
     int s1 = SessionStart(c, n, intervalMs, histDone, &full);
     if (s1 < 0) return FALSE;
-    if (!full || s1 == 0) return TRUE;   // s1 == 0: dagen er dekket, gaarsdagen ligger foran bufferet
+    if (!full || s1 == 0) return TRUE;   // s1 == 0: today is covered, yesterday lies before the buffer
     int end = -1;
     BOOL prevFull = FALSE;
     int s0 = PrevSession(c, n, intervalMs, histDone, &end, &prevFull);
     return (s0 >= 0 && !prevFull);
 }
 
-// Skiller "ingen lagret posisjon" fra en ekte koordinat, som godt kan vaere
-// negativ paa en skjerm til venstre for eller over den primaere.
+// Distinguishes "no saved position" from a real coordinate, which may well be
+// negative on a monitor to the left of or above the primary one.
 #define GEOM_UNSET  ((int)0x80000000)
 
 // ---------------------------------------------------------------------------
-// Registret. HKCU\Software\TickC. Aldri en forutsetning for at appen
-// starter - feiler lesningen, faller vi tilbake pa BTC/USDT 1m.
-// Plassert her, blant de rene hjelpefunksjonene, fordi ApplyConfigChoice
-// lenger nede kaller SaveConfig. Fila har ingen forward-deklarasjoner.
+// The registry. HKCU\Software\TickC. Never a precondition for the app
+// starting - if reading fails, we fall back to BTC/USDT 1m.
+// Placed here, among the pure helper functions, because ApplyConfigChoice
+// further down calls SaveConfig. The file has no forward declarations.
 // ---------------------------------------------------------------------------
 
-// Testbygget har egne navn her i kilden, ikke i et skript som skriver den om:
-// da kan ingen probe-kjoering roere brukerens innstillinger eller autostart.
-// REG_PATH_OLD er navnet fra foer fase 30; MigrateLegacyNames flytter det.
+// The test build has its own names here in the source, not in a script that
+// rewrites it: then no probe run can touch the user's settings or autostart.
+// REG_PATH_OLD is the name from before phase 30; MigrateLegacyNames moves it.
 #ifdef TICKER_PROBE
 #define REG_PATH     L"Software\\TickerTest"
 #define REG_PATH_OLD L"Software\\TickerTestOld"
@@ -1019,7 +1042,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->intervalMs = INTERVALS[0].ms;
     ctx->showVol    = TRUE;
     ctx->showInd    = TRUE;
-    ctx->showVolDesk = FALSE;   // fase 26: skrivebordet starter rent
+    ctx->showVolDesk = FALSE;   // phase 26: the desktop starts clean
     ctx->showIndDesk = FALSE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
@@ -1035,9 +1058,9 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD hasPos = RegReadDword(k, L"PanelHasPos", 0);
     DWORD px = RegReadDword(k, L"PanelX", 0);
     DWORD py = RegReadDword(k, L"PanelY", 0);
-    DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // fase 22, paa som standard
-    DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // fase 25, paa som standard
-    DWORD svd = RegReadDword(k, L"ShowVolumeDesktop", 0);       // fase 26, AV som standard
+    DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // phase 22, on by default
+    DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // phase 25, on by default
+    DWORD svd = RegReadDword(k, L"ShowVolumeDesktop", 0);       // phase 26, OFF by default
     DWORD sid = RegReadDword(k, L"ShowIndicatorsDesktop", 0);
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
@@ -1045,9 +1068,9 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->showVolDesk = (svd != 0);
     ctx->showIndDesk = (sid != 0);
 
-    // Bundet sjekk. Et register redigert for hand, eller etterlatt av en
-    // nyere versjon med flere symboler, skal ikke kunne indeksere utenfor
-    // tabellen.
+    // Bounds check. A registry edited by hand, or left behind by a newer
+    // version with more symbols, must not be able to index outside the
+    // table.
     if (sy < (DWORD)SYMBOL_COUNT)   ctx->symIdx = (int)sy;
     if (iv < (DWORD)INTERVAL_COUNT) {
         ctx->ivIdx      = (int)iv;
@@ -1056,15 +1079,15 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     if (w >= 240 && w <= 8192) *outW = (int)w;
     if (h >= 160 && h <= 8192) *outH = (int)h;
 
-    // Posisjonen kan vaere negativ paa en skjerm til venstre for eller over
-    // den primaere, saa den tolkes som signed. PanelHasPos skiller "ikke
-    // lagret" fra "lagret som 0,0".
+    // The position can be negative on a monitor to the left of or above
+    // the primary one, so it is read as signed. PanelHasPos distinguishes
+    // "not saved" from "saved as 0,0".
     if (hasPos) { *outX = (int)(LONG)px; *outY = (int)(LONG)py; }
 }
 
-// Sist valgte modus fra tray-menyen. Egen verdi og egne funksjoner, ikke en
-// del av SaveConfig: den skrives i det brukeren velger, ikke i WM_DESTROY,
-// som aldri kjoerer naar prosessen drepes utenfra.
+// Last chosen mode from the tray menu. Its own value and its own functions,
+// not part of SaveConfig: it is written the moment the user chooses, not in
+// WM_DESTROY, which never runs when the process is killed from outside.
 static BOOL LoadDesktopMode(void) {
     HKEY k;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &k) != ERROR_SUCCESS) {
@@ -1087,12 +1110,12 @@ static void SaveDesktopMode(BOOL on) {
     RegCloseKey(k);
 }
 
-// Start ved paalogging (fase 13). Bor i Run-nokkelen, ikke under REG_PATH:
-// det er Explorer som leser den ved paalogging. Innholdet er stien til exe-en
-// i anforselstegn, saa en sti med mellomrom ikke deles opp til et program og
-// argumenter.
-// Testbygget skriver aldri i den ekte Run-nokkelen: en verdi der ville startet
-// testbygget ved neste paalogging.
+// Start at sign-in (phase 13). Lives in the Run key, not under REG_PATH: it
+// is Explorer that reads it at sign-in. The content is the path to the exe in
+// quotation marks, so a path with spaces is not split into a program and
+// arguments.
+// The test build never writes to the real Run key: a value there would start
+// the test build at the next sign-in.
 #ifdef TICKER_PROBE
 #define AUTOSTART_KEY       L"Software\\TickerTestRun"
 #define AUTOSTART_VALUE     L"TickerTest"
@@ -1103,8 +1126,9 @@ static void SaveDesktopMode(BOOL on) {
 #define AUTOSTART_VALUE_OLD L"Ticker"
 #endif
 
-// Stien i anforselstegn, "C:\Mappe med mellomrom\TickC.exe". FALSE naar
-// stien ikke passer i MAX_PATH - en avkuttet sti skal aldri havne i registret.
+// The path in quotation marks, "C:\Folder with spaces\TickC.exe". FALSE when
+// the path does not fit in MAX_PATH - a truncated path must never end up in
+// the registry.
 static BOOL AutostartCommand(wchar_t* out, size_t cch) {
     wchar_t exe[MAX_PATH];
     DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH);
@@ -1112,26 +1136,27 @@ static BOOL AutostartCommand(wchar_t* out, size_t cch) {
     return swprintf_s(out, cch, L"\"%s\"", exe) > 0;
 }
 
-// Haken i tray-menyen: finnes verdien, uansett type og innhold? Den kan peke
-// et annet sted enn exe-en som kjorer; det avgjor ToggleAutostart.
+// The check mark in the tray menu: does the value exist, whatever its type and
+// content? It can point somewhere other than the running exe; ToggleAutostart
+// decides that.
 static BOOL AutostartPresent(void) {
     return RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
                         RRF_RT_ANY, NULL, NULL, NULL) == ERROR_SUCCESS;
 }
 
-// Klikk paa "Start ved paalogging":
-//   verdi == gjeldende sti -> slett
-//   ingen verdi            -> skriv gjeldende sti
-//   noe annet              -> skriv gjeldende sti (exe-en er flyttet)
-// Siste gren er grunnen til at haken betyr "verdien finnes", ikke "verdien
-// stemmer": et klikk paa en avkrysset, men foreldet, oppforing skal rette
-// stien, ikke skru av autostart.
+// Click on "Start at sign-in":
+//   value == current path -> delete
+//   no value              -> write current path
+//   anything else         -> write current path (the exe has moved)
+// The last branch is why the check mark means "the value exists", not "the
+// value is correct": a click on a checked but stale entry should fix the
+// path, not turn autostart off.
 static void ToggleAutostart(void) {
     if (g_isDuplicate) return;
     wchar_t want[MAX_PATH + 2], have[MAX_PATH + 2];
     if (!AutostartCommand(want, MAX_PATH + 2)) return;
-    // Feil type, eller for lang til bufferet (ERROR_MORE_DATA), kan umulig
-    // vaere vaar sti og havner i "noe annet".
+    // Wrong type, or too long for the buffer (ERROR_MORE_DATA), cannot
+    // possibly be our path and falls under "anything else".
     DWORD cb = sizeof(have);
     BOOL same = RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
                              RRF_RT_REG_SZ, NULL, have, &cb) == ERROR_SUCCESS &&
@@ -1151,32 +1176,33 @@ static void ToggleAutostart(void) {
     RegCloseKey(k);
 }
 
-// Navnebyttet Ticker -> TickC (fase 30). Kjoerer ved hver oppstart, foer
-// noe leses fra registret, og gjoer bare noe naar det gamle navnet finnes.
+// The rename Ticker -> TickC (phase 30). Runs at every startup, before
+// anything is read from the registry, and only does something when the old
+// name exists.
 //
-// Innstillingene flyttes bare naar den nye nokkelen ikke finnes: finnes
-// begge, vinner den nye, og den gamle roeres ikke. Den gamle slettes foerst
-// naar kopien lyktes; feiler kopien, slettes den halve nye nokkelen, saa
-// neste oppstart proever igjen i stedet for aa tro at jobben er gjort.
+// The settings are moved only when the new key does not exist: if both
+// exist, the new one wins, and the old one is left untouched. The old one is
+// deleted only once the copy succeeded; if the copy fails, the half-made new
+// key is deleted, so the next startup tries again instead of believing the
+// job is done.
 //
-// Autostart skrives med stien til exe-en som kjoerer, ikke med den gamle
-// verdien: den peker paa ticker.exe, som ikke finnes lenger. Den gamle
-// verdien slettes ogsaa naar en ny alt finnes - ellers starter begge ved
-// paalogging - men aldri foer den nye er paa plass.
+// Autostart is written with the path to the running exe, not with the old
+// value: that points to ticker.exe, which no longer exists. The old value is
+// also deleted when a new one already exists - otherwise both start at
+// sign-in - but never before the new one is in place.
 //
-// Et duplikat og en hovedinstans kan starte samtidig. Da gjoer den ene
-// jobben og den andre finner ingenting aa gjoere, eller begge skriver det
-// samme.
+// A duplicate and a main instance can start at the same time. Then one does
+// the job and the other finds nothing to do, or both write the same thing.
 static void MigrateLegacyNames(void) {
-    int done = 0;   // bitmasken i g_probeMigrate
+    int done = 0;   // the bitmask in g_probeMigrate
     HKEY kOld, kNew;
 
     if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH_OLD, 0, KEY_READ, &kOld) == ERROR_SUCCESS) {
         if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &kNew) == ERROR_SUCCESS) {
             RegCloseKey(kNew);
             RegCloseKey(kOld);
-        // KEY_ALL_ACCESS, ikke KEY_WRITE: med bare KEY_WRITE paa maalet svarer
-        // RegCopyTreeW ERROR_ACCESS_DENIED (maalt, fallgruve 97).
+        // KEY_ALL_ACCESS, not KEY_WRITE: with only KEY_WRITE on the target
+        // RegCopyTreeW returns ERROR_ACCESS_DENIED (measured, pitfall 97).
         } else if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0, KEY_ALL_ACCESS,
                                    NULL, &kNew, NULL) == ERROR_SUCCESS) {
             LSTATUS copied = RegCopyTreeW(kOld, NULL, kNew);
@@ -1221,7 +1247,7 @@ static void SaveConfig(const AppContext* ctx) {
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
                         KEY_WRITE, NULL, &k, NULL) != ERROR_SUCCESS) {
-        return;   // ingen skriverett: stille, appen fungerer likevel
+        return;   // no write access: silent, the app works anyway
     }
     DWORD sy = (DWORD)ctx->symIdx, iv = (DWORD)ctx->ivIdx;
     RegSetValueExW(k, L"SymbolIndex",   0, REG_DWORD, (const BYTE*)&sy, sizeof(sy));
@@ -1236,15 +1262,16 @@ static void SaveConfig(const AppContext* ctx) {
     RegCloseKey(k);
 }
 
-// Prisvarslene (fase 23): en REG_BINARY per symbol, "Alerts_BTCUSDT", med
-// nivaaene som doubler med siden i fortegnet. Navnet er API-symbolet, ikke
-// indeksen: tabellen kan faa flere symboler eller ny rekkefolge, og et varsel
-// paa 75 000 skal aldri havne paa SOL. Egen funksjon, ikke en del av
-// SaveConfig, av samme grunn som SaveDesktopMode: den skrives i det brukeren
-// setter eller fjerner et varsel, og naar et fyrer - ikke i WM_DESTROY, som
-// aldri kjoerer naar prosessen drepes. Et symbol uten varsler faar verdien
-// slettet. Et duplikat skriver ikke og leser ikke: varslene det setter lever
-// med panelet, og et varsel i registret fyrer en gang, fra hovedinstansen.
+// The price alerts (phase 23): one REG_BINARY per symbol, "Alerts_BTCUSDT",
+// with the levels as doubles with the side in the sign. The name is the API
+// symbol, not the index: the table may get more symbols or a new order, and an
+// alert at 75 000 must never end up on SOL. A separate function, not part of
+// SaveConfig, for the same reason as SaveDesktopMode: it is written the moment
+// the user sets or removes an alert, and when one fires - not in WM_DESTROY,
+// which never runs when the process is killed. A symbol without alerts gets
+// its value deleted. A duplicate neither writes nor reads: the alerts it sets
+// live with the panel, and an alert in the registry fires once, from the main
+// instance.
 static void SaveAlerts(const AppContext* ctx) {
     if (g_isDuplicate) return;
     HKEY k;
@@ -1266,9 +1293,9 @@ static void SaveAlerts(const AppContext* ctx) {
     RegCloseKey(k);
 }
 
-// Bundet sjekk som i LoadConfig: feil type, en lengde som ikke er et helt
-// antall doubler, for mange, NaN, null eller et tall uten mening forkastes
-// enkeltvis, og resten beholdes.
+// Bounds check as in LoadConfig: wrong type, a length that is not a whole
+// number of doubles, too many, NaN, zero or a meaningless number are
+// discarded one by one, and the rest is kept.
 static void LoadAlerts(AppContext* ctx) {
     if (g_isDuplicate) return;
     HKEY k;
@@ -1288,8 +1315,8 @@ static void LoadAlerts(AppContext* ctx) {
         int n = (int)(cb / sizeof(double));
         for (int i = 0; i < n && ctx->alertCount[s] < ALERT_MAX; ++i) {
             double a = fabs(tmp[i]);
-            // Skrevet som "ikke innenfor", saa NaN - som svarer nei paa alle
-            // sammenlikninger - faller ut sammen med uendelig.
+            // Written as "not inside", so NaN - which answers no to every
+            // comparison - drops out together with infinity.
             if (!(a > 0.0 && a < ALERT_PRICE_MAX)) continue;
             ctx->alerts[s][ctx->alertCount[s]++] = tmp[i];
         }
@@ -1297,12 +1324,13 @@ static void LoadAlerts(AppContext* ctx) {
     RegCloseKey(k);
 }
 
-// Skrivebordsmodus lagrer ikke: flaten er hele skjermen i WorkerW-koordinater,
-// og den ville blitt vanlig modus' "lagrede storrelse" ved neste oppstart.
+// Desktop mode does not save: the surface is the whole screen in WorkerW
+// coordinates, and it would become panel mode's "saved size" at the next
+// startup.
 //
-// Globalene oppdateres ogsaa (fase 12): PlacePopupInitially leser dem, og
-// panelet lages paa nytt hver gang modus byttes. Uten dette ville en tur
-// innom skrivebordsmodus lagt panelet der det sto ved oppstart.
+// The globals are updated too (phase 12): PlacePopupInitially reads them, and
+// the panel is recreated every time the mode changes. Without this, a trip
+// through desktop mode would put the panel where it stood at startup.
 static void SaveGeometry(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0 || g_desktopMode) return;
     g_savedPanelX = x; g_savedPanelY = y;
@@ -1323,10 +1351,10 @@ static void SaveGeometry(int x, int y, int w, int h) {
     RegCloseKey(k);
 }
 
-// Lagrer posisjon og storrelse slik vinduet staar NAA. Minimert eller
-// maksimert vindu lagres ikke som saadan - da ville vi husket en
-// oppgavelinje-strimmel eller hele skjermen som "brukerens storrelse".
-// GetWindowPlacement gir den gjenopprettede geometrien i begge tilfeller.
+// Saves position and size as the window stands NOW. A minimized or
+// maximized window is not saved as such - then we would remember a
+// taskbar strip or the whole screen as "the user's size".
+// GetWindowPlacement gives the restored geometry in both cases.
 static void SaveWindowPlacement(HWND hwnd) {
     if (!hwnd) return;
     WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
@@ -1335,28 +1363,28 @@ static void SaveWindowPlacement(HWND hwnd) {
     SaveGeometry(r.left, r.top, r.right - r.left, r.bottom - r.top);
 }
 
-// Er den lagrede posisjonen fortsatt paa en skjerm som finnes? En posisjon
-// fra en frakoblet skjerm ville lagt vinduet utenfor alt synlig.
+// Is the saved position still on a monitor that exists? A position from a
+// disconnected monitor would put the window outside everything visible.
 static BOOL PlacementIsVisible(int x, int y, int w, int h) {
     RECT r = { x, y, x + w, y + h };
     return MonitorFromRect(&r, MONITOR_DEFAULTTONULL) != NULL;
 }
 
-// Sentrerer vinduet paa den skjermen det staar paa, i fabrikkstorrelse.
-// SWP_NOZORDER | SWP_NOACTIVATE: vi endrer geometri, ikke stablerekkefolge
-// eller fokus - brukeren kan ha trykket Ctrl+0 fra et annet vindu.
+// Centers the window on the monitor it is on, at the factory size.
+// SWP_NOZORDER | SWP_NOACTIVATE: we change geometry, not z-order or
+// focus - the user may have pressed Ctrl+0 from another window.
 static void ResetToDefaultView(HWND hwnd) {
     if (!hwnd) return;
 
-    // Var vinduet maksimert, maa det gjenopprettes forst - ellers ville
-    // SetWindowPos skrevet en storrelse som OS-et overstyrer ved restore.
+    // If the window was maximized, it must be restored first - otherwise
+    // SetWindowPos would write a size that the OS overrides on restore.
     //
-    // IsIconic hoerer med av samme grunn, og av en til: et minimert vindu er
-    // fortsatt WS_VISIBLE, saa IsWindowVisible er TRUE og tray-menyens
-    // "Standardvisning" hopper over TogglePopup. Uten dette satte
-    // SetWindowPos bare den gjenopprettede geometrien mens vinduet ble
-    // staaende minimert - menypunktet gjorde ingenting synlig. Maalt etter at
-    // minimer-knappen gjorde den stien lett aa naa.
+    // IsIconic belongs here for the same reason, and one more: a minimized
+    // window is still WS_VISIBLE, so IsWindowVisible is TRUE and the tray
+    // menu's "Default view" skips TogglePopup. Without this,
+    // SetWindowPos only set the restored geometry while the window stayed
+    // minimized - the menu item did nothing visible. Measured after the
+    // minimize button made that path easy to reach.
     if (IsZoomed(hwnd) || IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
 
     HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -1364,21 +1392,21 @@ static void ResetToDefaultView(HWND hwnd) {
     if (!GetMonitorInfoW(hMon, &mi)) return;
     RECT wa = mi.rcWork;
 
-    // "DPI-skalert 1280x720". Prosessen er DPI-uvitende i dag, saa
-    // GetDpiForWindow gir 96 og MulDiv er identitet. Skrudde vi paa
-    // DPI-bevissthet ville dette vaert riktig uten flere endringer - i
-    // motsetning til et hardkodet 1280, som ville gitt et lite vindu paa en
-    // 200 %-skjerm. Vi skrur den IKKE paa her: hele layouten er i raa
-    // piksler, og vannmerkets klemmegrenser ville talt skaleringen to
-    // ganger (se DPI-kommentaren i EnsureWatermark).
+    // "DPI-scaled 1280x720". The process is DPI-unaware today, so
+    // GetDpiForWindow gives 96 and MulDiv is the identity. If we turned on
+    // DPI awareness, this would be correct without further changes - unlike
+    // a hardcoded 1280, which would give a small window on a 200 % display.
+    // We do NOT turn it on here: the whole layout is in raw pixels, and the
+    // watermark's clamp limits would count the scaling twice (see the DPI
+    // comment in EnsureWatermark).
     UINT dpi = GetDpiForWindow(hwnd);
     if (dpi == 0) dpi = 96;
     int w = MulDiv(POPUP_W, (int)dpi, 96);
     int h = MulDiv(POPUP_H, (int)dpi, 96);
 
-    // Faar ikke fabrikkstorrelsen plass, klem den. En 1280x720 sentrert paa
-    // en 1366x768-skjerm ville ellers lagt knapperaden utenfor
-    // arbeidsomraadet.
+    // If the factory size does not fit, clamp it. A 1280x720 centered on
+    // a 1366x768 display would otherwise put the button row outside the
+    // work area.
     int aw = wa.right - wa.left, ah = wa.bottom - wa.top;
     if (w > aw) w = aw;
     if (h > ah) h = ah;
@@ -1390,10 +1418,10 @@ static void ResetToDefaultView(HWND hwnd) {
     SaveWindowPlacement(hwnd);
 }
 
-// Windows 11 runder hjornene paa alle vinduer med WS_THICKFRAME, ogsaa naar
-// rammen er fjernet i WM_NCCALCSIZE. Radien paa ~8 px spiser hjornet av
-// krysset. Attributtet er 33 fra Windows 11 21H2; feiler kallet paa Windows
-// 10, finnes det ingen runding aa slaa av - derfor ingen feilhandtering.
+// Windows 11 rounds the corners of every window with WS_THICKFRAME, even when
+// the frame is removed in WM_NCCALCSIZE. The ~8 px radius eats the corner of
+// the close cross. The attribute is 33 from Windows 11 21H2; if the call fails
+// on Windows 10, there is no rounding to turn off - hence no error handling.
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
 #endif
@@ -1405,8 +1433,8 @@ static void SquareCorners(HWND hwnd) {
     DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
 }
 
-// Setter tittellinja til det aktive paret. Med ekte OS-ramme er tittelen
-// synlig i baade vinduet og oppgavelinja, saa den skal si hva man ser paa.
+// Sets the title bar to the active pair. With a real OS frame the title is
+// visible in both the window and the taskbar, so it should say what you see.
 static void UpdatePopupTitle(AppContext* ctx) {
     if (!ctx->hPopup) return;
     wchar_t title[96];
@@ -1415,9 +1443,9 @@ static void UpdatePopupTitle(AppContext* ctx) {
     SetWindowTextW(ctx->hPopup, title);
 }
 
-// Spennet folger zoomen - "(60m)" ville vaert feil sa snart man zoomer. Med
-// variabelt intervall holder det ikke lenger a telle lys som minutter: 300
-// lys a 1d er ti maneder, ikke fem timer.
+// The span follows the zoom - "(60m)" would be wrong as soon as you zoom. With
+// a variable interval it is no longer enough to count candles as minutes: 300
+// candles of 1d are ten months, not five hours.
 static void FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch) {
     long long mins = (long long)vc * intervalMs / 60000LL;
     if (mins < 60) {
@@ -1435,24 +1463,24 @@ static void FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch) {
     else    swprintf_s(out, cch, L"%lldd", days);
 }
 
-// Slar innkommende lys sammen med bufferet paa openTime: samme tidsstempel
-// oppdaterer (det siste lyset endrer seg mens det formes), nyere legges til.
-// Dette er det som gjor panorering stabil - uten det ville indeksene
-// forskjovet seg for hver henting og utsnittet drevet av gaarde.
+// Merges incoming candles with the buffer on openTime: the same timestamp
+// updates (the last candle changes while it forms), newer ones are appended.
+// This is what makes panning stable - without it the indices would shift
+// with every fetch and the view would drift away.
 static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     if (count <= 0) return;
 
-    // Hull mellom bufferet og det nye settet (panelet har vaert lukket en
-    // stund) -> start pa nytt. Ellers ville grafen tegnet en sammenhengende
-    // kurve tvers over dodtid.
+    // Gap between the buffer and the new set (the panel has been closed for
+    // a while) -> start over. Otherwise the chart would draw a continuous
+    // curve straight across dead time.
     if (ctx->candleCount > 0 &&
         in[0].openTime > ctx->candles[ctx->candleCount - 1].openTime + 2 * ctx->intervalMs) {
         ctx->candleCount = 0;
         ctx->viewStart   = 0;
         ctx->viewCount   = 0;
         ctx->followLive  = TRUE;
-        ctx->dispValid   = FALSE;   // nytt buffer: ingenting a ease fra
-        ctx->histPending = FALSE;   // nytt buffer: historikken begynner paa nytt
+        ctx->dispValid   = FALSE;   // new buffer: nothing to ease from
+        ctx->histPending = FALSE;   // new buffer: the history starts over
         ctx->histDone    = FALSE;
     }
 
@@ -1468,17 +1496,17 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
 
         long long lastT = ctx->candles[n - 1].openTime;
 
-        if (c->openTime == lastT) {          // lyset som holder pa a formes
+        if (c->openTime == lastT) {          // the candle still forming
             ctx->candles[n - 1] = *c;
             continue;
         }
 
-        if (c->openTime > lastT) {           // nytt lys
-            if (n >= MAX_CANDLES) {          // eldste faller ut
+        if (c->openTime > lastT) {           // new candle
+            if (n >= MAX_CANDLES) {          // oldest drops out
                 memmove(ctx->candles, ctx->candles + 1, (size_t)(n - 1) * sizeof(Candle));
                 n--;
                 ctx->candleCount = n;
-                ctx->frontShift++;     // UI-traden forskyver disp-indeksene mot denne
+                ctx->frontShift++;     // the UI thread shifts the disp indices by this
                 if (ctx->viewStart > 0) ctx->viewStart--;
             }
             ctx->candles[n]  = *c;
@@ -1486,22 +1514,22 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
             continue;
         }
 
-        // Eldre enn siste: oppdater hvis vi allerede har det
+        // Older than the last: update if we already have it
         for (int j = n - 2; j >= 0; --j) {
             if (ctx->candles[j].openTime == c->openTime) { ctx->candles[j] = *c; break; }
             if (ctx->candles[j].openTime <  c->openTime) break;
         }
     }
 
-    // Sto utsnittet ytterst til hoyre, skal det folge de nye lysene.
-    // Har brukeren panorert bakover, blir det staaende i ro.
+    // If the view was at the far right, it should follow the new candles.
+    // If the user has panned back, it stays put.
     //
-    // viewCount == 0 betyr "ikke satt" - panelet ble aapnet (eller symbolet
-    // byttet) for det fantes lys. Det maa bli standardutsnittet HER: ClampView
-    // under klemmer 0 opp til MIN_VIEW, og WorkerFetchKlines' egen
-    // "0 -> DEFAULT_VIEW" kommer for sent til aa se nullen. Maalt: foerste
-    // aapning viste 8 lys i stedet for 300, i alle bygg siden fase 1 - og
-    // hvert duplikat fra [ + ] aapner nettopp foer det har data.
+    // viewCount == 0 means "not set" - the panel was opened (or the symbol
+    // changed) before there were candles. It must become the default view
+    // HERE: ClampView below clamps 0 up to MIN_VIEW, and WorkerFetchKlines'
+    // own "0 -> DEFAULT_VIEW" comes too late to see the zero. Measured: the
+    // first opening showed 8 candles instead of 300, in every build since
+    // phase 1 - and every duplicate from [ + ] opens just before it has data.
     if (ctx->followLive) {
         if (ctx->viewCount <= 0) {
             ctx->viewCount = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
@@ -1511,20 +1539,20 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     ClampView(ctx);
 }
 
-// Bakfylling (fase 18): legger eldre lys FORAN bufferet. in er stigende i
-// tid, som fra ParseKlines. Kalles under laas.
+// Backfill (phase 18): puts older candles IN FRONT of the buffer. in is
+// ascending in time, as from ParseKlines. Called under the lock.
 //
-// Lys som ikke er eldre enn candles[0] kastes - endTime i spoerringen er
-// candles[0].openTime - 1, saa de skal ikke finnes, men serveren bestemmer.
-// Av resten tas de NYESTE som faar plass under MAX_CANDLES; de eldste
-// ryker, og bufferet er da fullt. Utsnittet flyttes k plasser saa de samme
-// lysene staar under det, og frontShift telles ned saa UI-traden flytter
-// visning, hover og pan-anker like mye. followLive er uroert: et utsnitt
-// som fulgte siste lys, gjoer det fortsatt.
+// Candles that are not older than candles[0] are dropped - endTime in the
+// query is candles[0].openTime - 1, so they should not exist, but the server
+// decides. Of the rest, the NEWEST that fit under MAX_CANDLES are taken; the
+// oldest are lost, and the buffer is then full. The view is moved k places so
+// the same candles stand under it, and frontShift is counted down so the UI
+// thread moves display, hover and pan anchor by the same amount. followLive
+// is untouched: a view that followed the last candle still does.
 //
-// histDone settes naar bufferet er fullt, og naar ingenting av det som kom
-// var brukbart: da har serveren ikke noe eldre, og neste vegg-treff skal
-// ikke spoerre igjen.
+// histDone is set when the buffer is full, and when nothing of what arrived
+// was usable: then the server has nothing older, and the next wall hit should
+// not ask again.
 static void PrependCandles(AppContext* ctx, const Candle* in, int count) {
     if (count <= 0 || ctx->candleCount <= 0) return;
 
@@ -1535,14 +1563,14 @@ static void PrependCandles(AppContext* ctx, const Candle* in, int count) {
     int room = MAX_CANDLES - ctx->candleCount;
     int k    = (usable < room) ? usable : room;
     if (k > 0) {
-        const Candle* src = in + (usable - k);   // de nyeste av de brukbare
+        const Candle* src = in + (usable - k);   // the newest of the usable ones
         memmove(ctx->candles + k, ctx->candles, (size_t)ctx->candleCount * sizeof(Candle));
         memcpy(ctx->candles, src, (size_t)k * sizeof(Candle));
         ctx->candleCount += k;
         ctx->frontShift  -= k;
-        // viewCount 0 er "vis alt" (GetView) og skal forbli det: ClampView
-        // ville loeftet 0 til MIN_VIEW. Med et satt utsnitt flyttes det k
-        // plasser, saa de samme lysene staar under det.
+        // viewCount 0 is "show all" (GetView) and must stay so: ClampView
+        // would raise 0 to MIN_VIEW. With a set view, it is moved k
+        // places, so the same candles stand under it.
         if (ctx->viewCount > 0) {
             ctx->viewStart += k;
             ClampView(ctx);
@@ -1558,12 +1586,12 @@ static inline int GlyphIndex(char c) {
     return IDX_SPACE;
 }
 
-// Punktumet er 1px bredt slik at "75.8" akkurat rommes innenfor 16px.
+// The dot is 1px wide so that "75.8" just fits within 16px.
 static inline int GlyphWidth(int idx) {
     return (idx == IDX_DOT) ? 1 : GLYPH_W;
 }
 
-// Total bredde i piksler, inkludert 1px mellomrom mellom glyfene.
+// Total width in pixels, including 1px spacing between the glyphs.
 static int IconTextWidth(const char* s) {
     int total = 0;
     for (int i = 0; s[i]; ++i) {
@@ -1573,10 +1601,10 @@ static int IconTextWidth(const char* s) {
     return total;
 }
 
-// Velger divisor og antall desimaler slik at den FERDIG FORMATERTE strengen
-// faar plass paa 16 px. Terskler paa selve prisen fanger ikke tilfellet der
-// "%.1f" runder 99950 opp til "100.0" - det er bredden som teller. Se feil #5
-// i ARBEIDSLOGG.md.
+// Picks divisor and number of decimals so that the FINISHED FORMATTED string
+// fits in 16 px. Thresholds on the price itself do not catch the case where
+// "%.1f" rounds 99950 up to "100.0" - it is the width that counts. See bug #5
+// in WORKLOG.md.
 static void FormatIconPrice(double price, char* out, size_t cb) {
     struct { double div; const char* fmt; } cand[] = {
         { 1.0,       "%.2f" },
@@ -1596,13 +1624,13 @@ static void FormatIconPrice(double price, char* out, size_t cb) {
             return;
         }
     }
-    // Ingen kandidat passer: klipp heller enn a vise ingenting. Opptegningen
-    // i RenderMicroFontIcon er bundet sjekket.
+    // No candidate fits: clip rather than show nothing. The painting
+    // in RenderMicroFontIcon is bounds checked.
     snprintf(out, cb, "%.0f", price / 1000000.0);
 }
 
-// argb: fargen sifrene tegnes med. Dempes naar forbindelsen er borte, slik
-// at ikonet forteller at tallet ikke lenger er ferskt.
+// argb: the color the digits are drawn with. Dimmed when the connection is
+// gone, so that the icon tells that the number is no longer fresh.
 static HICON RenderMicroFontIcon(const char* str, unsigned int argb) {
     int width = 16;
     int height = 16;
@@ -1622,7 +1650,7 @@ static HICON RenderMicroFontIcon(const char* str, unsigned int argb) {
 
     if (!pixels) return NULL;
 
-    // Bakgrunn: ARGB mork koksgraa (0xFF0D1117)
+    // Background: ARGB dark charcoal (0xFF0D1117)
     for (int i = 0; i < width * height; ++i) {
         pixels[i] = 0xFF0D1117;
     }
@@ -1677,8 +1705,8 @@ static HICON RenderMicroFontIcon(const char* str, unsigned int argb) {
 // HTTP
 // ---------------------------------------------------------------------------
 
-// Felles GET mot api.binance.com. Leser hele svaret i en lokke - et enkelt
-// WinHttpReadData-kall returnerer bare det som tilfeldigvis ligger i bufferet.
+// Shared GET against api.binance.com. Reads the whole response in a loop - a
+// single WinHttpReadData call returns only what happens to be in the buffer.
 static BOOL HttpGet(AppContext* ctx, const wchar_t* path, char* buf, DWORD bufSize) {
     if (bufSize == 0) return FALSE;
     buf[0] = '\0';
@@ -1700,12 +1728,12 @@ static BOOL HttpGet(AppContext* ctx, const wchar_t* path, char* buf, DWORD bufSi
                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, NULL)) {
 
-        // Statuskoden (fase 18). Foer talte enhver kropp som suksess, ogsaa
-        // en 429 med JSON-feilmelding - parserne fanget det stille som "null
-        // lys" / "ingen pris". Bakfyllingen trenger skillet: 2xx med null lys
-        // betyr "historikken er slutt", alt annet er en feil som skal i
-        // backoff. En 4xx paa de gamle stiene gaar naa samme vei, med samme
-        // utfall som foer.
+        // The status code (phase 18). Before, any body counted as success,
+        // even a 429 with a JSON error message - the parsers caught it
+        // silently as "zero candles" / "no price". The backfill needs the
+        // distinction: 2xx with zero candles means "the history has ended",
+        // everything else is an error that goes into backoff. A 4xx on the old
+        // paths now goes the same way, with the same outcome as before.
         DWORD status = 0, cb = sizeof(status);
         BOOL  is2xx  = WinHttpQueryHeaders(hRequest,
                                            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
@@ -1736,13 +1764,13 @@ static BOOL HttpGet(AppContext* ctx, const wchar_t* path, char* buf, DWORD bufSi
     return ok;
 }
 
-// Sunnhetssjekk paa alt som kommer inn fra nettet (fase 24). Parserne stolte
-// paa atof: tekst ble 0.0, "1e999" ble inf, "nan" ble NaN - og alt gikk
-// videre til lastPrice og candles[]. En inf i et lys sprenger Y-skalaen (og
-// double -> int i koordinatene er udefinert), en NaN-pris tegner et blankt
-// ikon. Sammenlikningene under er usanne for NaN, saa den ryker uten isnan;
-// taket tar inf uten isfinite. Ingen av dem trekker inn noe fra CRT-en
-// (fallgruve 75).
+// Sanity check on everything that comes in from the network (phase 24). The
+// parsers trusted atof: text became 0.0, "1e999" became inf, "nan" became
+// NaN - and everything went on to lastPrice and candles[]. An inf in a candle
+// blows up the Y scale (and double -> int in the coordinates is undefined), a
+// NaN price draws a blank icon. The comparisons below are false for NaN, so
+// it drops out without isnan; the ceiling catches inf without isfinite.
+// Neither pulls in anything from the CRT (pitfall 75).
 static BOOL PriceSane(double v) {
     return v > 0.0 && v < 1e15;
 }
@@ -1757,9 +1785,9 @@ static BOOL CandleSane(const Candle* c) {
            c->volume >= 0.0   && c->volume < 1e18;
 }
 
-// p staar paa det aapnende hermetegnet i "123.45". Returnerer pekeren forbi
-// det lukkende, eller NULL hvis det mellom hermetegnene ikke er ETT helt
-// tall: tomt, tekst, soeppel etter tallet, eller et svar kuttet midt i.
+// p points at the opening quote in "123.45". Returns the pointer past the
+// closing one, or NULL if what is between the quotes is not ONE whole
+// number: empty, text, garbage after the number, or a response cut midway.
 static const char* ParseQuotedNumber(const char* p, double* out) {
     char* end;
     double v = strtod(p + 1, &end);
@@ -1768,7 +1796,7 @@ static const char* ParseQuotedNumber(const char* p, double* out) {
     return end + 1;
 }
 
-// outPrice roeres bare naar svaret holdt en sunn pris.
+// outPrice is touched only when the response held a sane price.
 static BOOL FastParsePrice(const char* json, double* outPrice) {
     const char* key = "\"price\":";
     const char* pos = strstr(json, key);
@@ -1787,13 +1815,14 @@ static BOOL FastParsePrice(const char* json, double* outPrice) {
 }
 
 // Binance klines: [[openTime,"o","h","l","c","v",closeTime,...], ...]
-// Vi trenger felt 1-5 (open/high/low/close/volum) fra hver indre array.
+// We need fields 1-5 (open/high/low/close/volume) from each inner array.
 //
-// Et lys som ikke er sunt (CandleSane), som ikke har fem siterte tall, eller
-// hvis tid ikke er STRENGT stoerre enn forrige godtatte, HOPPES OVER - resten
-// av svaret beholdes. *rejected teller dem: null lys med forkastede er et
-// oedelagt svar, null lys uten er "historikken er slutt" (WorkerFetchHistory).
-// Stigende tid er det PrependCandles og MergeCandles bygger paa.
+// A candle that is not sane (CandleSane), that does not have five quoted
+// numbers, or whose time is not STRICTLY greater than the previous accepted
+// one, IS SKIPPED - the rest of the response is kept. *rejected counts them:
+// zero candles with rejects is a broken response, zero candles without is
+// "the history has ended" (WorkerFetchHistory). Ascending time is what
+// PrependCandles and MergeCandles build on.
 static int ParseKlines(const char* json, Candle* out, int maxCount, int* rejected) {
     int count = 0;
     const char* p = json;
@@ -1801,21 +1830,21 @@ static int ParseKlines(const char* json, Candle* out, int maxCount, int* rejecte
     *rejected = 0;
     while (*p && *p != '[') p++;
     if (!*p) return 0;
-    p++; // forbi ytre '['
+    p++; // past outer '['
 
     while (*p && count < maxCount) {
         while (*p && *p != '[' && *p != ']') p++;
-        if (*p != '[') break; // traff ']' -> slutten av ytre array
-        p++;                  // forbi indre '['
+        if (*p != '[') break; // hit ']' -> end of outer array
+        p++;                  // past inner '['
 
-        // Felt 0 = openTime (Unix-ms, tall uten hermetegn)
+        // Field 0 = openTime (Unix ms, number without quotes)
         Candle c;
         while (*p == ' ') p++;
         c.openTime = _atoi64(p);
 
-        // Felt 1-5: open, high, low, close, volum - alle siterte strenger.
-        // Letingen etter hermetegnet stopper ved klammene: foer laante et lys
-        // med usiterte felt tallene fra NESTE lys.
+        // Fields 1-5: open, high, low, close, volume - all quoted strings.
+        // The search for the quote stops at the brackets: before, a candle
+        // with unquoted fields borrowed the numbers from the NEXT candle.
         double v[5];
         int ok = 1;
         for (int f = 0; f < 5; ++f) {
@@ -1830,7 +1859,7 @@ static int ParseKlines(const char* json, Candle* out, int maxCount, int* rejecte
             c.high  = v[1];
             c.low   = v[2];
             c.close = v[3];
-            c.volume = v[4];   // fase 21
+            c.volume = v[4];   // phase 21
             ok = CandleSane(&c) &&
                  (count == 0 || c.openTime > out[count - 1].openTime);
         }
@@ -1843,8 +1872,8 @@ static int ParseKlines(const char* json, Candle* out, int maxCount, int* rejecte
 #endif
         }
 
-        // Hopp til slutten av denne indre arrayen. Staar p paa et hermetegn
-        // som ikke lot seg lese, er det fortsatt inne i arrayen.
+        // Skip to the end of this inner array. If p is on a quote that
+        // could not be read, it is still inside the array.
         while (*p && *p != ']') p++;
         if (*p) p++;
     }
@@ -1853,8 +1882,8 @@ static int ParseKlines(const char* json, Candle* out, int maxCount, int* rejecte
 }
 
 // ---------------------------------------------------------------------------
-// Arbeidertrad: ALL nettverkstrafikk skjer her. UI-traden rorer aldri
-// WinHTTP, og blir derfor aldri staaende og vente paa linja.
+// Worker thread: ALL network traffic happens here. The UI thread never
+// touches WinHTTP, and so is never left waiting on the line.
 // ---------------------------------------------------------------------------
 
 static BOOL WorkerFetchKlines(AppContext* ctx) {
@@ -1879,8 +1908,8 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     swprintf_s(path, 160, L"/api/v3/klines?symbol=%s&interval=%s&limit=%d",
                SYMBOLS[si].api, INTERVALS[ii].api, seed ? SEED_COUNT : 3);
 
-    // Selve hentingen skjer UTEN laas - den kan ta hundrevis av
-    // millisekunder, og UI-traden skal kunne tegne hele tiden.
+    // The fetch itself happens WITHOUT the lock - it can take hundreds of
+    // milliseconds, and the UI thread must be able to paint all the time.
     if (!HttpGet(ctx, path, s_httpBuf, (DWORD)sizeof(s_httpBuf))) return FALSE;
 
     int rejected;
@@ -1888,22 +1917,22 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     if (n <= 0) return FALSE;
 
     EnterCriticalSection(&ctx->lock);
-    // Forkastingen skjer ved FLETTING, ikke ved henting - svaret kan ankomme
-    // naar som helst underveis, ogsaa etter at brukeren har byttet symbol.
-    // Returnerer TRUE: et forkastet svar er ikke en nettverksfeil, og skal
-    // ikke telle opp backoffen hver gang brukeren bytter.
+    // The discarding happens at MERGE, not at fetch - the response can arrive
+    // at any time along the way, even after the user has changed symbol.
+    // Returns TRUE: a discarded response is not a network error, and must
+    // not count up the backoff every time the user switches.
     if (ctx->configGen != gen) {
         LeaveCriticalSection(&ctx->lock);
         return TRUE;
     }
     MergeCandles(ctx, s_incoming, n);
 
-    // Lysgrenen MA ogsaa sette lastPrice. Staar panelet apent, henter traden
-    // bare lys - da ble lastPrice aldri skrevet, og etter et symbolbytte
-    // (som nullstiller den) returnerte UpdateIcon paa price <= 0. Ikonet og
-    // verktoytipset ble staaende paa FORRIGE symbols pris og etikett saa
-    // lenge panelet var apent. Maalt: 15 s etter bytte til SOL leste ikonet
-    // fortsatt 75.9 - BTC - mens panelet viste SOL.
+    // The candle branch MUST also set lastPrice. When the panel is open, the
+    // thread fetches only candles - then lastPrice was never written, and
+    // after a symbol change (which resets it) UpdateIcon returned on
+    // price <= 0. The icon and tooltip stayed on the PREVIOUS symbol's price
+    // and label as long as the panel was open. Measured: 15 s after switching
+    // to SOL the icon still read 75.9 - BTC - while the panel showed SOL.
     if (ctx->candleCount > 0) {
         ctx->lastPrice = ctx->candles[ctx->candleCount - 1].close;
     }
@@ -1920,12 +1949,12 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     return TRUE;
 }
 
-// Bakfylling (fase 18): SEED_COUNT lys eldre enn det eldste vi har. Kjoeres
-// FOER den inkrementelle hentingen i syklusen histPending staar, saa det
-// levende lyset holder seg ferskt uansett. TRUE betyr som ellers "ikke en
-// nettverksfeil". Feiler HttpGet, slippes flagget: neste vegg-treff spoer
-// igjen. Ellers kunne en varig 4xx paa denne stien alene ha sultet ut
-// lys-hentingen.
+// Backfill (phase 18): SEED_COUNT candles older than the oldest we have. Runs
+// BEFORE the incremental fetch in the cycle where histPending is set, so the
+// live candle stays fresh regardless. TRUE means, as elsewhere, "not a
+// network error". If HttpGet fails, the flag is released: the next wall hit
+// asks again. Otherwise a lasting 4xx on this path alone could have starved
+// the candle fetch.
 static BOOL WorkerFetchHistory(AppContext* ctx) {
     unsigned  gen;
     int       si, ii;
@@ -1947,7 +1976,7 @@ static BOOL WorkerFetchHistory(AppContext* ctx) {
     gen     = ctx->configGen;
     si      = ctx->symIdx;
     ii      = ctx->ivIdx;
-    endTime = ctx->candles[0].openTime - 1;   // endTime er inklusiv hos Binance
+    endTime = ctx->candles[0].openTime - 1;   // endTime is inclusive at Binance
     LeaveCriticalSection(&ctx->lock);
 
     wchar_t path[192];
@@ -1957,15 +1986,15 @@ static BOOL WorkerFetchHistory(AppContext* ctx) {
     int  rejected = 0;
     BOOL got = HttpGet(ctx, path, s_httpBuf, (DWORD)sizeof(s_httpBuf));
     int  n   = got ? ParseKlines(s_httpBuf, s_incoming, SEED_COUNT, &rejected) : 0;
-    // 2xx, men bare usunne lys (fase 24): et oedelagt svar, ikke slutten paa
-    // historikken. Uten dette ble histDone satt for godt paa soeppel.
+    // 2xx, but only unsound candles (phase 24): a broken response, not the end
+    // of the history. Without this, histDone was set for good on garbage.
     if (n <= 0 && rejected > 0) got = FALSE;
 
     EnterCriticalSection(&ctx->lock);
     if (ctx->configGen == gen) {
         ctx->histPending = FALSE;
         if (got) {
-            if (n <= 0) ctx->histDone = TRUE;   // 2xx uten lys: historikken er slutt
+            if (n <= 0) ctx->histDone = TRUE;   // 2xx without candles: the history has ended
             else        PrependCandles(ctx, s_incoming, n);
         }
     }
@@ -1991,8 +2020,9 @@ static BOOL WorkerFetchPrice(AppContext* ctx) {
     double price = 0.0;
     if (!FastParsePrice(buf, &price)) return FALSE;
 
-    // Prisen har noyaktig samme kapplop som lysene, og den styrer tray-ikonet.
-    // Uten sjekken viser ikonet forrige symbols pris under nytt navn.
+    // The price has exactly the same race as the candles, and it drives the
+    // tray icon. Without the check the icon shows the previous symbol's price
+    // under the new name.
     EnterCriticalSection(&ctx->lock);
     if (ctx->configGen == gen) ctx->lastPrice = price;
     LeaveCriticalSection(&ctx->lock);
@@ -2011,11 +2041,11 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
         ctx->dropConn = FALSE;
         LeaveCriticalSection(&ctx->lock);
 
-        // Maskinen har sovet (fase 24). Forbindelsen fra foer dvalen er doed,
-        // men WinHTTP vet det ikke foer et kall har gaatt i tidsavbrudd, og
-        // NET_RECONNECT_AT slipper den foerst etter tre feil paa rad. Slippes
-        // her, saa foerste forsoek etter oppvaakning slaar opp DNS og
-        // forhandler TLS paa nytt.
+        // The machine has slept (phase 24). The connection from before the
+        // sleep is dead, but WinHTTP does not know until a call has timed
+        // out, and NET_RECONNECT_AT only releases it after three failures in
+        // a row. Released here, so the first attempt after wakeup looks up
+        // DNS and negotiates TLS anew.
         if (drop && ctx->hConnect) {
             WinHttpCloseHandle(ctx->hConnect);
             ctx->hConnect = NULL;
@@ -2024,9 +2054,10 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
 #endif
         }
 
-        // Star grafen apen trenger vi lys; ellers holder det med prisen.
-        // Vil UI ha eldre lys (fase 18), hentes de foerst, og lysene like
-        // etter - to kall i den syklusen, saa det levende lyset ikke venter.
+        // If the chart is open we need candles; otherwise the price is enough.
+        // If the UI wants older candles (phase 18), they are fetched first,
+        // and the candles right after - two calls in that cycle, so the live
+        // candle does not wait.
         BOOL ok;
         if (hp && IsWindowVisible(hp)) {
             ok = hist ? WorkerFetchHistory(ctx) : TRUE;
@@ -2047,38 +2078,38 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
             ctx->netFailures = 0;
             ctx->lastOkTick  = now;
         } else if (ctx->netFailures < 32) {
-            ctx->netFailures++;   // taket hindrer overflow ved lang nedetid
+            ctx->netFailures++;   // the cap prevents overflow on long downtime
         }
         failures = ctx->netFailures;
         wait = NetBackoffMs(failures, now);
         ctx->nextRetryTick = now + wait;
         LeaveCriticalSection(&ctx->lock);
 
-        // Henger vi fast paa en IP som ikke lenger svarer, hjelper det ikke
-        // aa prove igjen mot samme handtak. Slipper forbindelsen saa HttpGet
-        // bygger den paa nytt og DNS slaas opp igjen. hConnect eies av denne
-        // traden alene, saa den trenger ingen laas - failures derimot maa
-        // leses av under laasen over.
+        // If we are stuck on an IP that no longer answers, it does not help
+        // to retry against the same handle. Releases the connection so HttpGet
+        // builds it anew and DNS is looked up again. hConnect is owned by this
+        // thread alone, so it needs no lock - failures, on the other hand,
+        // must be read under the lock above.
         if (!ok && failures == NET_RECONNECT_AT && ctx->hConnect) {
             WinHttpCloseHandle(ctx->hConnect);
             ctx->hConnect = NULL;
         }
 
-        // PostMessage MA staa utenfor laasen - ellers kan UI-traden sitte
-        // og vente paa laasen mens vi venter paa den.
+        // PostMessage MUST be outside the lock - otherwise the UI thread can
+        // sit waiting for the lock while we wait for it.
         PostMessageW(ctx->hWnd, WM_APP_DATA, 0, 0);
 
         DWORD wr = WaitForMultipleObjects(2, waits, FALSE, wait);
         if (wr == WAIT_OBJECT_0) break;   // hStopEvent
 
-        // Nullstillingen MA henge paa hWakeEvent alene. Sto den etter
-        // hele ventekallet, traff den ogsaa WAIT_TIMEOUT - altsaa hver
-        // eneste syklus - og netFailures kom aldri hoyere enn 1.
-        // Backoffen sto da fast paa ~6 s og hConnect ble aldri sluppet.
-        // Maalt, ikke antatt: logg med feil=1 i 20 sykluser paa rad.
+        // The reset MUST hang on hWakeEvent alone. When it stood after
+        // the whole wait call, it also hit WAIT_TIMEOUT - that is, every
+        // single cycle - and netFailures never got higher than 1.
+        // The backoff was then stuck at ~6 s and hConnect was never released.
+        // Measured, not assumed: log with failures=1 in 20 cycles in a row.
         if (wr == WAIT_OBJECT_0 + 1) {
-            // Panelet ble apnet. Brukeren skal faa et forsok med en gang,
-            // ikke vente ut et minutt med backoff.
+            // The panel was opened. The user should get an attempt right
+            // away, not wait out a minute of backoff.
             EnterCriticalSection(&ctx->lock);
             ctx->netFailures = 0;
             LeaveCriticalSection(&ctx->lock);
@@ -2087,20 +2118,21 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
     return 0;
 }
 
-// Tegner ikon og verktoytips ut fra en pris. Skilt fra hentingen slik at
-// vi kan gjenbruke prisen vi allerede har, i stedet for a hente den paa nytt.
+// Draws icon and tooltip from a price. Separate from the fetch so that
+// we can reuse the price we already have, instead of fetching it again.
 static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
     if (price <= 0.0) return;
     swprintf_s(ctx->fullPriceStr, 64, L"%s: $%.2f%s",
                SYMBOLS[ctx->symIdx].label, price, stale ? L" (offline)" : L"");
 
-    // Divisor og desimaler velges etter bredden paa den ferdig formaterte
-    // strengen, ikke etter en terskel paa prisen. Se FormatIconPrice.
+    // Divisor and decimals are chosen by the width of the finished formatted
+    // string, not by a threshold on the price. See FormatIconPrice.
     char iconStr[16];
     FormatIconPrice(price, iconStr, sizeof(iconStr));
 
-    // Dempede siffer naar tallet ikke lenger er ferskt. Gronn 0xFF00FF66
-    // blandet ned mot bakgrunnen gir en synlig, men udramatisk forskjell.
+    // Dimmed digits when the number is no longer fresh. Green 0xFF00FF66
+    // blended down toward the background gives a visible but undramatic
+    // difference.
     HICON hNewIcon = RenderMicroFontIcon(iconStr, stale ? 0xFF2F6B45 : 0xFF00FF66);
     if (hNewIcon) {
         if (ctx->nid.hIcon) DestroyIcon(ctx->nid.hIcon);
@@ -2113,11 +2145,12 @@ static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
 
 
 // ---------------------------------------------------------------------------
-// Graf-tegning (GDI, dobbeltbuffret)
+// Chart drawing (GDI, double-buffered)
 // ---------------------------------------------------------------------------
 
-// Lineaer fargeovergang. t=0 gir a, t=255 gir b. Alt tegnes ugjennomsiktig
-// over CLR_BG, sa a blande mot bakgrunnen er identisk med ekte gjennomsikt.
+// Linear color blend. t=0 gives a, t=255 gives b. Everything is drawn opaque
+// over CLR_BG, so blending toward the background is identical to real
+// transparency.
 static COLORREF Blend(COLORREF a, COLORREF b, int t) {
     if (t <= 0) return a;
     if (t >= 255) return b;
@@ -2132,13 +2165,14 @@ static BOOL PtInRect2(const RECT* r, int x, int y) {
     return (x >= r->left && x < r->right && y >= r->top && y < r->bottom);
 }
 
-// Kontrollknappene i headeren. En ren funksjon av bredden, uten tilstand -
-// tegning, WM_NCHITTEST, hover og klikk leser alle denne. Leser to av dem
-// ulike kilder, treffer brukeren en annen knapp enn den som lyser.
-// Rekkefolge fra venstre: ny instans, minimer, maksimer, lukk. Krysset
-// lengst til hoyre, der Windows har vent oyet til det. [ + ] tok plassen til
-// gjenopprett-standardvisning-knappen i samme enum-posisjon, saa geometrien,
-// WM_NCHITTEST og hover-indeksene er uendret.
+// The control buttons in the header. A pure function of the width, without
+// state - painting, WM_NCHITTEST, hover and click all read this. If two of
+// them read different sources, the user hits a different button than the one
+// that lights up. Order from the left: new instance, minimize, maximize,
+// close. The cross at the far right, where Windows has trained the eye to
+// expect it. [ + ] took the place of the restore-default-view button in the
+// same enum position, so the geometry, WM_NCHITTEST and the hover indices are
+// unchanged.
 typedef enum { BTN_NEW = 0, BTN_MIN, BTN_MAX, BTN_CLOSE, BTN_COUNT } BtnId;
 
 static void ButtonLayout(int W, RECT out[BTN_COUNT]) {
@@ -2152,7 +2186,7 @@ static void ButtonLayout(int W, RECT out[BTN_COUNT]) {
     }
 }
 
-// Hvilken knapp peker musa paa? -1 utenfor alle.
+// Which button is the mouse pointing at? -1 outside all of them.
 static int ButtonHit(const RECT* btns, int x, int y) {
     for (int i = 0; i < BTN_COUNT; ++i) {
         if (PtInRect2(&btns[i], x, y)) return i;
@@ -2160,9 +2194,9 @@ static int ButtonHit(const RECT* btns, int x, int y) {
     return -1;
 }
 
-// Knapperadens samlede rektangel. Avledet av ButtonLayout, ikke regnet ut paa
-// nytt - fallgruve 14 gjelder her ogsaa: invaliderer vi et annet felt enn det
-// vi tegner, blir en knapp staaende uoppdatert.
+// The button row's combined rectangle. Derived from ButtonLayout, not computed
+// anew - pitfall 14 applies here too: if we invalidate a different area than
+// the one we paint, a button is left un-updated.
 static void ButtonStrip(int W, RECT* out) {
     RECT b[BTN_COUNT];
     ButtonLayout(W, b);
@@ -2172,42 +2206,43 @@ static void ButtonStrip(int W, RECT* out) {
     out->bottom = b[0].bottom;
 }
 
-// Kollisjonsregelen i headeren, som ren funksjon: et venstrestilt element som
-// slutter paa rightBound og et hoyrestilt som begynner paa leftBound faar
-// staa paa samme rad bare med minst HDR_GAP px luft imellom.
+// The collision rule in the header, as a pure function: a left-aligned element
+// that ends at rightBound and a right-aligned one that starts at leftBound may
+// share a row only with at least HDR_GAP px of space between them.
 static BOOL HeaderFits(int rightBound, int leftBound) {
     return rightBound < leftBound - HDR_GAP;
 }
 
-// Hoyre grense for headerens rad 2: prisaksens overste etikett staar paa
-// y = top +- 8 fra x = edge + AXIS_LBL_GAP, og raden skal holde HDR_GAP
-// luft mot den. Verktoylinja og frakoblet-teksten leser begge denne.
+// Right limit for the header's row 2: the price axis's top label sits at
+// y = top +- 8 from x = edge + AXIS_LBL_GAP, and the row must keep HDR_GAP
+// of space to it. The toolbar and the offline text both read this.
 static int HeaderRow2Limit(int W) {
     return W - PAD_R + AXIS_LBL_GAP - HDR_GAP;
 }
 
-// Verktoylinja til og med VOL skal faa plass paa minstebredden. Vokser en
-// tabell eller en pillebredde forbi det, stopper bygget her - og regelen i
-// ToolbarLayout, som skjuler piller fra hoyre, blir aldri det brukeren
-// ser paa et panel i lovlig storrelse.
+// The toolbar up to and including VOL must fit at the minimum width. If a
+// table or a pill width grows past that, the build stops here - and the rule
+// in ToolbarLayout, which hides pills from the right, never becomes what the
+// user sees on a panel of legal size.
 //
-// MA-pillen (fase 25) er det ene, bevisste unntaket: raden slutter paa
-// x = 310 av 312 paa minstebredden, og 28 px til finnes ikke. Pillen staar
-// ytterst til hoyre, saa skjuleregelen tar den og bare den: under 426 px
-// bredde er den borte, og M-tasten og tray-menyen baerer bryteren alene.
-// POPUP_MIN_W heves ikke for dette - den vokter ogsaa hvilken geometri
-// registret faar lov til aa gi tilbake.
+// The MA pill (phase 25) is the one deliberate exception: the row ends at
+// x = 310 of 312 at the minimum width, and 28 px more does not exist. The pill
+// sits at the far right, so the hiding rule takes it and only it: below 426 px
+// width it is gone, and the M key and the tray menu carry the toggle alone.
+// POPUP_MIN_W is not raised for this - it also guards which geometry the
+// registry is allowed to give back.
 C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + INTERVAL_COUNT * TBAR_IV_W +
          (INTERVAL_COUNT - 1) * TBAR_GAP + TBAR_GROUP_GAP + TBAR_VOL_W
          <= POPUP_MIN_W - PAD_R + AXIS_LBL_GAP - HDR_GAP);
 
-// Verktoylinjas piller. Ren funksjon av bredden, som ButtonLayout, og av
-// samme grunn: tegning, WM_NCHITTEST, hover og klikk leser alle denne.
-// Returnerer antall synlige piller; resten er tomme rektangler som ingen
-// treffer. En pille som ikke faar plass foer HeaderRow2Limit skjules helt,
-// og alle etter den - aldri en halv pille, og aldri VOL uten intervallene
-// foran. Registret godtar en lagret bredde ned til 240 px, saa grenen kan
-// naas selv om C_ASSERT over holder den unna 400.
+// The toolbar's pills. A pure function of the width, like ButtonLayout, and
+// for the same reason: painting, WM_NCHITTEST, hover and click all read this.
+// Returns the number of visible pills; the rest are empty rectangles that
+// nothing hits. A pill that does not fit before HeaderRow2Limit is hidden
+// entirely, and all after it - never half a pill, and never VOL without the
+// intervals in front. The registry accepts a saved width down to 240 px, so
+// the branch can be reached even though the C_ASSERT above keeps it away
+// from 400.
 static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
     int limit = HeaderRow2Limit(W);
     int x = PAD_L, n = 0;
@@ -2232,7 +2267,7 @@ static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
     return n;
 }
 
-// Hvilken pille peker musa paa? -1 utenfor alle.
+// Which pill is the mouse pointing at? -1 outside all of them.
 static int ToolbarHit(const RECT* tb, int x, int y) {
     for (int i = 0; i < TBAR_COUNT; ++i) {
         if (PtInRect2(&tb[i], x, y)) return i;
@@ -2240,8 +2275,8 @@ static int ToolbarHit(const RECT* tb, int x, int y) {
     return -1;
 }
 
-// Verktoylinjas samlede rektangel, avledet av ToolbarLayout (se
-// ButtonStrip). Tomt naar ingen pille faar plass.
+// The toolbar's combined rectangle, derived from ToolbarLayout (see
+// ButtonStrip). Empty when no pill fits.
 static void ToolbarStrip(int W, RECT* out) {
     RECT tb[TBAR_COUNT];
     int n = ToolbarLayout(W, tb);
@@ -2253,18 +2288,18 @@ static void ToolbarStrip(int W, RECT* out) {
     out->bottom = tb[0].bottom;
 }
 
-// Felles geometri for tegning og muse-treff.
-// Skrivebordsmodus: header og tidsbaand fantes bare for tekst som ikke lenger
-// tegnes (fase 14), saa topp, bunn og venstre gaar kant til kant. Hoyre side
-// har derimot faatt tilbake en marg (fase 16) - ikke til akseetiketter, men
-// til det ene stempelet med siste pris. Margen er smalere enn panelets fordi
-// den bare skal romme stempelet.
+// Shared geometry for painting and mouse hits.
+// Desktop mode: the header and the time band existed only for text that is no
+// longer drawn (phase 14), so top, bottom and left run edge to edge. The right
+// side, however, has got a margin back (phase 16) - not for axis labels, but
+// for the one stamp with the last price. The margin is narrower than the
+// panel's because it only has to hold the stamp.
 //
-// Alt annet folger herfra: vannmerkets sentrering, rutenettet, lysene,
-// klipperegionen og siste-pris-linja.
-// Stempelets hoyde, fonthoyde og margbredde i skrivebordsmodus. Rene
-// funksjoner av flatens hoyde: ChartGeometry kalles ogsaa fra treffdeteksjon
-// og panorering, der det ikke finnes noen DC aa maale i.
+// Everything else follows from here: the watermark's centering, the grid, the
+// candles, the clip region and the last-price line.
+// The stamp's height, font height and margin width in desktop mode. Pure
+// functions of the surface's height: ChartGeometry is also called from hit
+// detection and panning, where there is no DC to measure in.
 static int DeskPillH(int H) {
     int h = H / DESK_PILL_DIV;
     if (h < DESK_PILL_MIN) h = DESK_PILL_MIN;
@@ -2272,12 +2307,13 @@ static int DeskPillH(int H) {
     return h;
 }
 
-// Samme forhold som i panelet: 16 px stempel rundt en 15 px font.
+// Same ratio as in the panel: a 16 px stamp around a 15 px font.
 static int DeskPillFontH(int H) { return MulDiv(DeskPillH(H), 15, 16); }
 
-// AXIS_CHAR_W er maalt paa em 15. Bredden rundes OPP: en tegnbredde som
-// egentlig er 22,2 px ville gitt aatte tegn 1,6 px for lite, og prisen hadde
-// falt stille tilbake til aksens oppslosning i stedet for to desimaler.
+// AXIS_CHAR_W is measured at em 15. The width is rounded UP: a character width
+// that is really 22.2 px would have given eight characters 1.6 px too little,
+// and the price would silently have fallen back to the axis's resolution
+// instead of two decimals.
 static int DeskAxisW(int H) {
     int cw = (DeskPillFontH(H) * AXIS_CHAR_W + 14) / 15;
     return AXIS_LBL_GAP + AXIS_Y_CHARS * cw + AXIS_PAD_R;
@@ -2295,10 +2331,10 @@ static ChartRect ChartGeometry(int W, int H) {
     return g;
 }
 
-// Hvilket lys peker musa paa? Returnerer absolutt indeks, -1 utenfor.
-// MAA lese de samme disp-verdiene som DrawChart. Leser den ene maalet og den
-// andre visningen, peker crosshairet paa feil lys midt i animasjonen - det er
-// feil #7 fra loggen i ny drakt.
+// Which candle is the mouse over? Returns an absolute index, -1 outside.
+// MUST read the same disp values as DrawChart. If one reads the target and the
+// other the display, the crosshair points at the wrong candle mid-animation -
+// that is bug #7 from the log in new clothes.
 static int HitCandle(const AppContext* ctx, const ChartRect* g, int mx, int my) {
     if (ctx->dispCount <= 0.0 || g->cw <= 0) return -1;
     if (ctx->candleCount <= 0) return -1;
@@ -2308,19 +2344,19 @@ static int HitCandle(const AppContext* ctx, const ChartRect* g, int mx, int my) 
     if (slot <= 0.0) return -1;
     int idx = (int)(ctx->dispStart + (double)(mx - g->left) / slot);
 
-    // Bundet mot candleCount, ikke mot vs + vc: under animasjonen kan
-    // visningen henge utenfor maalutsnittet.
+    // Bounded by candleCount, not by vs + vc: during the animation the
+    // display can hang outside the target view.
     if (idx < 0) idx = 0;
     if (idx >= ctx->candleCount) idx = ctx->candleCount - 1;
     return idx;
 }
 
-// Prisvarsler (fase 23): pris <-> y. Tegning og treff MAA lese samme kilde
-// (fallgruve 14), saa begge veier gaar gjennom disse to, og begge leser
-// VISNINGEN (dispMin/dispMax) med samme range-vern og samme avkutting som
-// lysene i DrawChart. Klemmingen foer (int) er for et nivaa langt utenfor
-// utsnittet: 75 000 paa en SOL-akse med spenn 1 gir 5e7 piksler, og et
-// varsel fra registret kan vaere hva som helst under ALERT_PRICE_MAX.
+// Price alerts (phase 23): price <-> y. Drawing and hit-testing MUST read the
+// same source (pitfall 14), so both directions go through these two, and both
+// read the DISPLAY (dispMin/dispMax) with the same range guard and the same
+// truncation as the candles in DrawChart. The clamp before (int) is for a
+// level far outside the view: 75 000 on a SOL axis with a span of 1 gives 5e7
+// pixels, and an alert from the registry can be anything below ALERT_PRICE_MAX.
 static int AlertY(const AppContext* ctx, const ChartRect* g, double level) {
     double range = ctx->dispMax - ctx->dispMin;
     if (range < 1e-9) range = 1.0;
@@ -2330,7 +2366,7 @@ static int AlertY(const AppContext* ctx, const ChartRect* g, double level) {
     return g->top + (int)yd;
 }
 
-// Prisen paa hoyde y, rundet til under en piksel (AlertRound).
+// The price at height y, rounded to below one pixel (AlertRound).
 static double AlertPriceAtY(const AppContext* ctx, const ChartRect* g, int y) {
     double range = ctx->dispMax - ctx->dispMin;
     if (range < 1e-9) range = 1.0;
@@ -2339,16 +2375,16 @@ static double AlertPriceAtY(const AppContext* ctx, const ChartRect* g, int y) {
     return AlertRound(p, range / (double)g->ch);
 }
 
-// Hvilket varsel staar pekeren paa i priskolonnen? Naermeste merke innenfor
-// ALERT_HIT_PX - altsaa noyaktig den flaten merket er tegnet paa - og -1
-// ellers. Merker utenfor [top, bottom] er ikke tegnet og kan ikke treffes.
+// Which alert is the pointer on in the price column? The nearest tag within
+// ALERT_HIT_PX - that is, exactly the area the tag is drawn on - and -1
+// otherwise. Tags outside [top, bottom] are not drawn and cannot be hit.
 static int AlertAxisHit(const AppContext* ctx, const ChartRect* g, int my) {
     int best = -1, bestD = ALERT_HIT_PX + 1;
     int s = ctx->symIdx;
     for (int i = 0; i < ctx->alertCount[s]; ++i) {
         int y = AlertY(ctx, g, fabs(ctx->alerts[s][i]));
         if (y < g->top || y > g->bottom) continue;
-        // Merket er [y - 8, y + 8): FillRect er eksklusiv i bunnen.
+        // The tag is [y - 8, y + 8): FillRect is exclusive at the bottom.
         if (my < y - ALERT_HIT_PX || my >= y + ALERT_HIT_PX) continue;
         int d = abs(my - y);
         if (d < bestD) { bestD = d; best = i; }
@@ -2356,11 +2392,11 @@ static int AlertAxisHit(const AppContext* ctx, const ChartRect* g, int my) {
     return best;
 }
 
-// Antall desimaler paa prisaksen velges fra AVSTANDEN mellom etikettene, ikke
-// fra prisens storrelse. SOL rundt 97 dollar har et spenn paa under en dollar:
-// med "%.0f" leste alle fem etikettene "97". BTC rundt 75 000 trenger ingen
-// desimaler. Samme klasse feil som #5 i loggen - formatet maa folge tallet
-// som faktisk skal vises, ikke en antatt storrelsesorden.
+// The number of decimals on the price axis is chosen from the SPACING between
+// the labels, not from the size of the price. SOL around 97 dollars has a span
+// of under one dollar: with "%.0f" all five labels read "97". BTC around
+// 75 000 needs no decimals. Same class of bug as #5 in the log - the format
+// must follow the number actually shown, not an assumed order of magnitude.
 static int PriceDecimals(double step) {
     if (step <= 0.0) return 2;
     int d = 0;
@@ -2368,7 +2404,7 @@ static int PriceDecimals(double step) {
     return d;
 }
 
-// Min/maks over synlige lys, med 8% luft over og under.
+// Min/max over the visible candles, with 8% headroom above and below.
 static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, double* outMax) {
     double mn = ctx->candles[vs].low, mx = ctx->candles[vs].high;
     for (int i = 1; i < vc; ++i) {
@@ -2383,9 +2419,9 @@ static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, do
     *outMax = mx + pad;
 }
 
-// Stoerste volum i utsnittet (fase 21): stolpenes skala. 0 naar ingen lys
-// har volum - da tegnes ingen stolper, i stedet for at hoeyden blir NaN.
-// Kalles under laas, som PriceRange.
+// Largest volume in the view (phase 21): the scale of the bars. 0 when no
+// candle has volume - then no bars are drawn, instead of the height becoming
+// NaN. Called under the lock, like PriceRange.
 static double VolumeMax(const AppContext* ctx, int vs, int vc) {
     double mx = 0.0;
     for (int i = 0; i < vc; ++i) {
@@ -2395,17 +2431,18 @@ static double VolumeMax(const AppContext* ctx, int vs, int vc) {
     return mx;
 }
 
-// Faller lys ut i front, flyttes ALT som er en absolutt indeks like mye.
-// Uten dette hopper grafen ett lys til venstre hvert minutt saa snart
-// bufferet har naadd taket, og hoverIdx peker paa nabolyset.
-// Idempotent: delta blir 0 andre gang. Kalles under laas.
+// When candles drop out at the front, EVERYTHING that is an absolute index is
+// shifted by the same amount. Without this the chart jumps one candle to the
+// left every minute once the buffer has reached its cap, and hoverIdx points
+// at the neighboring candle.
+// Idempotent: delta is 0 the second time. Called under the lock.
 static void ApplyFrontShift(AppContext* ctx) {
     long long delta = ctx->frontShift - ctx->dispShiftSeen;
     if (delta == 0) return;
     ctx->dispShiftSeen = ctx->frontShift;
 
-    // Ingen easing: en utkasting er ikke en bevegelse brukeren skal se, og en
-    // bakfylling (delta < 0, fase 18) skal ikke flytte bildet i det hele tatt.
+    // No easing: an eviction is not a movement the user should see, and a
+    // backfill (delta < 0, phase 18) should not move the frame at all.
     ctx->dispStart -= (double)delta;
     if (ctx->dispStart < 0.0) ctx->dispStart = 0.0;
     if (ctx->hoverIdx >= 0) {
@@ -2416,12 +2453,12 @@ static void ApplyFrontShift(AppContext* ctx) {
     if (ctx->panAnchorView < 0) ctx->panAnchorView = 0;
 }
 
-// Brukeren staar i veggen (viewStart == 0) og vil bakover (fase 18). Setter
-// histPending og vekker traden - men bare naar linja er frisk: hWakeEvent
-// nullstiller backoffen (den er laget for "panelet ble aapnet"), og et drag i
-// veggen under en frakobling skal ikke slaa backoffen av. Er traden i
-// backoff, ser den flagget paa sin egen syklus. SetEvent staar utenfor
-// laasen, som ellers i fila.
+// The user is up against the wall (viewStart == 0) and wants to go back
+// (phase 18). Sets histPending and wakes the thread - but only when the line
+// is healthy: hWakeEvent resets the backoff (it is made for "the panel was
+// opened"), and a drag against the wall during a disconnect must not switch
+// the backoff off. If the thread is in backoff, it sees the flag on its own
+// cycle. SetEvent stays outside the lock, as elsewhere in the file.
 static void RequestHistory(AppContext* ctx) {
     BOOL wake = FALSE;
     EnterCriticalSection(&ctx->lock);
@@ -2433,9 +2470,9 @@ static void RequestHistory(AppContext* ctx) {
     if (wake) SetEvent(ctx->hWakeEvent);
 }
 
-// Setter visningen lik maalet uten animasjon. Brukes naar en animasjon ikke
-// gir mening: forste bilde, nytt buffer etter konfigbytte, panelet apnes.
-// Kalles under laas.
+// Sets the display equal to the target without animation. Used when an
+// animation makes no sense: first frame, new buffer after a config change,
+// the panel opens. Called under the lock.
 static void SyncDisp(AppContext* ctx) {
     int vs, vc;
     GetView(ctx, &vs, &vc);
@@ -2443,11 +2480,11 @@ static void SyncDisp(AppContext* ctx) {
     ctx->dispCount = (vc > 0) ? (double)vc : 1.0;
     ctx->dispShiftSeen = ctx->frontShift;
 
-    // Med tomt buffer finnes det ingen prisakse a synkronisere mot. Markerer
-    // vi oss som gyldige her, eases dispMin/dispMax fra [0, 1] opp til det
-    // ekte spennet naar dataene kommer - altsaa en Y-akse som glir opp fra
-    // null i et halvt sekund etter hvert symbolbytte. Vi blir staaende
-    // ugyldige i stedet, saa forste bilde MED data snapper.
+    // With an empty buffer there is no price axis to sync against. If we mark
+    // ourselves valid here, dispMin/dispMax ease from [0, 1] up to the real
+    // span when the data arrives - that is, a Y axis that slides up from zero
+    // for half a second after every symbol change. We stay invalid instead,
+    // so the first frame WITH data snaps.
     if (ctx->candleCount <= 0 || vc <= 0) {
         ctx->dispMin   = 0.0;
         ctx->dispMax   = 1.0;
@@ -2457,12 +2494,12 @@ static void SyncDisp(AppContext* ctx) {
     }
 
     PriceRange(ctx, vs, vc, &ctx->dispMin, &ctx->dispMax);
-    ctx->dispVolMax = VolumeMax(ctx, vs, vc);   // fase 21
+    ctx->dispVolMax = VolumeMax(ctx, vs, vc);   // phase 21
     ctx->dispValid = TRUE;
 }
 
-// Unix-ms -> lokal tid. Paa lange lys er "HH:MM" ikke nok - hvert 1d-lys
-// ville lest "00:00". Fra og med 1t tar vi med datoen.
+// Unix ms -> local time. On long candles "HH:MM" is not enough - every 1d
+// candle would read "00:00". From 1h upward we include the date.
 static void FormatCandleTime(long long unixMs, long long intervalMs,
                              wchar_t* out, size_t cch) {
     ULONGLONG t = (ULONGLONG)(unixMs / 1000) * 10000000ULL + 116444736000000000ULL;
@@ -2485,10 +2522,10 @@ static void FormatCandleTime(long long unixMs, long long intervalMs,
 }
 
 
-// Layout og treffdeteksjon deler en funksjon. To uavhengige utregninger av
-// samme flate ender med a peke forskjellige steder - se feil #7 i loggen.
-// Volum for hover-boksen (fase 21): kompakt, saa DOGE-volum i millioner
-// faar plass i 104 px. Under tusen to desimaler, ellers K/M med en desimal.
+// Layout and hit detection share one function. Two independent calculations of
+// the same area end up pointing at different places - see bug #7 in the log.
+// Volume for the hover box (phase 21): compact, so DOGE volume in millions
+// fits in 104 px. Below a thousand two decimals, otherwise K/M with one decimal.
 static void FormatVolume(double v, wchar_t* out, size_t cch) {
     if (v >= 1e6)      swprintf_s(out, cch, L"%.1fM", v / 1e6);
     else if (v >= 1e3) swprintf_s(out, cch, L"%.1fK", v / 1e3);
@@ -2502,25 +2539,26 @@ static void FormatVolume(double v, wchar_t* out, size_t cch) {
 #define OVL_HDR_H     18
 
 typedef struct {
-    RECT box;                    // hele overlayet
-    RECT rows[OVL_ROWS_MAX];     // en per valg
-    int  count;                  // SYMBOL_COUNT forst, sa INTERVAL_COUNT
-    RECT symHdr, ivHdr;          // overskriftene
+    RECT box;                    // the whole overlay
+    RECT rows[OVL_ROWS_MAX];     // one per choice
+    int  count;                  // SYMBOL_COUNT first, then INTERVAL_COUNT
+    RECT symHdr, ivHdr;          // the headings
 } OverlayRects;
 
 static void OverlayLayout(int W, int H, OverlayRects* r) {
-    // Nulles helt ut. De ubrukte radene bak count er ellers stack-soppel, og
-    // da er funksjonen ikke lenger ren - to kall med samme inndata gir ulikt
-    // innhold. Enhetstesten fanget nettopp det. OverlayHit gaar bare til
-    // count, saa soppelet var ufarlig i dag; dette lukker klassen.
+    // Zeroed completely. The unused rows past count are otherwise stack
+    // garbage, and then the function is no longer pure - two calls with the
+    // same input give different contents. The unit test caught exactly that.
+    // OverlayHit only goes up to count, so the garbage was harmless today;
+    // this closes the class.
     memset(r, 0, sizeof(*r));
 
     int rowsMax = (SYMBOL_COUNT > INTERVAL_COUNT) ? SYMBOL_COUNT : INTERVAL_COUNT;
     int boxW = OVL_PAD * 3 + OVL_COL_W * 2;
     int boxH = OVL_PAD * 2 + OVL_HDR_H + rowsMax * OVL_ROW_H;
 
-    // Sentrert, men aldri utenfor panelet - panelet kan vaere mindre enn
-    // boksen paa minimumsstorrelsen.
+    // Centered, but never outside the panel - the panel can be smaller than
+    // the box at the minimum size.
     if (boxW > W) boxW = W;
     if (boxH > H) boxH = H;
     int bx = (W - boxW) / 2, by = (H - boxH) / 2;
@@ -2556,7 +2594,7 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
     }
 }
 
-// Indeks 0..SYMBOL_COUNT-1 er symboler, resten intervaller. -1 = ingen.
+// Index 0..SYMBOL_COUNT-1 are symbols, the rest intervals. -1 = none.
 static int OverlayHit(const OverlayRects* r, int x, int y) {
     for (int i = 0; i < r->count; ++i) {
         const RECT* q = &r->rows[i];
@@ -2565,11 +2603,11 @@ static int OverlayHit(const OverlayRects* r, int x, int y) {
     return -1;
 }
 
-// Paletten er CLR_BG/CLR_BOX/CLR_BOXEDGE - identisk med hover-boksen, saa
-// overlayet leses som samme element-familie.
-// Kalles fra PaintPopup, IKKE fra DrawChart: DrawChart returnerer tidlig naar
-// candleCount == 0, og det er nettopp tilstanden rett etter et konfigbytte.
-// Laa kallet der, ville uttoningen aldri blitt tegnet etter et bytte.
+// The palette is CLR_BG/CLR_BOX/CLR_BOXEDGE - identical to the hover box, so
+// the overlay reads as the same family of elements.
+// Called from PaintPopup, NOT from DrawChart: DrawChart returns early when
+// candleCount == 0, and that is exactly the state right after a config change.
+// Had the call been there, the fade-out would never be drawn after a change.
 static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     int a = (int)(ctx->overlayF + 0.5);
     if (a <= 0) return;
@@ -2607,20 +2645,20 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
         DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
-    // Penslene lages per bilde med vilje: fargen avhenger av fade-nivaet, som
-    // endrer seg hvert bilde MENS overlayet toner. I hvile returnerer
-    // funksjonen paa a <= 0, saa GDI-antallet i ro er uendret.
+    // The brushes are created per frame on purpose: the color depends on the
+    // fade level, which changes every frame WHILE the overlay fades. At rest
+    // the function returns on a <= 0, so the idle GDI count is unchanged.
     DeleteObject(brBox);
     DeleteObject(brEdge);
 }
 
-// Sorger for at det vedvarende dobbeltbufferet finnes og har storrelsen W x H.
-// Bygges bare paa nytt naar storrelsen endres - ikke per bilde. Returnerer
-// FALSE hvis GDI ikke ga oss et buffer; da tegner PaintPopup ingenting i
-// dette bildet i stedet for aa tegne rett paa skjermen med flimmer.
+// Makes sure the persistent double buffer exists and has the size W x H.
+// Rebuilt only when the size changes - not per frame. Returns FALSE if GDI
+// did not give us a buffer; then PaintPopup draws nothing in this frame
+// instead of drawing straight to the screen with flicker.
 //
-// Riv ned det gamle FORST. Uten dette lekker en HBITMAP og en HDC per
-// resize, og GDI-tallet klatrer for hver gang brukeren drar i kanten.
+// Tear down the old one FIRST. Without this an HBITMAP and an HDC leak per
+// resize, and the GDI count climbs every time the user drags the edge.
 static void FreeBackBuffer(AppContext* ctx) {
     if (ctx->bbDC) {
         if (ctx->bbOldBmp) SelectObject(ctx->bbDC, ctx->bbOldBmp);
@@ -2651,10 +2689,10 @@ static BOOL EnsureBackBuffer(AppContext* ctx, HDC ref, int W, int H) {
     return TRUE;
 }
 
-// Bygger bakgrunn + vannmerke naar (W, H, symIdx, ivIdx) endrer seg - ikke
-// per bilde. Samme disiplin som GDI-cachen fra fase 1.
-// Feiler noe her, settes wmValid = FALSE og DrawChart faller tilbake paa
-// FillRect. Vannmerket er pynt; det skal aldri hindre opptegning.
+// Builds background + watermark when (W, H, symIdx, ivIdx) changes - not
+// per frame. Same discipline as the GDI cache from phase 1.
+// If anything fails here, wmValid = FALSE is set and DrawChart falls back to
+// FillRect. The watermark is decoration; it must never block painting.
 static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     if (ctx->wmValid && ctx->wmW == W && ctx->wmH == H &&
         ctx->wmSym == ctx->symIdx && ctx->wmIv == ctx->ivIdx) {
@@ -2662,8 +2700,8 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     }
     if (W <= 0 || H <= 0) { ctx->wmValid = FALSE; return; }
 
-    // Riv ned det gamle FORST. Uten dette lekker en HBITMAP og en HDC per
-    // resize, og GDI-tallet klatrer for hver gang brukeren drar i kanten.
+    // Tear down the old one FIRST. Without this an HBITMAP and an HDC leak per
+    // resize, and the GDI count climbs every time the user drags the edge.
     if (ctx->wmDC) {
         if (ctx->wmOldBmp) SelectObject(ctx->wmDC, ctx->wmOldBmp);
         DeleteDC(ctx->wmDC);
@@ -2686,25 +2724,26 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     FillRect(ctx->wmDC, &rc, ctx->brBg);
 
     SetBkMode(ctx->wmDC, TRANSPARENT);
-    // Alfa folger W, og W er alt en del av cache-noekkelen over - fargen
-    // regnes derfor bare ut naar bitmapen bygges. Alt under er ugjennomsiktig
-    // CLR_BG, saa Blend mot bakgrunnen ER alfablending.
+    // Alpha follows W, and W is already part of the cache key above - the
+    // color is therefore only computed when the bitmap is built. Everything
+    // underneath is opaque CLR_BG, so Blend against the background IS alpha
+    // blending.
     SetTextColor(ctx->wmDC, Blend(CLR_BG, CLR_WM_INK,
                                   (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
 
     ChartRect g = ChartGeometry(W, H);
 
-    // Fonthoyden folger chart-flatens hoyde, ikke en fast verdi: et lite
-    // panel skal ikke faa vannmerket klippet, og et stort skal ikke faa en
-    // liten tekst midt i flaten.
+    // The font height follows the height of the chart surface, not a fixed
+    // value: a small panel must not get the watermark clipped, and a large
+    // one must not get a small text in the middle of the surface.
     //
-    // DPI-skaleringen gjelder KLEMMEGRENSENE, ikke H/5. g.ch er allerede
-    // enhetspiksler, saa den proporsjonale delen skalerer seg selv naar
-    // vinduet blir storre paa en hoy-DPI skjerm. Grensene er derimot angitt
-    // i logiske piksler, og et gulv paa 32 ville vaert 16 logiske piksler
-    // paa 200 %. Ganger vi H/5 med DPI ogsaa, teller vi skaleringen to
-    // ganger. Prosessen er DPI-uvitende i dag, saa GetDeviceCaps gir 96 og
-    // MulDiv er en identitet - dette blir levende i det et manifest legges til.
+    // The DPI scaling applies to the CLAMP LIMITS, not to H/5. g.ch is already
+    // device pixels, so the proportional part scales itself when the window
+    // gets larger on a high-DPI screen. The limits, however, are given in
+    // logical pixels, and a floor of 32 would be 16 logical pixels at 200 %.
+    // If we multiply H/5 by DPI as well, we count the scaling twice. The
+    // process is DPI-unaware today, so GetDeviceCaps gives 96 and MulDiv is
+    // an identity - this comes alive the moment a manifest is added.
     int dpi = GetDeviceCaps(ref, LOGPIXELSY);
     if (dpi <= 0) dpi = 96;
     int fMin = MulDiv(WM_FONT_MIN, dpi, 96);
@@ -2713,9 +2752,9 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     if (fh < fMin) fh = fMin;
     if (fh > fMax) fh = fMax;
 
-    // Bygges her, ikke per bilde: EnsureWatermark kjorer bare naar
-    // (W, H, symIdx, ivIdx) faktisk endrer seg, og alle fire paavirker
-    // hoyden eller bredden teksten trenger.
+    // Built here, not per frame: EnsureWatermark only runs when
+    // (W, H, symIdx, ivIdx) actually changes, and all four affect the
+    // height or width the text needs.
     const wchar_t* wmText = SYMBOLS[ctx->symIdx].api;
     int wmLen = (int)wcslen(wmText);
 
@@ -2725,11 +2764,11 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
                                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
                                L"Segoe UI");
 
-    // Hoydeformelen alene gir klippet tekst paa smale paneler: paa 280 px
-    // traff fh gulvet paa 32, og "BTCUSDT" ble bredere enn chart-flaten.
-    // Maalt, ikke antatt - samme disiplin som feil #5. Bredden maales paa
-    // den faktiske strengen i den faktiske fonten, og hoyden skaleres ned
-    // i samme forhold hvis den ikke faar plass.
+    // The height formula alone gives clipped text on narrow panels: at 280 px
+    // fh hit the floor of 32, and "BTCUSDT" became wider than the chart
+    // surface. Measured, not assumed - same discipline as bug #5. The width is
+    // measured on the actual string in the actual font, and the height is
+    // scaled down in the same ratio if it does not fit.
     HFONT prevFit = (HFONT)SelectObject(ctx->wmDC, ctx->hFontWm);
     SIZE sz = { 0, 0 };
     int availW = g.cw - 8;
@@ -2755,10 +2794,10 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     DrawTextW(ctx->wmDC, SYMBOLS[ctx->symIdx].api, -1, &rcSym,
               DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
-    // Intervallet under hovedlinja, i den vanlige lille fonten.
+    // The interval below the main line, in the usual small font.
     SelectObject(ctx->wmDC, ctx->hFontSmall);
-    // Avstanden ned til intervallet folger fonthoyden, ellers ville teksten
-    // ligge oppi hovedlinja paa store paneler.
+    // The distance down to the interval follows the font height, otherwise the
+    // text would sit inside the main line on large panels.
     RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + 4, g.right, g.bottom };
     DrawTextW(ctx->wmDC, INTERVALS[ctx->ivIdx].label, -1, &rcIv,
               DT_CENTER | DT_SINGLELINE | DT_TOP);
@@ -2769,9 +2808,9 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     ctx->wmValid = TRUE;
 }
 
-// Stempelfonten for skrivebordsmodus. Bygges bare naar hoyden endrer seg -
-// samme moenster som hFontWm. Et modusbytte beholder H for flaten, saa dette
-// er ikke en per-bilde-kostnad.
+// The stamp font for desktop mode. Built only when the height changes -
+// same pattern as hFontWm. A mode switch keeps H for the surface, so this
+// is not a per-frame cost.
 static void EnsurePillFont(AppContext* ctx, int H) {
     int fh = DeskPillFontH(H);
     if (ctx->hFontPill && ctx->pillFontH == fh) return;
@@ -2783,10 +2822,10 @@ static void EnsurePillFont(AppContext* ctx, int H) {
     ctx->pillFontH = ctx->hFontPill ? fh : 0;
 }
 
-// Teksten i et merke paa prisaksen (fase 23): to desimaler der de faar
-// plass, ellers aksens opploesning - samme regel som stempelet for siste
-// pris, maalt paa den ferdig formaterte strengen (feil #5). Fonten maa vaere
-// valgt inn i hdc foer kallet.
+// The text in a tag on the price axis (phase 23): two decimals where they
+// fit, otherwise the axis resolution - same rule as the stamp for the last
+// price, measured on the fully formatted string (bug #5). The font must be
+// selected into hdc before the call.
 static void FormatTagPrice(HDC hdc, double p, double range, int avail,
                            wchar_t* out, size_t cch) {
     SIZE sz = { 0, 0 };
@@ -2796,26 +2835,28 @@ static void FormatTagPrice(HDC hdc, double p, double range, int avail,
     }
 }
 
-// En glidende-snitt-linje (fase 25) over utsnittet [i0, i1). Kalles fra
-// DrawChart under laasen og innenfor grafens klipp, med DC_PEN valgt.
+// A moving-average line (phase 25) over the view [i0, i1). Called from
+// DrawChart under the lock and inside the chart's clip, with DC_PEN selected.
 //
-// Linja gaar ETT lys ut paa hver side av utsnittet, saa den forlater flaten
-// gjennom klippet i stedet for aa slutte i midten av det ytterste lyset.
-// Samme x og y som lysene: midten av kolonnen, og top + (int)(...) paa
-// prisen - floor paa x fordi lyset utenfor venstre kant har negativ
-// forskyvning, der (int) runder mot null og ikke nedover.
+// The line goes ONE candle out on each side of the view, so it leaves the
+// surface through the clip instead of ending in the middle of the outermost
+// candle. Same x and y as the candles: the middle of the column, and
+// top + (int)(...) on the price - floor on x because the candle beyond the
+// left edge has a negative offset, where (int) rounds toward zero and not
+// downward.
 //
-// y klemmes til 16 flatehoyder: snittet ser period lys bakover og kan ligge
-// langt utenfor et innzoomet prisomraade, og GDI regner i 27 bit. Klemmen
-// ligger saa langt ute at den ikke endrer hellingen paa noe som synes.
+// y is clamped to 16 surface heights: the average looks period candles back
+// and can lie far outside a zoomed-in price range, and GDI computes in 27
+// bits. The clamp is so far out that it does not change the slope of
+// anything visible.
 //
-// Punktene gaar til Polyline i bolker; siste punkt i en bolk er foerste i
-// neste, saa linja er sammenhengende. Med flere lys enn piksler faller mange
-// punkter i samme kolonne - Polyline tegner dem som den loddrette streken
-// de er.
+// The points go to Polyline in batches; the last point of a batch is the
+// first of the next, so the line is continuous. With more candles than
+// pixels many points fall in the same column - Polyline draws them as the
+// vertical stroke they are.
 //
-// legendIdx: lyset forklaringen vil ha verdien for. TRUE naar *legendVal er
-// satt - verdien faller ut av samme gjennomloep, uten et ekstra.
+// legendIdx: the candle the legend wants the value for. TRUE when *legendVal
+// is set - the value falls out of the same pass, without an extra one.
 static BOOL DrawIndicator(HDC hdc, const AppContext* ctx, const ChartRect* g,
                           int period, BOOL ema, COLORREF clr,
                           double dStart, double slot, int i0, int i1,
@@ -2850,13 +2891,13 @@ static BOOL DrawIndicator(HDC hdc, const AppContext* ctx, const ChartRect* g,
     return haveLegend;
 }
 
-// VWAP-linja (fase 27) over utsnittet [i0, i1). Samme kontrakt, samme x og y
-// og samme bolker som DrawIndicator. Forskjellen er forankringen: maskinen
-// mates fra starten av doegnet det foerste tegnede lyset hoerer til, og
-// nullstilles ved hvert doegnskifte. Der brytes ogsaa linja - VWAP for i dag
-// har ingenting med gaarsdagens siste verdi aa gjoere, og en strek mellom de
-// to ville vaert et tall som ikke finnes. Er det eldste doegnet ikke helt i
-// bufferet, tegnes ingenting foer neste doegnskifte.
+// The VWAP line (phase 27) over the view [i0, i1). Same contract, same x and y
+// and same batches as DrawIndicator. The difference is the anchoring: the
+// machine is fed from the start of the day the first drawn candle belongs to,
+// and reset at every day rollover. The line is also broken there - today's
+// VWAP has nothing to do with yesterday's last value, and a stroke between
+// the two would be a number that does not exist. If the oldest day is not
+// fully in the buffer, nothing is drawn before the next day rollover.
 static BOOL DrawVwap(HDC hdc, const AppContext* ctx, const ChartRect* g, COLORREF clr,
                      double dStart, double slot, int i0, int i1,
                      double maxP, double range,
@@ -2903,14 +2944,14 @@ static BOOL DrawVwap(HDC hdc, const AppContext* ctx, const ChartRect* g, COLORRE
     return haveLegend;
 }
 
-// En stiplet vannrett linje over [x0, x1) paa rad y (fase 27: dagens hoy og
-// lav). Ikke en PS_DASH-penn: linja tones med dispIndF, og en penn kan ikke
-// skifte farge per bilde uten aa lages paa nytt. Strekene gaar til
-// PolyPolyline i bolker, med DC_PEN - ingen nye GDI-objekter. Moensteret er
-// forankret i anchor (flatens venstre kant), ikke i x0, saa strekene staar
-// stille naar sessionens start glir under panorering. GDI tegner ikke
-// sluttpunktet, saa [a, b) er noeyaktig dashOn piksler. Perioden er felles
-// (SESS_DASH_PERIOD); dashOn skiller dagens linjer fra gaarsdagens (fase 28).
+// A dashed horizontal line over [x0, x1) on row y (phase 27: today's high and
+// low). Not a PS_DASH pen: the line fades with dispIndF, and a pen cannot
+// change color per frame without being recreated. The dashes go to
+// PolyPolyline in batches, with DC_PEN - no new GDI objects. The pattern is
+// anchored at anchor (the surface's left edge), not at x0, so the dashes stand
+// still when the session start slides during panning. GDI does not draw the
+// end point, so [a, b) is exactly dashOn pixels. The period is shared
+// (SESS_DASH_PERIOD); dashOn separates today's lines from yesterday's (phase 28).
 static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn) {
     if (x0 < anchor) x0 = anchor;
     int x = anchor + ((x0 - anchor) / SESS_DASH_PERIOD) * SESS_DASH_PERIOD;
@@ -2930,19 +2971,19 @@ static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn)
 
 static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     RECT rcAll = { 0, 0, W, H };
-    // Vannmerket ligger I bakgrunnen, for rutenett, lys og akser - grafen
-    // flyter rent over teksten. BitBlt ERSTATTER FillRect, den kommer ikke
-    // i tillegg.
+    // The watermark sits IN the background, before grid, candles and axes -
+    // the chart floats cleanly over the text. BitBlt REPLACES FillRect, it
+    // does not come in addition.
     EnsureWatermark(ctx, hdc, W, H);
     if (ctx->wmValid) {
         BitBlt(hdc, 0, 0, W, H, ctx->wmDC, 0, 0, SRCCOPY);
     } else {
-        FillRect(hdc, &rcAll, ctx->brBg);   // fallback, vannmerket er pynt
+        FillRect(hdc, &rcAll, ctx->brBg);   // fallback, the watermark is decoration
     }
 
     SetBkMode(hdc, TRANSPARENT);
 
-    // Kalles under laas, saa helsefeltene kan leses direkte.
+    // Called under the lock, so the health fields can be read directly.
     ULONGLONG nowTick = GetTickCount64();
     BOOL stale = (ctx->lastOkTick != 0) &&
                  (nowTick - ctx->lastOkTick > STALE_AFTER);
@@ -2950,19 +2991,19 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     int n = ctx->candleCount;
     if (n <= 0) {
-        // Skrivebordsmodus: ingen status paa tapetet. Flaten staar med
-        // bakgrunn og vannmerke til det finnes lys aa tegne. Meldingen ville
-        // vaert den eneste teksten igjen, og den sier ingenting en bruker som
-        // ikke kan klikke paa flaten kan gjore noe med.
+        // Desktop mode: no status on the wallpaper. The surface shows
+        // background and watermark until there are candles to draw. The
+        // message would be the only text left, and it says nothing a user
+        // who cannot click on the surface can do anything about.
         if (g_desktopMode) return;
 
         wchar_t msg[96];
         SelectObject(hdc, ctx->hFontSmall);
         SetTextColor(hdc, CLR_DIM);
 
-        // Uten forbindelse sto det tidligere "Laster data fra Binance..." i
-        // all evighet. Meldingen loy om tilstanden - naa sier den hva som
-        // faktisk skjer, og naar vi prover igjen.
+        // Without a connection it used to say "Loading data from Binance..."
+        // forever. The message lied about the state - now it says what is
+        // actually happening, and when we retry.
         if (ctx->netFailures > 0) {
             ULONGLONG nx = ctx->nextRetryTick;
             int in_s = (nx > nowTick) ? (int)((nx - nowTick + 999) / 1000) : 0;
@@ -2978,7 +3019,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     GetView(ctx, &vs, &vc);
     if (vc <= 0) return;
 
-    // --- Header: pris + endring over det SYNLIGE utsnittet ---
+    // --- Header: price + change over the VISIBLE view ---
     double first = ctx->candles[vs].open;
     double last  = ctx->candles[vs + vc - 1].close;
     double chg   = (first > 0.0) ? ((last - first) / first) * 100.0 : 0.0;
@@ -2990,29 +3031,30 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     wchar_t buf[64];
     ChartRect g = ChartGeometry(W, H);
 
-    // --- Header-layout, maalt ---
-    // Tidligere delte prisen og prosenten ETT rektangel, venstre- og
-    // hoyrestilt. Paa et smalt panel moettes de da midt i og tegnes oppi
-    // hverandre - DrawTextW klipper mot rektangelet, ikke mot naboteksten.
-    // Naa maales hver tekst paa den ferdig formaterte strengen i sin egen font
-    // (feil #5), og rad for rad sammenliknes hoyre grense for det
-    // venstrestilte med venstre grense for det hoyrestilte.
+    // --- Header layout, measured ---
+    // Previously the price and the percentage shared ONE rectangle, left- and
+    // right-aligned. On a narrow panel they then meet in the middle and are
+    // drawn on top of each other - DrawTextW clips to the rectangle, not to
+    // the neighboring text. Now each text is measured on the fully formatted
+    // string in its own font (bug #5), and row by row the right bound of the
+    // left-aligned text is compared with the left bound of the right-aligned.
     //
-    // Rad 1 (y 10-30): pris til venstre, prosent og knapperad til hoyre.
-    // Rad 2 (y 28-42): symbollinja til venstre. Til hoyre ligger ikke
-    // knappene (de slutter paa y = 24), men prisaksens overste etikett, som
-    // staar paa y = top +- 8 fra x = right + AXIS_LBL_GAP.
-    // Metadata-overlayet (fase 14). Pris, prosent og symbollinje er laget som
-    // leses fovealt: brukeren maa stoppe opp og dekode tall. Paa skrivebordet
-    // konkurrerer de med ikoner og mapper, og flaten skal leses perifert.
-    // Hele blokka staar derfor stille i skrivebordsmodus.
+    // Row 1 (y 10-30): price on the left, percentage and button row on the
+    // right. Row 2 (y 28-42): the symbol line on the left. On the right there
+    // are not the buttons (they end at y = 24), but the price axis's top
+    // label, which sits at y = top +- 8 from x = right + AXIS_LBL_GAP.
+    // The metadata overlay (phase 14). Price, percentage and symbol line are
+    // the layer that is read foveally: the user has to stop and decode
+    // numbers. On the desktop they compete with icons and folders, and the
+    // surface is meant to be read peripherally. The whole block is therefore
+    // idle in desktop mode.
     if (!g_desktopMode) {
         RECT strip;
         ButtonStrip(W, &strip);
-        int btnLeft = strip.left;          // X_left_bound for knapperaden
+        int btnLeft = strip.left;          // X_left_bound for the button row
 
-        // Rad 1, venstre: prisen. Rektangelet slutter ved knapperaden, saa selv
-        // en pris som ikke faar plass aldri tegnes under knappene.
+        // Row 1, left: the price. The rectangle ends at the button row, so even
+        // a price that does not fit is never drawn under the buttons.
         SelectObject(hdc, ctx->hFontBig);
         SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
         swprintf_s(buf, 64, L"$%.2f", last);
@@ -3023,9 +3065,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         RECT rcPrice = { PAD_L, 10, btnLeft - HDR_GAP, 30 };
         DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-        // Rad 1, hoyre: prosenten i tre trinn. Hel med spenn, saa uten spenn,
-        // saa skjult. Aldri klippet midt i et tall - "+0,5" der det staar
-        // "+0,50 %" er en feil verdi, ikke en kortere.
+        // Row 1, right: the percentage in three steps. Full with span, then
+        // without span, then hidden. Never clipped in the middle of a number -
+        // "+0.5" where it says "+0.50%" is a wrong value, not a shorter one.
         SelectObject(hdc, ctx->hFontSmall);
         int pctRight = btnLeft - HDR_GAP;
         wchar_t pctFull[48], pctShort[24];
@@ -3035,9 +3077,10 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         SIZE szFull = { 0, 0 }, szShort = { 0, 0 };
         GetTextExtentPoint32W(hdc, pctFull, lenFull, &szFull);
 
-        // Den korte formen maales bare naar den hele ikke fikk plass. Hver
-        // GetTextExtentPoint32W er ~20 us, og over minstebredden faar den hele
-        // plass med god margin - maalt ved 400 px: ~115 px luft til prisen.
+        // The short form is measured only when the full one did not fit. Each
+        // GetTextExtentPoint32W is ~20 us, and above the minimum width the full
+        // one fits with a good margin - measured at 400 px: ~115 px of air to
+        // the price.
         const wchar_t* pct = NULL;
         int lenPct = 0;
         if (HeaderFits(priceRight, pctRight - szFull.cx)) {
@@ -3054,13 +3097,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
         }
 
-        // Rad 2: verktoylinja (fase 22) staar der symbollinja sto, og baerer
-        // symbol og intervall selv. Den tegnes fra PaintPopup - ogsaa naar
-        // bufferet er tomt. Igjen her er bare frakoblet-teksten, som leser
-        // helsefeltene under laasen: til hoyre for siste pille, og bare
-        // naar HELE teksten faar plass foer prisaksens etikett. Samme regel
-        // som prosenten: et avkuttet sekundtall er et feil tall. Dempet
-        // pris, tray-tipset og ikonet baerer tilstanden uansett bredde.
+        // Row 2: the toolbar (phase 22) sits where the symbol line used to,
+        // and carries symbol and interval itself. It is drawn from PaintPopup
+        // - also when the buffer is empty. All that is left here is the
+        // offline text, which reads the health fields under the lock: to the
+        // right of the last pill, and only when the WHOLE text fits before the
+        // price axis's label. Same rule as the percentage: a truncated seconds
+        // count is a wrong number. Dimmed price, the tray tip and the icon
+        // carry the state at any width.
         if (stale) {
             RECT tb[TBAR_COUNT];
             int tbN = ToolbarLayout(W, tb);
@@ -3078,19 +3122,19 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         }
     }
 
-    // --- Chart-geometri ---
+    // --- Chart geometry ---
     int left = g.left, top = g.top, right = g.right, bottom = g.bottom;
     int cw = g.cw, ch = g.ch;
-    int edge = g.edge;   // aksekanten; right er der lysene slutter
+    int edge = g.edge;   // the axis edge; right is where the candles end
     if (cw <= 0 || ch <= 0) return;
 
-    // Kalles under laas, saa frontShift kan leses direkte.
+    // Called under the lock, so frontShift can be read directly.
     ApplyFrontShift(ctx);
     if (!ctx->dispValid) SyncDisp(ctx);
 
-    // Tegningen leser VISNINGEN. Maalet (vs, vc) brukes bare til spennteksten
-    // i headeren og til a regne ut hva visningen skal ease MOT - og det siste
-    // skjer i WM_TIMER, ikke her.
+    // The drawing reads the DISPLAY. The target (vs, vc) is used only for the
+    // span text in the header and to work out what the display should ease
+    // TOWARDS - and the latter happens in WM_TIMER, not here.
     double dStart = ctx->dispStart;
     double dCount = ctx->dispCount;
     if (dCount < 1.0) dCount = 1.0;
@@ -3099,32 +3143,33 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     double range = maxP - minP;
     if (range < 1e-9) range = 1.0;
 
-    // --- Klipping til chart-flaten ---
-    // Med dStart = 142,7 finnes det halve lys i begge kanter, og midt i
-    // Y-easingen ligger veker over maxP og under minP. Rutenett og lys tegnes
-    // derfor innenfor en klipperegion avgrenset til rcChart, og ingenting
-    // annet: aksetekstene, stempelet og headeren ligger utenfor flaten og
-    // tegnes etter SelectClipRgn(NULL).
+    // --- Clipping to the chart surface ---
+    // With dStart = 142.7 there are half candles at both edges, and in the
+    // middle of the Y easing wicks lie above maxP and below minP. Grid and
+    // candles are therefore drawn inside a clip region bounded to rcChart,
+    // and nothing else: the axis texts, the stamp and the header lie outside
+    // the surface and are drawn after SelectClipRgn(NULL).
     //
-    // Hoyre kant er EKSKLUSIV: kolonnen x = edge hoerer til aksemargen, og
-    // rutenettet slutter paa edge - 1. Med edge + 1 her maalte vi lyspiksler
-    // i den kolonnen i 21 av 240 bilder under panorering, maksimert (fase 6).
+    // The right edge is EXCLUSIVE: column x = edge belongs to the axis margin,
+    // and the grid ends at edge - 1. With edge + 1 here we measured candle
+    // pixels in that column in 21 of 240 frames during panning, maximized
+    // (phase 6).
     //
-    // Klippet gaar til edge, ikke til right: lysene holder seg innenfor right
-    // av seg selv (slot regnes av cw), mens rutenettet og siste-pris-linja
-    // skal krysse luftrommet og naa helt fram til aksen (fase 15).
+    // The clip goes to edge, not to right: the candles stay inside right by
+    // themselves (slot is computed from cw), while the grid and the last-price
+    // line must cross the air gap and reach all the way to the axis (phase 15).
     //
-    // Bunnen er INKLUSIV (bottom + 1): rutenettlinje i = 4 ligger paa
-    // y = bottom, og det samme gjor veken til lyset med laveste pris. Et
-    // [top, bottom)-klipp ville visket ut den nederste linja.
+    // The bottom is INCLUSIVE (bottom + 1): grid line i = 4 lies at
+    // y = bottom, and so does the wick of the candle with the lowest price. A
+    // [top, bottom) clip would erase the bottom line.
     RECT rcChart = { left, top, edge, bottom + 1 };
     IntersectClipRect(hdc, rcChart.left, rcChart.top, rcChart.right, rcChart.bottom);
 
-    // --- Rutenett ---
-    // Kant til kant legger linje i = 0 paa y = 0 og i = 4 paa y = H - 1. Det
-    // er en 1 px ramme rundt hele skjermen - selve interferensen
-    // skrivebordsmodus skal vaere fri for. De tre indre linjene baerer den
-    // romlige referanserammen alene.
+    // --- Grid ---
+    // Edge to edge puts line i = 0 at y = 0 and i = 4 at y = H - 1. That is a
+    // 1 px frame around the whole screen - the very interference desktop mode
+    // is supposed to be free of. The three inner lines carry the spatial
+    // frame of reference alone.
     HPEN hOldPen = (HPEN)SelectObject(hdc, ctx->penGrid);
     int gi0 = g_desktopMode ? 1 : 0, gi1 = g_desktopMode ? 3 : 4;
     for (int i = gi0; i <= gi1; ++i) {
@@ -3138,48 +3183,49 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     double slot = (double)cw / dCount;
     int bodyW = (int)(slot * 0.62);
     if (bodyW < 1)  bodyW = 1;
-    if (bodyW > 18) bodyW = 18;   // hindrer klumpete lys ved full innzoom
+    if (bodyW > 18) bodyW = 18;   // prevents chunky candles at full zoom-in
 
-    // Lokka gaar fortsatt over SYNLIGE lys, ikke over hele historikken:
-    // i1 - i0 er dCount + 1 avrundet. Ytelseskarakteristikken fra fase 1
-    // staar.
+    // The loop still runs over VISIBLE candles, not over the whole history:
+    // i1 - i0 is dCount + 1 rounded. The performance characteristics from
+    // phase 1 stand.
     int i0 = (int)floor(dStart);
     int i1 = (int)ceil(dStart + dCount);
     if (i0 < 0) i0 = 0;
     if (i1 > n) i1 = n;
 
-    // --- Volumstolper (fase 21) ---
-    // Bak lysene, i de nederste VOL_FRAC av flaten, innenfor samme klipp.
-    // Skalaen er dispVolMax - VISNINGEN, som eases i WM_TIMER - ikke
-    // maalet, ellers hopper stolpene mens lysene glir. Retningen er lysets
-    // egen (close mot open), samme regel som lysfargen og en annen enn
-    // siste-pris-linjas (se den). Nederste rad er y = bottom, inklusiv, som
-    // for veker og rutenettlinje 4 (fallgruve 33); FillRect er eksklusiv i
-    // bunnen, derfor bottom + 1. Ingen geometri- eller treffkode roeres:
-    // stolpene er et overlegg i lysenes egen flate.
+    // --- Volume bars (phase 21) ---
+    // Behind the candles, in the bottom VOL_FRAC of the surface, inside the
+    // same clip. The scale is dispVolMax - the DISPLAY, which is eased in
+    // WM_TIMER - not the target, otherwise the bars jump while the candles
+    // glide. The direction is the candle's own (close vs open), the same rule
+    // as the candle color and a different one from the last-price line's
+    // (see there). The bottom row is y = bottom, inclusive, as for wicks and
+    // grid line 4 (pitfall 33); FillRect is exclusive at the bottom, hence
+    // bottom + 1. No geometry or hit-test code is touched: the bars are an
+    // overlay in the candles' own surface.
     //
-    // Ett PolyPolygon per farge og bolk paa VOL_BATCH stolper, med NULL_PEN:
-    // polygonfyllet utelater hoeyre og nedre kant som Rectangle, saa hjoernene
-    // [x0, x1) x [bottom + 1 - h, bottom + 1) fyller noeyaktig de samme
-    // pikslene som FillRect ville gjort.
+    // One PolyPolygon per color and batch of VOL_BATCH bars, with NULL_PEN:
+    // the polygon fill leaves out the right and bottom edges like Rectangle,
+    // so the corners [x0, x1) x [bottom + 1 - h, bottom + 1) fill exactly the
+    // same pixels FillRect would have.
     //
-    // WINDING, ikke ALTERNATE: med flere lys enn piksler (vc > cw) er slot
-    // under 1, bodyW klemmes til 1, og nabolys lander paa samme cx. To like
-    // rektangler i samme bolk NULLER hverandre under ALTERNATE (partall/
-    // oddetall), saa stolpen forsvinner. FillRect overtegnet; polygonfyll
-    // teller kanter. Med WINDING og samme omloepsretning paa alle
-    // rektanglene summeres de, og unionen - den hoeyeste - staar igjen.
-    // Maalt i proben: to like rektangler gir 0 piksler under ALTERNATE og
-    // w x h under WINDING.
+    // WINDING, not ALTERNATE: with more candles than pixels (vc > cw) slot is
+    // below 1, bodyW is clamped to 1, and neighboring candles land on the
+    // same cx. Two identical rectangles in the same batch CANCEL each other
+    // under ALTERNATE (even/odd), so the bar disappears. FillRect overdrew;
+    // polygon fill counts edges. With WINDING and the same winding direction
+    // on all the rectangles they add up, and the union - the tallest -
+    // remains. Measured in the probe: two identical rectangles give 0 pixels
+    // under ALTERNATE and w x h under WINDING.
     //
-    // dispVolF (fase 22) er VOL-bryterens visning, 0..1: stolpene synker ned
-    // i bunnen naar de skrus av, og reiser seg igjen. Ved 1,0 er faktoren
-    // eksakt, saa pikslene er de samme som foer bryteren fantes.
+    // dispVolF (phase 22) is the VOL toggle's display, 0..1: the bars sink
+    // into the bottom when switched off, and rise again. At 1.0 the factor
+    // is exact, so the pixels are the same as before the toggle existed.
     if (ctx->dispVolMax > 0.0 && ctx->dispVolF > 0.0) {
         int bandH = (int)((double)ch * VOL_FRAC);
         int oldFill = SetPolyFillMode(hdc, WINDING);
         HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
-        for (int pass = 0; pass < 2; ++pass) {          // 0 = opp, 1 = ned
+        for (int pass = 0; pass < 2; ++pass) {          // 0 = up, 1 = down
             SelectObject(hdc, pass == 0 ? ctx->brVolUp : ctx->brVolDown);
             int k = 0;
             for (int i = i0; i < i1; ++i) {
@@ -3187,7 +3233,7 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                 if ((c->close >= c->open) != (pass == 0)) continue;
                 int h = (int)(c->volume / ctx->dispVolMax * (double)bandH * ctx->dispVolF + 0.5);
                 if (h <= 0) continue;
-                if (h > bandH) h = bandH;   // midt i easingen kan et lys ligge over skalaen
+                if (h > bandH) h = bandH;   // mid-easing a candle can lie above the scale
                 int cx = left + (int)(((double)i - dStart + 0.5) * slot);
                 int x0 = cx - bodyW / 2, x1 = x0 + bodyW;
                 int y0 = bottom + 1 - h, y1 = bottom + 1;
@@ -3205,14 +3251,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         SetPolyFillMode(hdc, oldFill);
     }
 
-    // --- Varsellinjer (fase 23) ---
-    // Bak lysene og over stolpene, innenfor samme klipp, fra left til edge
-    // som rutenettet: et nivaa er en referanse, og lysene er det som leses.
-    // Dempet rav (CLR_ALERT_LINE), heltrukket - stiplet er siste pris, og
-    // prikket er traadkorset. DC_PEN, saa ingen nye GDI-objekter. Tegnes i
-    // begge modi: paa skrivebordet er linja romlig referanse som rutenettet,
-    // mens merket med tallet bare finnes i panelet (fase 14).
-    // Utenfor [top, bottom] tegnes ingenting, samme regel som siste pris.
+    // --- Alert lines (phase 23) ---
+    // Behind the candles and above the bars, inside the same clip, from left
+    // to edge like the grid: a level is a reference, and the candles are what
+    // is read. Muted amber (CLR_ALERT_LINE), solid - dashed is the last price,
+    // and dotted is the crosshair. DC_PEN, so no new GDI objects. Drawn in
+    // both modes: on the desktop the line is a spatial reference like the
+    // grid, while the tag with the number exists only in the panel (phase 14).
+    // Outside [top, bottom] nothing is drawn, same rule as the last price.
     {
         int na = ctx->alertCount[ctx->symIdx];
         if (na > 0) {
@@ -3227,35 +3273,37 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         }
     }
 
-    // --- Dagens hoy og lav (fase 27) ---
-    // Bak lysene, som varsellinjene: en referanse, ikke det som leses. To
-    // stiplede, noeytrale linjer paa hoyeste high og laveste low i dagens
-    // UTC-doegn, fra doegnets foerste lys og inn til aksen - saa linja viser
-    // ogsaa HVOR dagen begynner. Staar utsnittet i gaarsdagen (x-en ligger
-    // til hoyre for flaten), tegnes ingenting, og det samme utenfor
-    // [top, bottom] - samme regel som siste pris og varslene.
+    // --- Today's high and low (phase 27) ---
+    // Behind the candles, like the alert lines: a reference, not what is read.
+    // Two dashed, neutral lines at the highest high and lowest low of today's
+    // UTC day, from the day's first candle in to the axis - so the line also
+    // shows WHERE the day begins. If the view is in yesterday (the x lies to
+    // the right of the surface), nothing is drawn, and the same outside
+    // [top, bottom] - same rule as the last price and the alerts.
     //
-    // Hoerer til indikatorbryteren (M, MA-pillen, "Indikatorer" i
-    // tray-menyen) og toner med den. Dermed er de AV paa skrivebordet som
-    // standard (fase 26), uten en ny noekkel i registret, og verktoylinja -
-    // som alt er full paa minstebredden - trenger ingen ny pille.
+    // Belongs to the indicator toggle (M, the MA pill, "Indicators" in the
+    // tray menu) and fades with it. So they are OFF on the desktop by
+    // default (phase 26), without a new key in the registry, and the toolbar
+    // - already full at the minimum width - needs no new pill.
     //
-    // Gaarsdagens slutt, hoy og lav (fase 28) er samme slags referanse og
-    // tegnes i samme blokk, fra samme x: nivaaer FOR I DAG, saa lysene som
-    // laget dem faar ingen strek over seg. Kjoeligere farge og eget moenster
-    // (se CLR_PREV). Er gaarsdagen ikke hel i bufferet, tegnes de ikke.
-    // Alle fem nivaaene staar i en tabell i aksekolonnens rang, saa
-    // kollisjonsregelen, merkene og forklaringens "struck" er en loekke hver.
-    // yLine er radene som faktisk ble tegnet; aksemerkene under leser yLvl.
+    // Yesterday's close, high and low (phase 28) are the same kind of
+    // reference and are drawn in the same block, from the same x: levels FOR
+    // TODAY, so the candles that made them get no line across them. Cooler
+    // color and its own pattern (see CLR_PREV). If yesterday is not complete
+    // in the buffer, they are not drawn. All five levels sit in a table in
+    // the axis column's rank order, so the collision rule, the tags and the
+    // legend's "struck" are one loop each.
+    // yLine is the rows that were actually drawn; the axis tags below read
+    // yLvl.
     static const int LVL_DASH[LVL_COUNT] = { SESS_DASH_ON, SESS_DASH_ON,
                                              PREV_DASH_CLOSE, PREV_DASH_HL, PREV_DASH_HL };
     int    indT = (int)(ctx->dispIndF * 255.0 + 0.5);
     double lvlP[LVL_COUNT] = { 0.0, 0.0, 0.0, 0.0, 0.0 };
     BOOL   lvlOn[LVL_COUNT] = { FALSE, FALSE, FALSE, FALSE, FALSE };
-    int    yLvl[LVL_COUNT];    // aksemerkene; kollisjonsregelen kan stryke dem
-    int    yLine[LVL_COUNT];   // linjene som ble tegnet
+    int    yLvl[LVL_COUNT];    // the axis tags; the collision rule can strike them
+    int    yLine[LVL_COUNT];   // the lines that were drawn
     for (int q = 0; q < LVL_COUNT; ++q) { yLvl[q] = INT_MIN; yLine[q] = INT_MIN; }
-    int    lvlXs = left;       // der nivaalinjene begynner (merkelappene, fase 29)
+    int    lvlXs = left;       // where the level lines begin (the labels, phase 29)
 #ifdef TICKER_PROBE
     LARGE_INTEGER sessQ0, sessQ1, sessQf, prevQ0, prevQ1;
     QueryPerformanceCounter(&sessQ0);
@@ -3301,16 +3349,16 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     QueryPerformanceCounter(&sessQ1);
     QueryPerformanceFrequency(&sessQf);
     g_probeSessUs = (sessQ1.QuadPart - sessQ0.QuadPart) * 1000000LL / sessQf.QuadPart;
-    // Felt 56: utregningen av gaarsdagen (binaersoek + ett gjennomloep av
-    // doegnet). De tre linjene ligger i felt 45 sammen med dagens.
+    // Field 56: the computation of yesterday (binary search + one pass over
+    // the day). The three lines are in field 45 together with today's.
     g_probePrevUs = (prevQ1.QuadPart - prevQ0.QuadPart) * 1000000LL / sessQf.QuadPart;
 #endif
 
-    // Lysene tegnes med systemets DC_PEN og DC_BRUSH, fargelagt per lys, i
-    // stedet for fire egne penner og pensler. Det er fire GDI-objekter
-    // mindre; det vedvarende bufferet tar to, saa tallet i hvile gaar ned med
-    // to. Heltrukket 1 px i begge tilfeller, saa pikslene er de samme.
-    // Fargen settes bare naar den skifter.
+    // The candles are drawn with the system DC_PEN and DC_BRUSH, colored per
+    // candle, instead of four dedicated pens and brushes. That is four GDI
+    // objects fewer; the persistent buffer takes two, so the count at rest
+    // goes down by two. Solid 1 px in both cases, so the pixels are the same.
+    // The color is set only when it changes.
     SelectObject(hdc, GetStockObject(DC_PEN));
     SelectObject(hdc, GetStockObject(DC_BRUSH));
     int curUp = -1;
@@ -3330,35 +3378,36 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             curUp = up;
         }
 
-        // Veke
+        // Wick
         MoveToEx(hdc, cx, yHigh, NULL);
         LineTo(hdc, cx, yLow);
 
-        // Kropp
+        // Body
         int yTop = (yOpen < yClose) ? yOpen : yClose;
         int yBot = (yOpen < yClose) ? yClose : yOpen;
-        if (yBot - yTop < 1) yBot = yTop + 1; // doji -> minst 1px
+        if (yBot - yTop < 1) yBot = yTop + 1; // doji -> at least 1px
         Rectangle(hdc, cx - bodyW / 2, yTop, cx - bodyW / 2 + bodyW, yBot);
     }
 
-    // --- Glidende snitt (fase 25) ---
-    // OVER lysene, innenfor samme klipp: en 1 px dempet linje bak mettede
-    // lyskropper ville forsvunnet nettopp der den krysser prisen, som er der
-    // den leses. Under siste-pris-linja, traadkorset og overlayet. Begge
-    // modi - en kurve er ikke tekst (fase 14). Prisaksen ser IKKE snittene:
-    // PriceRange er uroert, og en linje utenfor utsnittets prisomraade
-    // klippes, som i TradingView. Ellers ville et innzoomet utsnitt blitt
-    // presset sammen av et snitt som ligger langt unna.
+    // --- Moving averages (phase 25) ---
+    // ABOVE the candles, inside the same clip: a 1 px muted line behind
+    // saturated candle bodies would vanish exactly where it crosses the price,
+    // which is where it is read. Below the last-price line, the crosshair and
+    // the overlay. Both modes - a curve is not text (phase 14). The price axis
+    // does NOT see the averages: PriceRange is untouched, and a line outside
+    // the view's price range is clipped, as in TradingView. Otherwise a
+    // zoomed-in view would be squeezed by an average lying far away.
     //
-    // dispIndF (0..1) toner fargen mot CLR_BG - MA-bryteren. DC_PEN, saa
-    // ingen nye GDI-objekter. EMA sist: den lange linja ligger oeverst der
-    // de to krysser.
+    // dispIndF (0..1) fades the color towards CLR_BG - the MA toggle. DC_PEN,
+    // so no new GDI objects. EMA last: the long line lies on top where the
+    // two cross.
     //
-    // Forklaringen (under) viser verdien paa lyset under traadkorset, ellers
-    // paa siste synlige lys. Samme vilkaar som traadkorset bruker.
+    // The legend (below) shows the value at the candle under the crosshair,
+    // otherwise at the last visible candle. Same condition the crosshair uses.
     //
-    // VWAP (fase 27) er tredje linje i samme blokk, og oeverst: gull over
-    // blaatt og lilla. indVal[2] er verdien paa samme lys som de to andre.
+    // VWAP (phase 27) is the third line in the same block, and on top: gold
+    // over blue and purple. indVal[2] is the value at the same candle as the
+    // other two.
     double indVal[3] = { 0.0, 0.0, 0.0 };
     BOOL   indOk[3]  = { FALSE, FALSE, FALSE };
 #ifdef TICKER_PROBE
@@ -3396,46 +3445,49 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 #endif
     }
 
-    // Klippingen MAA vekk for aksetekstene - de ligger i margen til hoyre.
+    // The clipping MUST be removed for the axis texts - they lie in the
+    // margin on the right.
     SelectClipRgn(hdc, NULL);
 
     SelectObject(hdc, GetStockObject(BLACK_PEN));
     SelectObject(hdc, GetStockObject(NULL_BRUSH));
 
-    // --- Prisetiketter ---
-    // Egen lokke etter klippingen, ikke i rutenettlokka: der ville de blitt
-    // klippet bort sammen med alt annet utenfor rcChart.
-    // Omega_y-axis: x i [edge + AXIS_LBL_GAP, W - AXIS_PAD_R).
+    // --- Price labels ---
+    // A separate loop after the clipping, not in the grid loop: there they
+    // would have been clipped away along with everything else outside rcChart.
+    // Omega_y-axis: x in [edge + AXIS_LBL_GAP, W - AXIS_PAD_R).
     int axL = edge + AXIS_LBL_GAP, axR = W - AXIS_PAD_R;
     SelectObject(hdc, ctx->hFontAxis);
     SetTextColor(hdc, CLR_AXIS);
-    // Stempelet for siste pris ligger oppaa etiketten paa samme hoyde (se
-    // under). Begge er 16 px hoye, og med 11 px sifre ble en etikett som laa
-    // under 16 px unna halvt dekket, med et avkuttet tall synlig under. En
-    // etikett som ville kollidert, tegnes derfor ikke. Samme regel og samme
-    // yLast som stempelet.
-    // Fase 14: ingen maaleverdier paa skrivebordet. Kolonnen finnes ikke der
-    // heller - axL ligger utenfor flaten naar geometrien gaar kant til kant.
+    // The stamp for the last price lies on top of the label at the same
+    // height (see below). Both are 16 px tall, and with 11 px digits a label
+    // less than 16 px away was half covered, with a truncated number visible
+    // underneath. A label that would collide is therefore not drawn. Same
+    // rule and same yLast as the stamp.
+    // Phase 14: no measured values on the desktop. The column does not exist
+    // there either - axL lies outside the surface when the geometry runs
+    // edge to edge.
     int yPill = INT_MIN;
-    int yCross = INT_MIN;   // traadkorsmerkets rad naar det skal tegnes (fase 29)
+    int yCross = INT_MIN;   // the crosshair tag's row when it is to be drawn (phase 29)
     if (!g_desktopMode) {
         {
             double lp = ctx->candles[n - 1].close;
             int yl = top + (int)(((maxP - lp) / range) * ch);
             if (yl >= top && yl <= bottom) yPill = yl;
         }
-        // Varselmerkene (fase 23) og spoekelsesmerket under pekeren ligger i
-        // samme kolonne og er like hoye, saa de faar samme kollisjonsregel
-        // som stempelet: en etikett under 16 px unna tegnes ikke.
+        // The alert tags (phase 23) and the ghost tag under the pointer lie in
+        // the same column and are equally tall, so they get the same collision
+        // rule as the stamp: a label less than 16 px away is not drawn.
         int yTag[ALERT_MAX + 2], nTag = 0;
         int sA = ctx->symIdx, nA = ctx->alertCount[sA];
-        // Traadkorsets aksemerke (fase 29) er det eneste merket som flytter
-        // seg med haanda, og det hadde ingen kollisjonsregel: sto pekeren
-        // 1-15 px fra en etikett, stakk en stripe av tallet fram under det.
-        // Rangen er stempelet, saa traadkorsmerket, saa resten. Samme
-        // synlighetsproeve og samme klemming som traadkorsblokka nederst;
-        // under 16 px fra stempelet tegnes ikke traadkorsmerket (siste pris
-        // er tallet som aldri skal kuttes), og da viker heller ingen for det.
+        // The crosshair's axis tag (phase 29) is the only tag that moves with
+        // the hand, and it had no collision rule: when the pointer was 1-15 px
+        // from a label, a strip of the number stuck out beneath it. The rank
+        // is the stamp, then the crosshair tag, then the rest. Same visibility
+        // test and same clamping as the crosshair block at the bottom; within
+        // 16 px of the stamp the crosshair tag is not drawn (the last price is
+        // the number that must never be cut), and then nothing yields to it
+        // either.
         if (ctx->hoverIdx >= 0 && ctx->hoverIdx < n) {
             double hrelT = (double)ctx->hoverIdx - dStart;
             if (hrelT >= 0.0 && hrelT < dCount) {
@@ -3454,14 +3506,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                       (ctx->alertHot < 0 || ctx->alertHot >= nA));
         if (ghost) yTag[nTag++] = ctx->axisHotY;
 
-        // Merkene for dagens hoy og lav (fase 27) staar i samme kolonne og
-        // er lavest i rang: et merke under 16 px fra stempelet, et varsel,
-        // spoekelsesmerket eller det andre sessionmerket tegnes ikke (hoy
-        // vinner over lav). Rutenettetikettene viker for dem som for de
-        // andre. Avgjoeres HER, foer etikettene, og tegnes etter varslene.
-        // Gaarsdagens merker (fase 28) staar bakerst i samme tabell: et
-        // merke viker for stempelet, varslene, spoekelsesmerket og for alle
-        // nivaaer foran seg i rangen som selv fikk staa.
+        // The tags for today's high and low (phase 27) sit in the same column
+        // and rank lowest: a tag under 16 px from the stamp, an alert, the
+        // ghost tag or the other session tag is not drawn (high wins over
+        // low). The grid labels give way to them as to the others. Decided
+        // HERE, before the labels, and drawn after the alerts.
+        // Yesterday's tags (phase 28) sit last in the same table: a tag gives
+        // way to the stamp, the alerts, the ghost tag and to every level
+        // ahead of it in rank that was itself kept.
         for (int q = 0; q < LVL_COUNT; ++q) {
             if (yLvl[q] == INT_MIN) continue;
             BOOL hide = (yPill != INT_MIN && abs(yLvl[q] - yPill) < 16);
@@ -3484,13 +3536,13 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
-        // --- Varselmerker paa prisaksen (fase 23) ---
-        // Samme flate som stempelet og traadkorsets etikett: [edge + 1,
-        // axR + 3) x [y - 8, y + 8). Rav flate med moerk tekst. Merket
-        // pekeren staar paa (alertHot) blir roedt som lukkeknappen: et klikk
-        // der FJERNER varselet, og fargen sier det foer klikket. Stempelet
-        // for siste pris tegnes etterpaa og ligger oeverst - er de to paa
-        // samme hoyde, er varselet i ferd med aa fyre.
+        // --- Alert tags on the price axis (phase 23) ---
+        // Same surface as the stamp and the crosshair's label: [edge + 1,
+        // axR + 3) x [y - 8, y + 8). Amber surface with dark text. The tag
+        // the pointer is on (alertHot) turns red like the close button: a
+        // click there REMOVES the alert, and the color says so before the
+        // click. The stamp for the last price is drawn afterwards and sits on
+        // top - if the two are at the same height, the alert is about to fire.
         for (int a = 0; a < nA; ++a) {
             double lvl = fabs(ctx->alerts[sA][a]);
             int y = AlertY(ctx, &g, lvl);
@@ -3499,11 +3551,11 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             RECT rcA = { edge + 1, y - 8, axR + 3, y + 8 };
             SetDCBrushColor(hdc, hot ? CLR_CLOSEHOT : CLR_ALERT);
             FillRect(hdc, &rcA, (HBRUSH)GetStockObject(DC_BRUSH));
-            // Ligger stempelet eller et senere tegnet merke oppaa dette,
-            // stikker bare en stripe av flaten fram - og med den et tall
-            // kuttet paa langs. Samme regel som etikettene: et avkuttet tall
-            // er verre enn ikke noe tall (sett i PrintWindow: "81034.00"
-            // halvveis under stempelet). Flaten tegnes, teksten ikke.
+            // If the stamp or a tag drawn later lies on top of this one, only
+            // a strip of the surface sticks out - and with it a number cut
+            // lengthwise. Same rule as the labels: a clipped number is worse
+            // than no number (seen in PrintWindow: "81034.00" halfway under
+            // the stamp). The surface is drawn, the text is not.
             BOOL covered = (yPill != INT_MIN && abs(y - yPill) < 16) ||
                            (yCross != INT_MIN && abs(y - yCross) < 16);
             for (int b = a + 1; b < nA && !covered; ++b) {
@@ -3517,13 +3569,13 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
-        // --- Merker for dagens hoy og lav (fase 27) ---
-        // Samme flate som de andre merkene, men dempet: boksfargen mot
-        // bakgrunnen og graa tekst, ingen ramme og ingen mettet flate - et
-        // merke man kan klikke paa er rav, og dette er ikke et. Flaten skiller
-        // tallet fra rutenettetikettene, som har samme font og nesten samme
-        // farge. Tones med linjene. Gaarsdagens merker (fase 28) er de samme,
-        // med tallet i CLR_PREV som linja.
+        // --- Tags for today's high and low (phase 27) ---
+        // Same surface as the other tags, but muted: the box color against
+        // the background and gray text, no frame and no saturated surface - a
+        // tag you can click is amber, and this is not one. The surface sets
+        // the number apart from the grid labels, which have the same font and
+        // almost the same color. Faded with the lines. Yesterday's tags
+        // (phase 28) are the same, with the number in CLR_PREV like the line.
         for (int q = 0; q < LVL_COUNT; ++q) {
             if (yLvl[q] == INT_MIN) continue;
             int y = yLvl[q];
@@ -3536,11 +3588,11 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             DrawTextW(hdc, buf, -1, &rcST, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
-        // Spoekelsesmerket: pekeren staar i priskolonnen paa et tomt sted, og
-        // et klikk SETTER et varsel her. Rammet, ikke fylt, med linja tvers
-        // over grafen, saa brukeren ser hvilke lys nivaaet skjaerer foer
-        // klikket. Er alle plassene brukt, er det graatt, og klikket gjoer
-        // ingenting. Prisen er den AVRUNDEDE - den som faktisk blir satt.
+        // The ghost tag: the pointer is in the price column on an empty spot,
+        // and a click SETS an alert here. Framed, not filled, with the line
+        // across the chart, so the user sees which candles the level cuts
+        // before the click. If all slots are used, it is gray, and the click
+        // does nothing. The price is the ROUNDED one - the one actually set.
         if (ghost) {
             int y = ctx->axisHotY;
             BOOL full = (nA >= ALERT_MAX);
@@ -3558,15 +3610,16 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             RECT rcGT = { axL, y - 8, axR, y + 8 };
             DrawTextW(hdc, buf, -1, &rcGT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
-        SetTextColor(hdc, CLR_AXIS);   // tidsaksen under arver fargen
+        SetTextColor(hdc, CLR_AXIS);   // the time axis below inherits the color
     }
 
-    // --- Ettergloed (fase 23) ---
-    // Et varsel som har fyrt er FJERNET; igjen staar en linje i full rav som
-    // toner ut over et par sekunder (alertFlashF, 1..0, eases av klokka), saa
-    // den som ser paa panelet ser HVOR det smalt. Blandet mot CLR_BG som alt
-    // annet her - ugjennomsiktig over bakgrunnen er identisk med alfa. Over
-    // lysene, ikke bak: dette er et signal, ikke en referanse. Begge modi.
+    // --- Afterglow (phase 23) ---
+    // An alert that has fired is REMOVED; left behind is a line in full amber
+    // that fades out over a couple of seconds (alertFlashF, 1..0, eased by the
+    // clock), so whoever looks at the panel sees WHERE it went off. Blended
+    // against CLR_BG like everything else here - opaque over the background
+    // is identical to alpha. Over the candles, not behind: this is a signal,
+    // not a reference. Both modes.
     if (ctx->alertFlashF > 0.0) {
         int y = AlertY(ctx, &g, ctx->alertFlashLevel);
         if (y >= top && y <= bottom) {
@@ -3578,35 +3631,35 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         }
     }
 
-    // --- Tidsakse (Omega_x-axis) ---
-    // Bare tekst, ingen akselinje. Etikettene staar under lysets midtpunkt i
-    // baandet [bottom + 2, H - 1], og aldri utenfor [left, right]: under
-    // hoyre kolonne ligger prisaksens nederste etikett og stempelet.
+    // --- Time axis (Omega_x-axis) ---
+    // Text only, no axis line. The labels sit under the candle's midpoint in
+    // the band [bottom + 2, H - 1], and never outside [left, right]: under
+    // the right column lie the price axis's bottom label and the stamp.
     //
-    // Hvilke lys som faar etikett, forankres i TIDEN, ikke i indeksen i0.
-    // Relativt til i0 ville etikettene hoppe til nye lys i hvert bilde av en
-    // panorering; relativt til absolutt indeks ville de hoppe ett lys hver
-    // gang et lys kastes ut i front naar bufferet er fullt. openTime /
-    // intervalMs er stabil gjennom begge.
+    // Which candles get a label is anchored in TIME, not in the index i0.
+    // Relative to i0 the labels would jump to new candles in every frame of
+    // a pan; relative to the absolute index they would jump one candle every
+    // time a candle is dropped at the front when the buffer is full.
+    // openTime / intervalMs is stable through both.
     //
-    // O(antall etiketter): ett modulo for aa finne foerste etikett, deretter
-    // steg paa S rett i candles[]. Ingen allokering.
+    // O(number of labels): one modulo to find the first label, then steps
+    // of S straight in candles[]. No allocation.
     if (i0 < i1 && !g_desktopMode) {
         wchar_t tl[24];
         FormatCandleTime(ctx->candles[i0].openTime,
                          ctx->intervalMs, tl, 24);
         int tlLen = (int)wcslen(tl);
         SIZE tsz = { 0, 0 };
-        GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // aksefonten er valgt
+        GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // the axis font is selected
         int minDx = tsz.cx + TIME_LBL_GAP;
         if (minDx < TIME_DX_MIN) minDx = TIME_DX_MIN;
         long long iv = (ctx->intervalMs > 0) ? ctx->intervalMs : 60000LL;
         int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
 
-        // Forankret i LOKAL tid, saa 6 t-steg lander paa 00, 06, 12 og 18
-        // her og ikke paa 02, 08 ... (UTC + 2 om sommeren). Forskyvningen
-        // leses paa i0; et sommertidsskifte midt i utsnittet flytter bare
-        // etikettene en time.
+        // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
+        // here and not on 02, 08 ... (UTC + 2 in summer). The offset is read
+        // at i0; a DST change in the middle of the view only moves the
+        // labels one hour.
         long long t0 = ctx->candles[i0].openTime, tzMs = 0;
         {
             ULONGLONG ft = (ULONGLONG)(t0 / 1000) * 10000000ULL + 116444736000000000ULL;
@@ -3632,20 +3685,21 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         SetTextAlign(hdc, oldAlign);
     }
 
-    // --- Forklaring til glidende snitt (fase 25) ---
-    // Oeverst til venstre i grafflaten, i linjenes egne farger: det er
-    // fargen som sier hvilken linje som er hvilken, og tallet er snittet
-    // paa lyset under traadkorset (uten traadkors: siste synlige lys). Et
-    // snitt som ikke er definert der - faerre enn period lys foran - faar
-    // en strek. Aksefonten, som er valgt her; gjennomsiktig over lysene,
-    // som vannmerket under dem. Ikke paa skrivebordet (fase 14: ingen
-    // maaleverdier der), og bare naar HELE teksten faar plass i flaten -
-    // samme regel som prosenten i headeren: et avkuttet tall er et feil tall.
+    // --- Legend for the moving averages (phase 25) ---
+    // Top left of the chart surface, in the lines' own colors: the color
+    // is what says which line is which, and the number is the average at
+    // the candle under the crosshair (no crosshair: the last visible
+    // candle). An average that is not defined there - fewer than period
+    // candles before it - gets a dash. The axis font, which is selected
+    // here; transparent over the candles, like the watermark under them.
+    // Not on the desktop (phase 14: no readings there), and only when the
+    // WHOLE text fits in the surface - same rule as the percentage in the
+    // header: a clipped number is a wrong number.
 #ifdef TICKER_PROBE
     if (!(indT > 0 && !g_desktopMode)) g_probeLblMask = 0;
 #endif
     if (indT > 0 && !g_desktopMode) {
-        RECT rcLegend = { 0, 0, 0, 0 };   // tom naar forklaringen ikke fikk plass
+        RECT rcLegend = { 0, 0, 0, 0 };   // empty when the legend did not fit
         wchar_t lg[96];
         int len1, lenAll;
         if (indOk[0]) swprintf_s(lg, 96, L"SMA %d  %.2f    ", IND_SMA_PERIOD, indVal[0]);
@@ -3654,9 +3708,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         if (indOk[1]) swprintf_s(lg + len1, 96 - len1, L"EMA %d  %.2f", IND_EMA_PERIOD, indVal[1]);
         else          swprintf_s(lg + len1, 96 - len1, L"EMA %d  -", IND_EMA_PERIOD);
         lenAll = (int)wcslen(lg);
-        // VWAP (fase 27) er tredje ledd. Faar ikke alle tre plass, faller
-        // VWAP-leddet ut og de to snittene staar som foer; faar ikke de
-        // heller plass, staar ingenting. Hvert ledd helt eller ikke.
+        // VWAP (phase 27) is the third item. If all three do not fit, the
+        // VWAP item drops out and the two averages stand as before; if those
+        // do not fit either, nothing is shown. Each item whole or not at all.
         int len2 = lenAll;
         if (indOk[2]) swprintf_s(lg + len2, 96 - len2, L"    VWAP  %.2f", indVal[2]);
         else          swprintf_s(lg + len2, 96 - len2, L"    VWAP  -");
@@ -3667,11 +3721,12 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         GetTextExtentPoint32W(hdc, lg, len3, &sz3);
         int lx = left + 6, ly = top + 4;
         if (lx + szAll.cx <= right - 6 && ly + szAll.cy <= bottom) {
-            // Dagens hoy (fase 27) ligger 8 % under flatens topp naar dagens
-            // topp er utsnittets, og paa et lavt panel er det midt i denne
-            // raden: strekene gikk tvers gjennom sifrene (sett i en fangst
-            // ved 560x300). Da - og bare da - faar teksten ugjennomsiktig
-            // bakgrunn, saa tallene staar hele og linja fortsetter bak dem.
+            // Today's high (phase 27) lies 8 % below the surface's top when
+            // today's top is the view's, and on a short panel that is in the
+            // middle of this row: the dashes ran right through the digits
+            // (seen in a capture at 560x300). Then - and only then - the text
+            // gets an opaque background, so the numbers stay whole and the
+            // line continues behind them.
             BOOL struck = FALSE;
             for (int q = 0; q < LVL_COUNT; ++q)
                 if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
@@ -3689,19 +3744,21 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             rcLegend.right = lx + sz3.cx; rcLegend.bottom = ly + szAll.cy;
         }
 
-        // --- Merkelapper paa nivaalinjene (fase 29) ---
-        // Fem vannrette linjer uten navn maatte leses av moensteret. Lappen
-        // staar ved linjas VENSTRE ende - ved aksen staar de nyeste lysene,
-        // og aksemerket baerer tallet der - rett over linja, under den naar
-        // det ikke er rom over. Handelssjargongen, som VWAP og O H L C ellers
-        // i panelet: high/low of day, previous day's close/high/low.
-        // HER og ikke i nivaablokka: den tegnes bak lysene, og tekst der
-        // ville blitt overmalt. Aksefonten (valgt over), linjas farge, tonet.
-        // Teksten roerer aldri linjas egen rad eller radene inntil den, saa
-        // strekmoensteret staar rent. I rang: en lapp som ville truffet
-        // forklaringen eller en lapp foran seg i rangen tegnes ikke - to
-        // nivaaer fire piksler fra hverandre faar en lapp, ikke to oppaa
-        // hverandre. Under 200 px flate faller alle ut.
+        // --- Labels on the level lines (phase 29) ---
+        // Five horizontal lines without names had to be read from the dash
+        // pattern. The label sits at the line's LEFT end - by the axis are
+        // the newest candles, and the axis tag carries the number there -
+        // just above the line, below it when there is no room above. Trading
+        // jargon, like VWAP and O H L C elsewhere in the panel: high/low of
+        // day, previous day's close/high/low.
+        // HERE and not in the level block: that is drawn behind the candles,
+        // and text there would be painted over. The axis font (selected
+        // above), the line's color, faded.
+        // The text never touches the line's own row or the rows next to it,
+        // so the dash pattern stays clean. In rank: a label that would hit
+        // the legend or a label ahead of it in rank is not drawn - two
+        // levels four pixels apart get one label, not two on top of each
+        // other. Below 200 px of surface they all drop out.
         static const wchar_t* const LVL_NAME[LVL_COUNT] = { L"HOD", L"LOD", L"PDC", L"PDH", L"PDL" };
 #ifdef TICKER_PROBE
         LARGE_INTEGER lblQ0, lblQ1, lblQf;
@@ -3740,17 +3797,18 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 #endif
     }
 
-    // --- Siste pris: stiplet linje + aksestempel ---
-    // Staar HER med vilje: over lysene og rutenettet, under traadkorset og
-    // overlayet. Og for den tidlige returen i crosshair-blokka nedenfor -
-    // uten hover skal linja fortsatt tegnes.
+    // --- Last price: dashed line + axis stamp ---
+    // Sits HERE on purpose: over the candles and the grid, under the
+    // crosshair and the overlay. And before the early return in the
+    // crosshair block below - without hover the line must still be drawn.
     //
-    // Fargen folger fortegnet til den momentane endringen, dP = P_t - P_t-1,
-    // altsaa siste lukkekurs mot den forrige. Det er en annen regel enn
-    // lysenes egen (close mot open i SAMME lys), og de kan derfor peke hver
-    // sin vei: et gront lys som fortsatt ligger under forrige lukkekurs gir
-    // en rod linje. Det er tilsiktet - linja svarer paa "hvor staar vi mot
-    // forrige lukking", ikke "hvordan gaar dette lyset".
+    // The color follows the sign of the momentary change, dP = P_t - P_t-1,
+    // that is the last close against the previous one. That is a different
+    // rule from the candles' own (close against open in the SAME candle), so
+    // they can point different ways: a green candle that still lies below
+    // the previous close gives a red line. That is intended - the line
+    // answers "where are we against the previous close", not "how is this
+    // candle going".
     {
         const Candle* lastC = &ctx->candles[n - 1];
         double lastP = lastC->close;
@@ -3759,23 +3817,23 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
         int yLast = top + (int)(((maxP - lastP) / range) * ch);
 
-        // Utenfor synlig prisomraade tegnes ingenting. Et stempel klemt mot
-        // kanten ville plassert prisen et sted den ikke er.
+        // Outside the visible price range nothing is drawn. A stamp clamped
+        // to the edge would place the price somewhere it is not.
         if (yLast >= top && yLast <= bottom) {
             int xLast = left + (int)(((double)(n - 1) - dStart + 0.5) * slot);
             if (xLast < left)  xLast = left;
             if (xLast > right) xLast = right;
 
-            // Linja gaar fra siste lys helt inn til stempelet (fase 15).
-            // Stiplet over dataflaten, HELTRUKKET over luftrommet: PS_DASH
-            // ender der monsteret tilfeldigvis staar, og ved 1004 px bredde
-            // landet slutten i et "av"-intervall - maalt som svart hull mot
-            // stempelet. Broen over luftrommet er den ene delen som MAA
-            // treffe, saa den tegnes uten monster.
+            // The line runs from the last candle all the way to the stamp
+            // (phase 15). Dashed over the data surface, SOLID over the gap:
+            // PS_DASH ends wherever the pattern happens to be, and at 1004 px
+            // width the end landed in an "off" interval - measured as a black
+            // hole against the stamp. The bridge over the gap is the one part
+            // that MUST hit, so it is drawn without a pattern.
             //
-            // edge + 1 fordi LineTo ikke tegner sluttpunktet: uten den ene
-            // pikselen staar kolonnen x = edge tom, og stempelet begynner
-            // foerst paa edge + 1.
+            // edge + 1 because LineTo does not draw the end point: without
+            // that one pixel the column x = edge stays empty, and the stamp
+            // only starts at edge + 1.
             HPEN penLast = lastUp ? ctx->penLastUp : ctx->penLastDown;
             HPEN hOld2 = (HPEN)SelectObject(hdc, penLast);
             MoveToEx(hdc, xLast, yLast, NULL);
@@ -3787,15 +3845,15 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
             LineTo(hdc, edge + 1, yLast);
             SelectObject(hdc, hOld2);
 
-            // Aksestempelet overskriver rutenettetiketten paa denne hoyden,
-            // slik at det ikke staar to tall oppi hverandre.
-            // Flaten faar 3 px luft paa hver side av teksten; teksten selv
-            // holder seg innenfor axR.
+            // The axis stamp overwrites the grid label at this height, so
+            // that there are not two numbers on top of each other.
+            // The surface gets 3 px of air on each side of the text; the text
+            // itself stays inside axR.
             //
-            // Fase 16: stempelet tegnes i BEGGE modi. Paa skrivebordet er det
-            // den eneste teksten som staar igjen - akseetiketter, tidsakse og
-            // header er fortsatt borte - og hoyden folger flaten i stedet for
-            // panelets faste 16 px.
+            // Phase 16: the stamp is drawn in BOTH modes. On the desktop it is
+            // the only text left - axis labels, time axis and header are
+            // still gone - and the height follows the surface instead of the
+            // panel's fixed 16 px.
             {
                 int half = g_desktopMode ? DeskPillH(H) / 2 : 8;
                 if (g_desktopMode) EnsurePillFont(ctx, H);
@@ -3804,9 +3862,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                 SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
                 FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
-                // "Presis verditekst": to desimaler der de faar plass, ellers
-                // samme oppslosning som aksen. Bredden maales paa den ferdig
-                // formaterte strengen - feil #5 igjen.
+                // "Precise value text": two decimals where they fit, otherwise
+                // the same resolution as the axis. The width is measured on
+                // the fully formatted string - bug #5 again.
                 HFONT fPill = (g_desktopMode && ctx->hFontPill) ? ctx->hFontPill
                                                                 : ctx->hFontAxis;
                 SelectObject(hdc, fPill);
@@ -3820,9 +3878,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
                     swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
                 }
 
-                // Mork tekst paa den mettede flaten - CLR_TEXT ville druknet.
-                // Flaten er lagdelt med LWA_ALPHA 255, ikke fargenokkel, saa
-                // CLR_BG er en farge her og ikke et hull ut til tapetet.
+                // Dark text on the saturated surface - CLR_TEXT would drown.
+                // The surface is layered with LWA_ALPHA 255, not a color key,
+                // so CLR_BG is a color here and not a hole to the wallpaper.
                 SetTextColor(hdc, CLR_BG);
                 RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
                 DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -3830,9 +3888,9 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         }
     }
 
-    // --- Crosshair + hover-boks ---
-    // Bundet mot den SYNLIGE flaten, ikke mot maalutsnittet - de faller fra
-    // hverandre midt i en animasjon.
+    // --- Crosshair + hover box ---
+    // Bound to the VISIBLE surface, not to the target view - the two come
+    // apart in the middle of an animation.
 #ifdef TICKER_PROBE
     g_probeCrossTag = 0;
 #endif
@@ -3848,13 +3906,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 
     HPEN hPrev = (HPEN)SelectObject(hdc, ctx->penCross);
     MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, bottom);
-    // Samme bro som siste-pris-linja: den vannrette naar aksen, ellers ville
-    // det staatt et hull mellom krysset og etiketten dets.
+    // Same bridge as the last-price line: the horizontal reaches the axis,
+    // otherwise there would be a gap between the cross and its label.
     MoveToEx(hdc, left, hy, NULL);     LineTo(hdc, edge, hy);
     SelectObject(hdc, hPrev);
 
-    // Prisetikett pa hoyreaksen der pekeren star. Ikke naar den ville dekket
-    // stempelet delvis (fase 29, se yCross over): linja tegnes, merket ikke.
+    // Price label on the right axis where the pointer is. Not when it would
+    // partly cover the stamp (phase 29, see yCross above): the line is
+    // drawn, the tag is not.
     if (yCross != INT_MIN) {
         double hp = maxP - ((double)(hy - top) / (double)ch) * range;
         swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
@@ -3869,23 +3928,23 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
     g_probeCrossTag = (yCross != INT_MIN);
 #endif
 
-    // Hover-boks med tid + OHLC. Tilbake til den vanlige lille fonten:
-    // LINE_H = 13 er maalt paa den, og aksefonten er 15 px hoy.
+    // Hover box with time + OHLC. Back to the normal small font:
+    // LINE_H = 13 is measured on it, and the axis font is 15 px tall.
     SelectObject(hdc, ctx->hFontSmall);
     wchar_t tbuf[24];
     FormatCandleTime(hc->openTime, ctx->intervalMs, tbuf, 24);
 
-    // BOX_H: 4 px topp + tidsrad + O/H/L/C/V (fase 21) = 4 + 6 * 13 + 5.
-    // Med indikatorene paa (fase 27) kommer tre rader til: SMA, EMA og VWAP
-    // paa lyset under traadkorset - de samme tallene som forklaringen viser,
-    // for legendIdx ER hoverIdx naar denne blokka kjoerer (samme vilkaar).
-    // Radene staar saa lenge linjene synes (indT > 0) og toner med dem, i
-    // linjenes egne farger; et snitt som ikke er definert paa lyset faar en
-    // strek, som i forklaringen.
+    // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
+    // With the indicators on (phase 27) three more rows are added: SMA, EMA
+    // and VWAP at the candle under the crosshair - the same numbers the
+    // legend shows, since legendIdx IS hoverIdx when this block runs (same
+    // condition). The rows stay as long as the lines are visible (indT > 0)
+    // and fade with them, in the lines' own colors; an average that is not
+    // defined at the candle gets a dash, as in the legend.
     const int indRows = (indT > 0) ? 3 : 0;
     const int BOX_W = 104, BOX_H = 87 + indRows * 13, LINE_H = 13;
     int bx = hx + 12;
-    if (bx + BOX_W > right) bx = hx - 12 - BOX_W;   // flipp til venstre ved kanten
+    if (bx + BOX_W > right) bx = hx - 12 - BOX_W;   // flip to the left at the edge
     if (bx < left) bx = left;
     int by = hy - BOX_H / 2;
     if (by < top) by = top;
@@ -3909,14 +3968,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
         RECT rcRow = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
         SetTextColor(hdc, CLR_DIM);
         DrawTextW(hdc, lbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        if (i == 4) FormatVolume(val[i], buf, 64);   // fase 21
+        if (i == 4) FormatVolume(val[i], buf, 64);   // phase 21
         else        swprintf_s(buf, 64, L"%.2f", val[i]);
         SetTextColor(hdc, (i == 3) ? cclr : CLR_TEXT);
         DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
     }
 
-    // Indikatorradene (fase 27). Merkelappen i linjas farge, verdien i
-    // tekstfargen - begge tonet mot boksen, ikke mot CLR_BG.
+    // The indicator rows (phase 27). The label in the line's color, the
+    // value in the text color - both faded against the box, not CLR_BG.
     if (indRows > 0) {
         const wchar_t* ilbl[3] = { L"SMA", L"EMA", L"VWAP" };
         const COLORREF iclr[3] = { CLR_SMA, CLR_EMA, CLR_VWAP };
@@ -3934,14 +3993,14 @@ static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
 }
 
 
-// Kontrollknappene. Rene GDI-vektorer - ingen font, ingen glyfoppslag. En
-// DrawTextW med et Unicode-tegn koster langt mer enn fire LineTo, og ville
-// dessuten vaert avhengig av at fonten HAR glyfen (tray-ikonets manglende
-// k-glyf er samme problem lenger nede i loggen).
+// The control buttons. Pure GDI vectors - no font, no glyph lookup. A
+// DrawTextW with a Unicode character costs far more than four LineTo, and
+// would also depend on the font HAVING the glyph (the tray icon's missing
+// k glyph is the same problem further down the log).
 //
-// Ingen fade. Knappene skifter farge momentant paa hover: en fade ville
-// krevd enda en animert verdi i WM_TIMER, og et treff som henger paa
-// fade-niva i stedet for paa btnHot er nettopp fallgruve 12.
+// No fade. The buttons change color instantly on hover: a fade would have
+// required yet another animated value in WM_TIMER, and a hit that hangs on
+// the fade level instead of on btnHot is exactly pitfall 12.
 static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
     RECT b[BTN_COUNT];
     ButtonLayout(W, b);
@@ -3953,12 +4012,12 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         RECT* r = &b[i];
         BOOL hot = (ctx->btnHot == i);
 
-        // Knappeflaten toemmes ALLTID for vektorene tegnes, ogsaa i hvile:
-        // i hvile med CLR_BG, saa knappen fortsatt bare er en glyf paa
-        // panelets egen bakgrunn. Da kan ingen tidligere glyf eller
-        // hover-farge ligge igjen under, uansett hva DC-en inneholdt fra for.
-        // Begge stiene i PaintPopup gaar hit, saa hurtigstien og den trege
-        // tegner fortsatt identisk.
+        // The button surface is ALWAYS cleared before the vectors are drawn,
+        // also at rest: at rest with CLR_BG, so the button is still just a
+        // glyph on the panel's own background. Then no earlier glyph or
+        // hover color can be left underneath, whatever the DC held before.
+        // Both paths in PaintPopup come here, so the fast path and the slow
+        // one still paint identically.
         FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->brBox)
                              : ctx->brBg);
 
@@ -3967,14 +4026,14 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
 
         int cx = (r->left + r->right) / 2;
         int cy = (r->top + r->bottom) / 2;
-        int g  = 4;   // halv glyfbredde: 9x9 piksler totalt
+        int g  = 4;   // half glyph width: 9x9 pixels in total
 
         switch (i) {
             case BTN_NEW:
-                // Plusstegn, 7x7 rundt senterpikselen: x og y i [-3, +3].
-                // LineTo tegner ikke sluttpunktet, derfor +4 - det er det
-                // som gjor korset symmetrisk. 7 og ikke 9 som de andre: et
-                // 9x9 pluss veier optisk tyngre enn krysset ved siden av.
+                // Plus sign, 7x7 around the center pixel: x and y in [-3, +3].
+                // LineTo does not draw the end point, hence +4 - that is what
+                // makes the cross symmetric. 7 and not 9 like the others: a
+                // 9x9 plus weighs optically heavier than the X next to it.
                 MoveToEx(hdc, cx - 3, cy, NULL);
                 LineTo(hdc, cx + 4, cy);
                 MoveToEx(hdc, cx, cy - 3, NULL);
@@ -3986,19 +4045,20 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                 break;
             case BTN_MAX:
                 if (zoomed) {
-                    // Gjenopprett: to overlappende rektangler. Det bakre
-                    // tegnes som en APEN polylinje - kun de kantene som ikke
-                    // ligger bak det fremre - saa vi slipper aa fylle det
-                    // fremre ugjennomsiktig for aa skjule overlappet. To
-                    // GDI-kall, ikke fire.
+                    // Restore: two overlapping rectangles. The back one is
+                    // drawn as an OPEN polyline - only the edges that do not
+                    // lie behind the front one - so we avoid filling the
+                    // front one opaque to hide the overlap. Two GDI calls,
+                    // not four.
                     //
-                    // To 7x7-rektangler forskjovet 2 px diagonalt, innenfor
-                    // samme 9x9-fotavtrykk som de andre glyfene. Bakre rekt
-                    // er x[-2..+4] y[-4..+2], fremre x[-4..+2] y[-2..+4].
-                    // Synlig del av det bakre er alt utenfor det fremre:
-                    // venstre kant ned til overlappet, toppen, hoyre kant, og
-                    // stubben av bunnen. Polyline tegner ikke siste punkt, saa
-                    // den stopper rett for det fremres hoyre kant.
+                    // Two 7x7 rectangles offset 2 px diagonally, within the
+                    // same 9x9 footprint as the other glyphs. The back rect
+                    // is x[-2..+4] y[-4..+2], the front x[-4..+2] y[-2..+4].
+                    // The visible part of the back one is everything outside
+                    // the front one: the left edge down to the overlap, the
+                    // top, the right edge, and the stub of the bottom.
+                    // Polyline does not draw the last point, so it stops just
+                    // before the front one's right edge.
                     POINT bak[5] = {
                         { cx - 2, cy - 2 },
                         { cx - 2, cy - 4 },
@@ -4007,10 +4067,10 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                         { cx + 2, cy + 2 },
                     };
                     Polyline(hdc, bak, 5);
-                    // NULL_BRUSH er valgt over, saa Rectangle gir kun omriss.
+                    // NULL_BRUSH is selected above, so Rectangle gives only an outline.
                     Rectangle(hdc, cx - 4, cy - 2, cx + 3, cy + 5);
                 } else {
-                    // NULL_BRUSH er valgt over, saa Rectangle gir kun omriss.
+                    // NULL_BRUSH is selected above, so Rectangle gives only an outline.
                     Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
                 }
                 break;
@@ -4027,18 +4087,18 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
     SelectObject(hdc, oldBr);
 }
 
-// Verktoylinja. Flat som kontrollknappene: ingen fade, fargen skifter
-// momentant, og treffet henger paa tbHot. Tre tilstander: hvile (dempet
-// tekst, ingen flate), hover (CLR_BOX-flate) og aktiv (CLR_BOX-flate med
-// CLR_BOXEDGE-ramme) - aktiv er gjeldende intervall, VOL naar stolpene
-// vises, og symbolpillen mens overlayet den aapner staar aapent. Paletten
-// er hover-boksens og overlayets. Ingen nye GDI-objekter: penslene finnes,
-// og pila tegnes med DC_PEN/DC_BRUSH.
+// The toolbar. Flat like the control buttons: no fade, the color changes
+// instantly, and the hit hangs on tbHot. Three states: rest (muted text, no
+// surface), hover (CLR_BOX surface) and active (CLR_BOX surface with a
+// CLR_BOXEDGE frame) - active is the current interval, VOL when the bars
+// are shown, and the symbol pill while the overlay it opens is open. The
+// palette is the hover box's and the overlay's. No new GDI objects: the
+// brushes exist, and the arrow is drawn with DC_PEN/DC_BRUSH.
 //
-// Kalles fra PaintPopup, ikke fra DrawChart, av samme grunn som knappene:
-// rett etter et intervallbytte er bufferet tomt, og det er nettopp da
-// brukeren ser etter hvilken pille som ble aktiv. Alt den leser er UI-eid
-// eller skrives bare av UI-traaden (symIdx, ivIdx).
+// Called from PaintPopup, not from DrawChart, for the same reason as the
+// buttons: right after an interval switch the buffer is empty, and that is
+// exactly when the user looks for which pill became active. Everything it
+// reads is UI-owned or written only by the UI thread (symIdx, ivIdx).
 static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
     RECT tb[TBAR_COUNT];
     int n = ToolbarLayout(W, tb);
@@ -4063,9 +4123,10 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         COLORREF fg = (hot || on || i == TBAR_SYM) ? CLR_TEXT : CLR_DIM;
         SetTextColor(hdc, fg);
         if (i == TBAR_SYM) {
-            // Venstrestilt tekst og en pil ned i hoyre ende: pillen aapner
-            // en liste, den bytter ikke selv. Pila er et fylt triangel,
-            // 7 px bredt og 4 hoyt - vektor, som knappeglyfene.
+            // Left-aligned text and a down arrow at the right end: the pill
+            // opens a list, it does not switch by itself. The arrow is a
+            // filled triangle, 7 px wide and 4 tall - vector, like the
+            // button glyphs.
             RECT t = *r;
             t.left += 6; t.right -= 14;
             DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -4093,32 +4154,33 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     GetClientRect(hwnd, &rc);
     int W = rc.right, H = rc.bottom;
 
-    // Dobbeltbuffer: tegn alt i minnet, blit en gang -> ingen flimmer. Det
-    // lever mellom bildene; se bbDC i AppContext for hvorfor.
+    // Double buffer: draw everything in memory, blit once -> no flicker. It
+    // lives between frames; see bbDC in AppContext for why.
     if (!EnsureBackBuffer(ctx, hdcDst, W, H)) {
         EndPaint(hwnd, &ps);
         return;
     }
     HDC hdcMem = ctx->bbDC;
 
-    // Hurtigsti: er ALT det skitne innenfor knapperaden, trenger vi verken
-    // DrawChart eller DrawOverlay. En hover-endring invaliderer nettopp det
-    // rektangelet; uten denne grenen ville den kostet en full opptegning, og
-    // den inkrementelle invalideringen ville bare spart den siste blitten.
+    // Fast path: if ALL of the dirty area is inside the button row, we need
+    // neither DrawChart nor DrawOverlay. A hover change invalidates exactly
+    // that rectangle; without this branch it would cost a full repaint, and
+    // the incremental invalidation would only save the final blit.
     //
-    // Knappene tegnes rett inn i bufferet, som holder forrige fulle bilde.
-    // Mellomrommene i stripa er dermed noyaktig det den trege stien la der,
-    // og DrawButtons toemmer hver knappeflate selv. Tre vilkaar gjor det
-    // sant: bufferet har et fullt bilde i denne storrelsen (bbValid), og
-    // overlayet er verken aapent eller synlig under uttoning - det dimmer
-    // HELE klientflaten, headeren inkludert, saa bufferets strimmel ville
-    // vaert dimmet mens knappene ikke var det. En samtidig
-    // InvalidateRect(NULL) fra animasjonsklokka unionerer med stripa, saa
-    // rcPaint blir hele flaten og vi faller ned i den trege stien av oss selv.
+    // The buttons are drawn straight into the buffer, which holds the previous
+    // full frame. The gaps in the strip are therefore exactly what the slow
+    // path left there, and DrawButtons clears each button face itself. Three
+    // conditions make that true: the buffer holds a full frame at this size
+    // (bbValid), and the overlay is neither open nor visible while fading
+    // out - it dims the WHOLE client area, header included, so the buffer's
+    // strip would have been dimmed while the buttons were not. A concurrent
+    // InvalidateRect(NULL) from the animation timer unions with the strip, so
+    // rcPaint becomes the whole surface and we fall into the slow path on our
+    // own.
     RECT strip;
     ButtonStrip(W, &strip);
-    // !g_desktopMode staar her eksplisitt: knapperaden tegnes ikke der, saa
-    // hurtigstien ville blitt en stripe uten knapper over grafen.
+    // !g_desktopMode is explicit here: the button row is not drawn there, so
+    // the fast path would have become a strip without buttons over the chart.
     if (ctx->bbValid && !g_desktopMode && !ctx->overlayOpen && (int)(ctx->overlayF + 0.5) <= 0 &&
         ps.rcPaint.left   >= strip.left  && ps.rcPaint.top    >= strip.top &&
         ps.rcPaint.right  <= strip.right && ps.rcPaint.bottom <= strip.bottom) {
@@ -4136,32 +4198,33 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     QueryPerformanceCounter(&qpc0);
 #endif
 
-    // Traden kan flette inn nye lys naar som helst; laasen holder
-    // bufferet stabilt gjennom hele opptegningen (~1,8 ms).
+    // The thread can merge in new candles at any time; the lock keeps
+    // the buffer stable through the whole repaint (~1.8 ms).
     EnterCriticalSection(&ctx->lock);
     DrawChart(ctx, hdcMem, W, H);
     LeaveCriticalSection(&ctx->lock);
 
-    // Knappene tegnes HER, ikke i DrawChart. DrawChart returnerer tidlig naar
-    // bufferet er tomt - altsaa mens det staar "Laster data fra Binance..."
-    // og under hele en frakobling. Laa tegningen der, ville krysset
-    // forsvunnet nettopp naar brukeren vil lukke panelet. Samme grunn som
-    // DrawOverlay ligger her.
+    // The buttons are drawn HERE, not in DrawChart. DrawChart returns early
+    // when the buffer is empty - that is, while it says "Loading data from
+    // Binance..." and during an entire disconnect. Had the drawing been there,
+    // the cross would vanish exactly when the user wants to close the panel.
+    // Same reason DrawOverlay sits here.
     //
-    // Utenfor laasen: btnHot og knappegeometri er UI-eid.
+    // Outside the lock: btnHot and the button geometry are UI-owned.
     //
-    // Ikke i skrivebordsmodus: flaten tar ikke imot klikk, og en knapp som
-    // ikke kan trykkes skal ikke vises. Hurtigstien over naas heller aldri
-    // der - uten musemeldinger blir knapperaden aldri invalidert alene.
+    // Not in desktop mode: the surface does not take clicks, and a button
+    // that cannot be pressed should not be shown. The fast path above is
+    // never reached there either - without mouse messages the button row is
+    // never invalidated on its own.
     if (!g_desktopMode) DrawButtons(ctx, hdcMem, W, IsZoomed(hwnd));
-    // Verktoylinja (fase 22): samme sted, samme grunn, samme unntak. Foer
-    // overlayet, som skal ligge over alt.
+    // The toolbar (phase 22): same place, same reason, same exception. Before
+    // the overlay, which must lie on top of everything.
     if (!g_desktopMode) DrawToolbar(ctx, hdcMem, W);
 
-    // Overlayet tegnes UTENFOR laasen: alt det leser (overlayF, overlayHot,
-    // symIdx, ivIdx) er UI-eid. Og det maa staa her, ikke i DrawChart, som
-    // returnerer tidlig naar bufferet er tomt - nettopp tilstanden rett
-    // etter et konfigbytte.
+    // The overlay is drawn OUTSIDE the lock: everything it reads (overlayF,
+    // overlayHot, symIdx, ivIdx) is UI-owned. And it must be here, not in
+    // DrawChart, which returns early when the buffer is empty - exactly the
+    // state right after a config change.
     DrawOverlay(ctx, hdcMem, W, H);
 
     BitBlt(hdcDst, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
@@ -4180,12 +4243,13 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
 }
 
 // ---------------------------------------------------------------------------
-// Popup-vindu
+// Popup window
 // ---------------------------------------------------------------------------
 
-// Starter animasjonsklokka. Idempotent - SetTimer paa en id som allerede
-// gaar, restarter den bare. lastAnimTick nullstilles kun naar klokka var
-// stanset, ellers ville et nytt kall midt i en animasjon gitt dt = 0.
+// Starts the animation timer. Idempotent - SetTimer on an id that is already
+// running just restarts it. lastAnimTick is reset only when the timer was
+// stopped, otherwise a new call in the middle of an animation would give
+// dt = 0.
 static void StartAnim(HWND hwnd) {
     if (!g_Ctx.animRunning) {
         g_Ctx.animRunning  = TRUE;
@@ -4194,20 +4258,20 @@ static void StartAnim(HWND hwnd) {
     }
 }
 
-// Bytter symbol eller intervall. Teller opp configGen og tommer bufferet i
-// SAMME kritiske seksjon, slik at et svar fra forrige konfig som ankommer
-// akkurat naa blir forkastet i stedet for flettet inn.
+// Switches symbol or interval. Bumps configGen and empties the buffer in the
+// SAME critical section, so that a response from the previous config that
+// arrives right now is discarded instead of merged in.
 //
-// Kalles fra overlayet og fra tray-menyen (fase 17). Tar ikke noe HWND:
-// panelet kan vaere lukket naar valget kommer fra menyen, og
-// InvalidateRect(NULL, ...) ville tegnet hele skrivebordet paa nytt.
-// hit: [0, SYMBOL_COUNT) er symbol, [SYMBOL_COUNT, +INTERVAL_COUNT) intervall.
+// Called from the overlay and from the tray menu (phase 17). Takes no HWND:
+// the panel may be closed when the choice comes from the menu, and
+// InvalidateRect(NULL, ...) would repaint the whole desktop.
+// hit: [0, SYMBOL_COUNT) is symbol, [SYMBOL_COUNT, +INTERVAL_COUNT) interval.
 static void ApplyConfigChoice(AppContext* ctx, int hit) {
     BOOL isSym = (hit < SYMBOL_COUNT);
     int  idx   = isSym ? hit : (hit - SYMBOL_COUNT);
     if (isSym  && (idx < 0 || idx >= SYMBOL_COUNT))   return;
     if (!isSym && (idx < 0 || idx >= INTERVAL_COUNT)) return;
-    if (isSym  && idx == ctx->symIdx) return;   // ingen endring, ingen tomming
+    if (isSym  && idx == ctx->symIdx) return;   // no change, no emptying
     if (!isSym && idx == ctx->ivIdx)  return;
 
     EnterCriticalSection(&ctx->lock);
@@ -4219,37 +4283,37 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     ctx->viewCount   = 0;
     ctx->followLive  = TRUE;
     ctx->lastPrice   = 0.0;
-    ctx->histPending = FALSE;   // ny konfig: historikken begynner paa nytt
+    ctx->histPending = FALSE;   // new config: history starts over
     ctx->histDone    = FALSE;
     LeaveCriticalSection(&ctx->lock);
 
     ctx->hoverIdx = -1;
-    // Fase 23: alertHot er en indeks i FORRIGE symbols varsler, og
-    // ettergloeden staar paa forrige symbols prisnivaa.
+    // Phase 23: alertHot is an index into the PREVIOUS symbol's alerts, and
+    // the afterglow sits at the previous symbol's price level.
     ctx->alertHot    = -1;
     ctx->axisHotY    = -1;
     ctx->alertFresh  = 0.0;
     ctx->alertFlashF = 0.0;
-    ctx->wmValid  = FALSE;   // vannmerket viser forrige symbol/intervall
-    ctx->dispValid = FALSE;  // nytt buffer: ingenting a ease fra
-    UpdatePopupTitle(ctx);   // tittellinja og oppgavelinja skal folge med
-    // SetEvent staar utenfor laasen. Den er ikke PostMessage, men samme regel
-    // gjelder av samme grunn: ikke hold laasen over noe som vekker den andre
-    // traden.
+    ctx->wmValid  = FALSE;   // the watermark shows the previous symbol/interval
+    ctx->dispValid = FALSE;  // new buffer: nothing to ease from
+    UpdatePopupTitle(ctx);   // the title bar and the taskbar must follow along
+    // SetEvent sits outside the lock. It is not PostMessage, but the same rule
+    // applies for the same reason: do not hold the lock across anything that
+    // wakes the other thread.
     SetEvent(ctx->hWakeEvent);
     SaveConfig(ctx);
     if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
-// VOL-bryteren (fase 22). Ikke gjennom ApplyConfigChoice: den tommer
-// bufferet og teller opp configGen, og volumet ligger allerede i lysene -
-// dette er et rent tegnevalg. Kalles fra pillen, V-tasten og tray-menyen,
-// saa skrivebordsmodus kan bytte uten panel (som fase 17). Er flaten synlig,
-// eases dispVolF av klokka; ellers snapper den, saa et panel som aapnes
-// senere ikke spiller av en animasjon ingen ba om.
+// The VOL toggle (phase 22). Not through ApplyConfigChoice: that empties
+// the buffer and bumps configGen, and the volume is already in the candles -
+// this is a pure drawing choice. Called from the pill, the V key and the tray
+// menu, so desktop mode can switch without a panel (like phase 17). If the
+// surface is visible, dispVolF is eased by the timer; otherwise it snaps, so
+// a panel opened later does not play an animation nobody asked for.
 static void SetShowVolume(AppContext* ctx, BOOL on) {
     if (ShowVolNow(ctx) == on) return;
-    if (g_desktopMode) ctx->showVolDesk = on;   // fase 26: ett valg per modus
+    if (g_desktopMode) ctx->showVolDesk = on;   // phase 26: one choice per mode
     else               ctx->showVol     = on;
     SaveConfig(ctx);
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
@@ -4260,12 +4324,13 @@ static void SetShowVolume(AppContext* ctx, BOOL on) {
     }
 }
 
-// MA-bryteren (fase 25): glidende snitt av og paa. Samme form og samme
-// grunner som SetShowVolume over - et rent tegnevalg, fra pillen, M-tasten
-// og tray-menyen, eased naar flaten synes og snappet ellers.
+// The MA toggle (phase 25): moving averages off and on. Same shape and same
+// reasons as SetShowVolume above - a pure drawing choice, from the pill, the
+// M key and the tray menu, eased when the surface is visible and snapped
+// otherwise.
 static void SetShowIndicators(AppContext* ctx, BOOL on) {
     if (ShowIndNow(ctx) == on) return;
-    if (g_desktopMode) ctx->showIndDesk = on;   // fase 26: ett valg per modus
+    if (g_desktopMode) ctx->showIndDesk = on;   // phase 26: one choice per mode
     else               ctx->showInd     = on;
     SaveConfig(ctx);
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
@@ -4277,16 +4342,16 @@ static void SetShowIndicators(AppContext* ctx, BOOL on) {
 }
 
 // ---------------------------------------------------------------------------
-// Prisvarsler (fase 23). Alt her kjoerer paa UI-traaden og roerer bare
-// UI-eide felter; laasen tas kun for aa lese referanseprisen.
+// Price alerts (phase 23). Everything here runs on the UI thread and touches
+// only UI-owned fields; the lock is taken only to read the reference price.
 // ---------------------------------------------------------------------------
 
-// Setter et varsel paa level for gjeldende symbol. Siden avgjoeres mot
-// referanseprisen NAA: siste lys' lukkekurs naar grafen har data (det er den
-// brukeren ser stempelet for), ellers lastPrice. FALSE naar det ikke finnes
-// noen pris aa velge side mot, naar nivaaet ER prisen (ingen side, og det
-// ville fyrt paa neste henting), naar nivaaet finnes fra foer, eller naar
-// alle plassene er brukt.
+// Sets an alert at level for the current symbol. The side is decided against
+// the reference price NOW: the last candle's close when the chart has data
+// (that is the one the user sees the stamp for), otherwise lastPrice. FALSE
+// when there is no price to pick a side against, when the level IS the price
+// (no side, and it would fire on the next fetch), when the level already
+// exists, or when all the slots are used.
 static BOOL AlertAdd(AppContext* ctx, double level) {
     int s = ctx->symIdx;
     if (!(level > 0.0 && level < ALERT_PRICE_MAX)) return FALSE;
@@ -4308,18 +4373,18 @@ static BOOL AlertAdd(AppContext* ctx, double level) {
     return TRUE;
 }
 
-// Rekkefolgen har ingen betydning, saa hullet fylles med det siste.
+// The order does not matter, so the hole is filled with the last one.
 static void AlertRemove(AppContext* ctx, int i) {
     int s = ctx->symIdx;
     if (i < 0 || i >= ctx->alertCount[s]) return;
     ctx->alerts[s][i] = ctx->alerts[s][--ctx->alertCount[s]];
-    ctx->alertHot = -1;   // indeksen peker ikke lenger paa det samme
+    ctx->alertHot = -1;   // the index no longer points at the same thing
     SaveAlerts(ctx);
     if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
-// Tray-menyens "Fjern prisvarsler": gjeldende symbol, ikke alle - menyen
-// viser antallet for det symbolet, og det er de linjene brukeren ser.
+// The tray menu's "Clear price alerts": the current symbol, not all - the menu
+// shows the count for that symbol, and those are the lines the user sees.
 static void AlertsClear(AppContext* ctx) {
     if (ctx->alertCount[ctx->symIdx] == 0) return;
     ctx->alertCount[ctx->symIdx] = 0;
@@ -4328,13 +4393,14 @@ static void AlertsClear(AppContext* ctx) {
     if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
-// Et varsel har fyrt. Tre kanaler, fordi brukeren kan vaere tre steder:
-// ser paa panelet (ettergloeden paa linja), ser paa noe annet (ballongen fra
-// tray-ikonet), eller ser ikke paa skjermen (lyden). Ballongen er NIIF_NOSOUND
-// og lyden vaar egen MessageBeep: en lyd, ikke to, og den kommer ogsaa naar
-// Windows holder ballongen tilbake (Ikke stoer). nid kopieres: UpdateIcon eier
-// originalen og setter uFlags selv, og en NIF_INFO som ble staaende der ville
-// vist ballongen paa nytt ved hver prisoppdatering.
+// An alert has fired. Three channels, because the user can be in three places:
+// looking at the panel (the afterglow on the line), looking at something else
+// (the balloon from the tray icon), or not looking at the screen (the sound).
+// The balloon is NIIF_NOSOUND and the sound our own MessageBeep: one sound,
+// not two, and it also comes when Windows holds the balloon back (Do not
+// disturb). nid is copied: UpdateIcon owns the original and sets uFlags
+// itself, and a NIF_INFO left standing there would show the balloon again on
+// every price update.
 static void FireAlert(AppContext* ctx, double signedLevel, double price) {
     double level = fabs(signedLevel);
     ctx->alertFired++;
@@ -4360,12 +4426,12 @@ static void FireAlert(AppContext* ctx, double signedLevel, double price) {
     MessageBeep(MB_ICONASTERISK);
 }
 
-// Proever varslene for gjeldende symbol mot en ny pris. Kalles fra
-// WM_APP_DATA, altsaa en gang per henting - ogsaa med panelet lukket, der
-// traaden henter ticker-prisen, og i skrivebordsmodus. Et varsel fyrer EN
-// gang og fjernes: en pris som vipper rundt nivaaet ville ellers pipe hvert
-// tredje sekund. Bakfra, fordi AlertRemove-moensteret flytter det siste inn i
-// hullet. Bare gjeldende symbol: prisen vi har, er dets.
+// Tests the alerts for the current symbol against a new price. Called from
+// WM_APP_DATA, that is once per fetch - also with the panel closed, where the
+// thread fetches the ticker price, and in desktop mode. An alert fires ONCE
+// and is removed: a price that wobbles around the level would otherwise beep
+// every third second. Backwards, because the AlertRemove pattern moves the
+// last one into the hole. Only the current symbol: the price we have is its.
 static void CheckAlerts(AppContext* ctx, double price) {
     int s = ctx->symIdx;
     BOOL any = FALSE;
@@ -4382,11 +4448,11 @@ static void CheckAlerts(AppContext* ctx, double price) {
     }
 }
 
-// Klikk i priskolonnen: paa et merke fjerner det, paa tom flate setter et
-// nytt paa den avrundede prisen der. Hover regnes om med en gang - pekeren
-// staar paa det nye merket, og et postet klikk har ingen WM_MOUSEMOVE foran
-// seg. Egen funksjon fordi WM_LBUTTONDBLCLK ogsaa lander her (fallgruve 38):
-// et raskt dobbeltklikk er sett + fjern, ikke sett + nullstill utsnittet.
+// Click in the price column: on a tag removes it, on empty surface sets a new
+// one at the rounded price there. Hover is recomputed at once - the pointer
+// sits on the new tag, and a posted click has no WM_MOUSEMOVE ahead of it.
+// Its own function because WM_LBUTTONDBLCLK also lands here (pitfall 38):
+// a fast double-click is set + remove, not set + reset the view.
 static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
     int hit = AlertAxisHit(&g_Ctx, g, my);
     g_Ctx.alertFresh = 0.0;
@@ -4401,19 +4467,19 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
-// Klikk paa en pille i verktoylinja. Egen funksjon av samme grunn som
-// OnButtonClick: WM_LBUTTONDOWN og WM_LBUTTONDBLCLK naar begge hit, saa to
-// raske klikk paa VOL er to vekslinger og ikke en (fallgruve 38).
-// Intervallene gaar gjennom ApplyConfigChoice, saa register, vannmerke,
-// configGen og traaden behandles noyaktig som fra overlayet og tray-menyen;
-// et klikk paa det aktive intervallet er en no-op der. Symbolpillen aapner
-// overlayet som finnes fra foer - ingen ny meny, ingen ny treffkode.
+// Click on a pill in the toolbar. Its own function for the same reason as
+// OnButtonClick: WM_LBUTTONDOWN and WM_LBUTTONDBLCLK both reach here, so two
+// fast clicks on VOL are two toggles and not one (pitfall 38).
+// The intervals go through ApplyConfigChoice, so registry, watermark,
+// configGen and the thread are handled exactly as from the overlay and the
+// tray menu; a click on the active interval is a no-op there. The symbol pill
+// opens the existing overlay - no new menu, no new hit-test code.
 static void OnToolbarClick(HWND hwnd, int th) {
     if (th == TBAR_SYM) {
         g_Ctx.overlayOpen = TRUE;
         g_Ctx.overlayHot  = -1;
         g_Ctx.hoverIdx    = -1;
-        g_Ctx.tbHot       = -1;   // ingen pille lyser mens overlayet eier musa
+        g_Ctx.tbHot       = -1;   // no pill lights up while the overlay owns the mouse
         StartAnim(hwnd);
         InvalidateRect(hwnd, NULL, FALSE);
     } else if (th == TBAR_VOL) {
@@ -4425,11 +4491,12 @@ static void OnToolbarClick(HWND hwnd, int th) {
     }
 }
 
-// Zoom og panorering tilbake til standardutsnittet: de siste DEFAULT_VIEW
-// lysene, festet til hoyre kant og fulgt live. Rorer ikke dispValid, saa
-// visningen eases tilbake fra der den staar - samme mekanisme som hjulzoom.
-// TogglePopup vil derimot ha snap ved aapning og setter dispValid selv.
-// Vindusgeometrien er en annen sak: den eier ResetToDefaultView (Ctrl+0).
+// Zoom and panning back to the default view: the last DEFAULT_VIEW candles,
+// pinned to the right edge and followed live. Does not touch dispValid, so
+// the display eases back from where it is - the same mechanism as wheel zoom.
+// TogglePopup, on the other hand, wants a snap on opening and sets dispValid
+// itself. The window geometry is another matter: ResetToDefaultView owns it
+// (Ctrl+0).
 static void ResetView(AppContext* ctx) {
     EnterCriticalSection(&ctx->lock);
     ctx->viewCount  = 0;
@@ -4442,8 +4509,8 @@ static void ResetView(AppContext* ctx) {
     LeaveCriticalSection(&ctx->lock);
 }
 
-// Staar utsnittet der ResetView ville satt det? ESC bruker svaret til aa
-// velge lag: er det allerede i standard, skjuler ESC panelet i stedet.
+// Is the view where ResetView would have put it? ESC uses the answer to pick
+// a layer: if it is already at the default, ESC hides the panel instead.
 static BOOL ViewIsDefault(AppContext* ctx) {
     EnterCriticalSection(&ctx->lock);
     int n = ctx->candleCount, vs, vc;
@@ -4454,15 +4521,15 @@ static BOOL ViewIsDefault(AppContext* ctx) {
     return def;
 }
 
-// Panorering og zoom av MAALUTSNITTET (fase 20). Trukket ut av
-// WM_MOUSEWHEEL, saa hjul og tastatur deler ett regnestykke, slik knappene
-// og snarveiene deler OnButtonClick. Begge kalles under laas, begge
-// klemmer med ClampView og setter followLive, og begge svarer om utsnittet
-// staar i veggen etterpaa (viewStart == 0) - da vil kalleren be om
-// historikk (fase 18). Visningen (disp*) roeres ikke her: den eases mot
-// maalet i WM_TIMER som foer.
+// Panning and zoom of the TARGET VIEW (phase 20). Pulled out of
+// WM_MOUSEWHEEL, so wheel and keyboard share one calculation, the way the
+// buttons and the shortcuts share OnButtonClick. Both are called under the
+// lock, both clamp with ClampView and set followLive, and both report whether
+// the view is against the wall afterwards (viewStart == 0) - then the caller
+// will ask for history (phase 18). The display (disp*) is not touched here:
+// it eases toward the target in WM_TIMER as before.
 //
-// PanView: delta lys, positivt = framover i tid.
+// PanView: delta candles, positive = forward in time.
 static BOOL PanView(AppContext* ctx, int delta) {
     int vs, vc;
     GetView(ctx, &vs, &vc);
@@ -4473,9 +4540,9 @@ static BOOL PanView(AppContext* ctx, int delta) {
     return (ctx->viewStart == 0);
 }
 
-// ZoomView: notches > 0 zoomer inn, < 0 ut, ZOOM_STEP per hakk, om et anker
-// gitt som broekdel [0, 1] av utsnittet - pekerens plass for hjulet, midten
-// for tastene.
+// ZoomView: notches > 0 zooms in, < 0 out, ZOOM_STEP per notch, around an
+// anchor given as a fraction [0, 1] of the view - the pointer's position for
+// the wheel, the middle for the keys.
 static BOOL ZoomView(AppContext* ctx, double frac, int notches) {
     int n = ctx->candleCount;
     int vs, vc;
@@ -4500,10 +4567,10 @@ static BOOL ZoomView(AppContext* ctx, double frac, int notches) {
     return (ctx->viewStart == 0);
 }
 
-// Skjuler panelet til systemstatusfeltet - eller, i et duplikat, avslutter
-// prosessen. Et duplikat har ingen hovedinstans-rolle aa vende tilbake til,
-// og en hale av skjulte tray-ikoner er ingen funksjon. Avslutningen gaar
-// gjennom tray-menyens egen sti, saa ikonet fjernes likt i begge tilfeller.
+// Hides the panel to the notification area - or, in a duplicate, exits the
+// process. A duplicate has no main-instance role to return to, and a tail of
+// hidden tray icons is not a feature. The exit goes through the tray menu's
+// own path, so the icon is removed the same way in both cases.
 static void HidePanel(HWND hwnd) {
     g_Ctx.hoverIdx = -1;
     g_Ctx.btnHot   = -1;
@@ -4519,15 +4586,16 @@ static void HidePanel(HWND hwnd) {
     ShowWindow(hwnd, SW_HIDE);
 }
 
-// Starter en ny, isolert instans av programmet, forskjovet SPAWN_OFFSET
-// ned og til hoyre. Geometri, symbol og intervall gaar paa kommandolinja -
-// ikke via registret, som hovedinstansen eier og duplikater ikke skriver.
+// Starts a new, isolated instance of the program, offset SPAWN_OFFSET
+// down and to the right. Geometry, symbol and interval go on the command
+// line - not via the registry, which the main instance owns and duplicates
+// do not write.
 //
-// Maksimert vindu: +30 fra et vindu som fyller skjermen ville lagt barnet
-// halvveis utenfor. Da brukes den gjenopprettede geometrien. Ellers
-// GetWindowRect, som er skjermkoordinater - rcNormalPosition er
-// arbeidsomraade-koordinater, og skiller seg naar oppgavelinja staar oppe
-// eller til venstre.
+// Maximized window: +30 from a window that fills the screen would put the
+// child halfway outside. Then the restored geometry is used. Otherwise
+// GetWindowRect, which is screen coordinates - rcNormalPosition is
+// work-area coordinates, and differs when the taskbar sits at the top
+// or on the left.
 static void SpawnInstance(HWND hwnd) {
     RECT r;
     if (IsZoomed(hwnd)) {
@@ -4540,9 +4608,9 @@ static void SpawnInstance(HWND hwnd) {
     int w = r.right - r.left, h = r.bottom - r.top;
     int x = r.left + SPAWN_OFFSET, y = r.top + SPAWN_OFFSET;
 
-    // Kaskaden gaar tilbake til hjornet naar neste steg ville skjovet
-    // knapperaden ut av arbeidsomraadet - ellers blir [ + ] etter noen klikk
-    // et vindu brukeren ikke kan lukke.
+    // The cascade goes back to the corner when the next step would push the
+    // button row out of the work area - otherwise [ + ] after a few clicks
+    // becomes a window the user cannot close.
     MONITORINFO mi = { sizeof(MONITORINFO) };
     if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
         RECT wa = mi.rcWork;
@@ -4554,8 +4622,8 @@ static void SpawnInstance(HWND hwnd) {
     DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH);
     if (len == 0 || len >= MAX_PATH) return;
 
-    // CreateProcessW kan skrive i kommandolinja, saa den maa ligge i et
-    // skrivbart buffer - aldri en strengkonstant.
+    // CreateProcessW may write to the command line, so it must live in a
+    // writable buffer - never a string constant.
     wchar_t cmd[MAX_PATH + 96];
     swprintf_s(cmd, MAX_PATH + 96, L"\"%s\" --dup %d %d %d %d %d %d",
                exe, x, y, w, h, g_Ctx.symIdx, g_Ctx.ivIdx);
@@ -4568,9 +4636,10 @@ static void SpawnInstance(HWND hwnd) {
     }
 }
 
-// Klikk paa en kontrollknapp. Egen funksjon fordi to meldinger naar hit:
-// WM_LBUTTONDOWN, og WM_LBUTTONDBLCLK - med CS_DBLCLKS blir andre klikk i et
-// raskt dobbeltklikk en DBLCLK, og knappene ville ellers spist det.
+// Click on a control button. Its own function because two messages reach
+// here: WM_LBUTTONDOWN, and WM_LBUTTONDBLCLK - with CS_DBLCLKS the second
+// click of a fast double-click becomes a DBLCLK, and the buttons would
+// otherwise have swallowed it.
 static void OnButtonClick(HWND hwnd, int bh) {
     switch (bh) {
         case BTN_NEW:
@@ -4582,11 +4651,11 @@ static void OnButtonClick(HWND hwnd, int bh) {
         case BTN_MAX:
             if (IsZoomed(hwnd)) {
                 ShowWindow(hwnd, SW_RESTORE);
-                // Mandatets "eller DPI-skalert 1280x720": OS-et eier den
-                // gjenopprettede rekta, og SW_RESTORE bruker den. Men var den
-                // lagret paa en skjerm som siden er koblet fra, havner vinduet
-                // utenfor alt synlig. Samme sjekk som PlacePopupInitially gjor
-                // ved apning.
+                // The mandate's "or DPI-scaled 1280x720": the OS owns the
+                // restored rect, and SW_RESTORE uses it. But if it was saved
+                // on a monitor that has since been disconnected, the window
+                // ends up outside everything visible. Same check as
+                // PlacePopupInitially does on opening.
                 WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
                 if (GetWindowPlacement(hwnd, &wp)) {
                     RECT* nr = &wp.rcNormalPosition;
@@ -4597,16 +4666,16 @@ static void OnButtonClick(HWND hwnd, int bh) {
                     }
                 }
             } else {
-                // Geometrien lagres for vi maksimerer. Ved gjenoppretting er
-                // den allerede lagret.
+                // The geometry is saved before we maximize. On restore it is
+                // already saved.
                 SaveWindowPlacement(hwnd);
                 ShowWindow(hwnd, SW_MAXIMIZE);
             }
             break;
         case BTN_CLOSE:
-            // WM_CLOSE, ikke DestroyWindow: den eksisterende handleren lagrer
-            // geometri og skjuler til systemstatusfeltet. Tickeren er et
-            // tray-program.
+            // WM_CLOSE, not DestroyWindow: the existing handler saves the
+            // geometry and hides to the notification area. The ticker is a
+            // tray program.
             SendMessageW(hwnd, WM_CLOSE, 0, 0);
             break;
     }
@@ -4615,18 +4684,19 @@ static void OnButtonClick(HWND hwnd, int bh) {
 static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_ERASEBKGND:
-            return 1; // handteres i WM_PAINT
+            return 1; // handled in WM_PAINT
 
-        // Vinduet forsvinner uten at vi ba om det: i skrivebordsmodus er
-        // forelderen Explorers WorkerW, og den kan rives ned (Explorer
-        // startes paa nytt). Er det vi som river ned, har WM_DESTROY i
-        // WndProc allerede nullet hPopup, og da er dette en no-op.
+        // The window disappears without us asking for it: in desktop mode the
+        // parent is Explorer's WorkerW, and it can be torn down (Explorer
+        // is restarted). If we are the ones tearing down, WM_DESTROY in
+        // WndProc has already zeroed hPopup, and then this is a no-op.
         //
-        // animRunning maa ned: timeren dode med vinduet, og StartAnim ville
-        // ellers trodd at klokka fortsatt gaar paa neste flate.
+        // animRunning must go down: the timer died with the window, and
+        // StartAnim would otherwise think the clock is still running on the
+        // next surface.
         case WM_NCDESTROY:
             if (g_Ctx.hPopup == hwnd) {
-                EnterCriticalSection(&g_Ctx.lock);   // traden leser hPopup
+                EnterCriticalSection(&g_Ctx.lock);   // the thread reads hPopup
                 g_Ctx.hPopup = NULL;
                 LeaveCriticalSection(&g_Ctx.lock);
                 g_Ctx.animRunning = FALSE;
@@ -4636,51 +4706,51 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             break;
 
-        // Ingen NC-opptegning ved fokusbytte. WM_NCCALCSIZE under gjoer
-        // klienten like stor som vinduet, men DefWindowProc tegner likevel den
-        // klassiske WS_THICKFRAME-rammen i vindus-DC-en - altsaa OPPAA grafen,
-        // 3 px dyp, i COLOR_ACTIVEBORDER (#B4B4B4) eller COLOR_INACTIVEBORDER
-        // (#F4F7FC) med lyse kanter. Den blir staaende til neste fulle
-        // opptegning, opptil 3 s. Maalt fra skjermen: 7,2 millioner
-        // rammefargede kantpiksler over 3 fokusbytter, mot 0 med dette.
+        // No NC painting on focus change. WM_NCCALCSIZE below makes the
+        // client as large as the window, but DefWindowProc still paints the
+        // classic WS_THICKFRAME frame in the window DC - that is, ON TOP of
+        // the chart, 3 px deep, in COLOR_ACTIVEBORDER (#B4B4B4) or
+        // COLOR_INACTIVEBORDER (#F4F7FC) with light edges. It stays until the
+        // next full repaint, up to 3 s. Measured from the screen: 7.2 million
+        // frame-colored edge pixels over 3 focus changes, versus 0 with this.
         //
-        // lParam = -1 er den dokumenterte maaten aa si "ikke tegn rammen" paa.
-        // DefWindowProc gjoer resten av aktiveringen som foer, i stedet for at
-        // vi svarer TRUE og hopper over den helt.
+        // lParam = -1 is the documented way to say "do not paint the frame".
+        // DefWindowProc does the rest of the activation as before, instead of
+        // us answering TRUE and skipping it entirely.
         case WM_NCACTIVATE:
             return DefWindowProcW(hwnd, msg, wParam, -1);
 
-        // Det finnes ingen NC-flate aa tegne. Ingen maalt sti tegnet noe her
-        // etter rettelsen over (fokusbytte, WM_SETTEXT, storrelsesendring),
-        // saa dette er et vern, ikke rettelsen.
+        // There is no NC surface to paint. No measured path painted anything
+        // here after the fix above (focus change, WM_SETTEXT, resize), so
+        // this is a guard, not the fix.
         //
-        // DWMNCRP_DISABLED er IKKE brukt: den slaar av DWM-rammen og slipper
-        // den klassiske NC-tegningen til igjen. Maalt: 1 296 rammefargede
-        // piksler tilbake, og forgrunnsbyttet feilet i to av tre sykluser.
+        // DWMNCRP_DISABLED is NOT used: it turns off the DWM frame and lets
+        // the classic NC painting back in. Measured: 1 296 frame-colored
+        // pixels back, and the foreground switch failed in two of three cycles.
         case WM_NCPAINT:
             return 0;
 
-        // Fjerner hele den ikke-klientaktige rammen: klientflaten blir like
-        // stor som vindusrektangelet, og vi tegner alt selv.
+        // Removes the whole non-client frame: the client area becomes as
+        // large as the window rectangle, and we paint everything ourselves.
         case WM_NCCALCSIZE: {
             if (!wParam) break;
-            // Maksimert vindu trenger ingen sarbehandling her -
-            // WM_GETMINMAXINFO under gir OS-et eksakt arbeidsomraadet, saa
-            // det finnes ikke noe overheng aa trekke fra. Maalt: uten den
-            // maksimerte et WS_POPUP seg til hele SKJERMEN utvidet med
-            // rammebredden (-7,-7 3854x1614 mot rcWork 0,0 3840x1552), og
-            // panelet la seg over oppgavelinja.
+            // A maximized window needs no special handling here -
+            // WM_GETMINMAXINFO below gives the OS the exact work area, so
+            // there is no overhang to subtract. Measured: without it a
+            // WS_POPUP maximized to the whole SCREEN extended by the frame
+            // width (-7,-7 3854x1614 versus rcWork 0,0 3840x1552), and the
+            // panel covered the taskbar.
             return 0;
         }
 
-        // Uten OS-ramme er det vi som avgjor hva musa staar paa.
-        // RESIZE_BORDER-sonene gir OS-ets egen skalering; ledig headerflate
-        // gir HTCAPTION, som er det DefWindowProc trenger for aa sende
-        // WM_NCLBUTTONDOWN og kjore nativ flytting med Aero Snap.
+        // Without an OS frame it is we who decide what the mouse is over.
+        // The RESIZE_BORDER zones give the OS's own resizing; free header
+        // area gives HTCAPTION, which is what DefWindowProc needs to send
+        // WM_NCLBUTTONDOWN and run native moving with Aero Snap.
         case WM_NCHITTEST: {
-            // Skrivebordsmodus: ingenting her skal ta musa. WS_EX_TRANSPARENT
-            // gjor det samme for systemet; dette holder knappe- og
-            // kantlogikken under unna uansett hvem som spor.
+            // Desktop mode: nothing here should take the mouse.
+            // WS_EX_TRANSPARENT does the same for the system; this keeps the
+            // button and edge logic below out of it no matter who asks.
             if (g_desktopMode) return HTTRANSPARENT;
             RECT rw;
             GetWindowRect(hwnd, &rw);
@@ -4688,9 +4758,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int y = GET_Y_LPARAM(lParam) - rw.top;
             int w = rw.right - rw.left, h = rw.bottom - rw.top;
 
-            // Maksimert vindu skal ikke kunne skaleres i kantene - da ville
-            // et klikk 2 px fra skjermkanten startet en dra-skalering av noe
-            // som per definisjon fyller skjermen.
+            // A maximized window must not be resizable at the edges - then a
+            // click 2 px from the screen edge would start a drag-resize of
+            // something that by definition fills the screen.
             if (!IsZoomed(hwnd)) {
                 int lft = (x < RESIZE_BORDER), rgt = (x >= w - RESIZE_BORDER);
                 int tp  = (y < RESIZE_BORDER), bot = (y >= h - RESIZE_BORDER);
@@ -4705,23 +4775,25 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
 
             if (y < HEADER_H) {
-                // Knappene maa vaere HTCLIENT, ellers naar WM_LBUTTONDOWN
-                // dem aldri: et HTCAPTION-omraade gir NC-meldinger, og
-                // DefWindowProc ville startet en vindusflytting av et klikk
-                // paa krysset. Rekkefolgen her ER mekanismen i mandatets
-                // punkt 2 og 3 - HTCLIENT der knappene er, HTCAPTION paa
-                // ledig flate.
+                // The buttons must be HTCLIENT, otherwise WM_LBUTTONDOWN
+                // never reaches them: an HTCAPTION area gives NC messages,
+                // and DefWindowProc would start a window move from a click
+                // on the close cross. The order here IS the mechanism in the
+                // mandate's points 2 and 3 - HTCLIENT where the buttons are,
+                // HTCAPTION on free area.
                 //
-                // NCHITTEST-koordinatene er relative til VINDUET. Med rammen
-                // fjernet i WM_NCCALCSIZE er klient og vindu samme
-                // rektangel, saa x kan brukes rett mot ButtonLayout.
+                // The NCHITTEST coordinates are relative to the WINDOW. With
+                // the frame removed in WM_NCCALCSIZE, client and window are
+                // the same rectangle, so x can be used directly against
+                // ButtonLayout.
                 RECT btns[BTN_COUNT];
                 ButtonLayout(w, btns);
                 if (ButtonHit(btns, x, y) >= 0) return HTCLIENT;
-                // Pillene i verktoylinja (fase 22) er knapper av samme
-                // slag, med samme krav: HTCLIENT, ellers er de tegnet og
-                // doede, og et klikk paa 5m flytter vinduet (fallgruve 21).
-                // Mellomrommene mellom pillene er fortsatt HTCAPTION.
+                // The pills in the toolbar (phase 22) are buttons of the
+                // same kind, with the same requirement: HTCLIENT, otherwise
+                // they are painted and dead, and a click on 5m moves the
+                // window (pitfall 21). The gaps between the pills are still
+                // HTCAPTION.
                 RECT tb[TBAR_COUNT];
                 ToolbarLayout(w, tb);
                 if (ToolbarHit(tb, x, y) >= 0) return HTCLIENT;
@@ -4730,22 +4802,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return HTCLIENT;
         }
 
-        // Pekeren under panorering. Uten denne tilbakestiller OS-et pekeren
-        // til vindusklassens IDC_ARROW ved hver eneste musebevegelse, og et
-        // SetCursor fra WM_MOUSEMOVE ville blitt overskrevet med en gang.
+        // The cursor during panning. Without this the OS resets the cursor
+        // to the window class's IDC_ARROW on every single mouse move, and a
+        // SetCursor from WM_MOUSEMOVE would be overwritten at once.
         //
-        // Kun HTCLIENT og kun mens vi panorerer: kantsonene skal beholde sine
-        // egne skaleringspekere, som DefWindowProc gir gratis, og headeren
-        // skal ha vanlig pil slik en tittellinje har. Derfor break og ikke
-        // return 0 for alt annet.
+        // Only HTCLIENT and only while we pan: the edge zones keep their own
+        // resize cursors, which DefWindowProc gives for free, and the header
+        // should have the normal arrow the way a title bar does. Hence break
+        // and not return 0 for everything else.
         case WM_SETCURSOR:
             if (g_Ctx.panning && LOWORD(lParam) == HTCLIENT) {
                 SetCursor(g_Ctx.curPan);
                 return TRUE;
             }
-            // Priskolonnen (fase 23) er klikkbar - sett eller fjern et varsel
-            // - og sier det med haanden. axisHotY er -1 under panorering og
-            // med overlayet aapent, saa grenen over og overlayet vinner.
+            // The price column (phase 23) is clickable - set or remove an
+            // alert - and says so with the hand. axisHotY is -1 during
+            // panning and with the overlay open, so the branch above and the
+            // overlay win.
             if (g_Ctx.axisHotY >= 0 && LOWORD(lParam) == HTCLIENT) {
                 SetCursor(g_Ctx.curHand);
                 return TRUE;
@@ -4758,23 +4831,24 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         case WM_GETMINMAXINFO: {
             MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-            // DPI-skalert av samme grunn som PlacePopupInitially: prosessen er
-            // DPI-uvitende i dag, saa dette er 400x250, men grensen skal
-            // folge med den dagen et manifest legges til.
+            // DPI-scaled for the same reason as PlacePopupInitially: the
+            // process is DPI-unaware today, so this is 400x250, but the limit
+            // should follow along the day a manifest is added.
             UINT dpi = GetDpiForWindow(hwnd);
             if (dpi == 0) dpi = 96;
             mmi->ptMinTrackSize.x = MulDiv(POPUP_MIN_W, (int)dpi, 96);
             mmi->ptMinTrackSize.y = MulDiv(POPUP_MIN_H, (int)dpi, 96);
 
-            // Et WS_POPUP-vindu maksimerer seg til hele SKJERMEN, ikke til
-            // arbeidsomraadet - og OS-et legger rammebredden utenpaa. Maalt
-            // for denne blokka fantes: -7,-7 3854x1614, mot rcWork
-            // 0,0 3840x1552. Panelet dekket oppgavelinja, og krysset laa 7 px
-            // utenfor skjermkanten. Et WS_OVERLAPPEDWINDOW ville faatt dette
-            // gratis; det gjor ikke vi, saa vi oppgir grensene selv.
+            // A WS_POPUP window maximizes to the whole SCREEN, not to the
+            // work area - and the OS adds the frame width outside. Measured
+            // before this block existed: -7,-7 3854x1614, versus rcWork
+            // 0,0 3840x1552. The panel covered the taskbar, and the close
+            // cross sat 7 px outside the screen edge. A WS_OVERLAPPEDWINDOW
+            // would get this for free; we do not, so we state the limits
+            // ourselves.
             //
-            // ptMaxPosition er relativ til SKJERMENS hjorne, ikke til
-            // skrivebordet - derfor trekkes rcMonitor fra.
+            // ptMaxPosition is relative to the MONITOR's corner, not to the
+            // desktop - hence rcMonitor is subtracted.
             HMONITOR hm = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
             MONITORINFO mi = { sizeof(MONITORINFO) };
             if (GetMonitorInfoW(hm, &mi)) {
@@ -4782,28 +4856,28 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 mmi->ptMaxPosition.y  = mi.rcWork.top  - mi.rcMonitor.top;
                 mmi->ptMaxSize.x      = mi.rcWork.right  - mi.rcWork.left;
                 mmi->ptMaxSize.y      = mi.rcWork.bottom - mi.rcWork.top;
-                // ptMaxTrackSize settes IKKE. Den ville klemt manuell
-                // skalering til en skjerms arbeidsomraade, saa panelet ikke
-                // lenger kunne strekkes over to skjermer. Det er MAKSIMERT
-                // storrelse som skal folge rcWork, ikke storste tillatte
-                // storrelse.
+                // ptMaxTrackSize is NOT set. It would clamp manual resizing
+                // to one monitor's work area, so the panel could no longer
+                // be stretched across two monitors. It is the MAXIMIZED
+                // size that should follow rcWork, not the largest allowed
+                // size.
             }
             return 0;
         }
 
         case WM_EXITSIZEMOVE: {
-            // Geometrien fanges naar brukeren slipper, ikke bare ved
-            // avslutning. Da panelet var EID av hovedvinduet var det
-            // allerede revet ned naar WM_DESTROY naadde dit, og registret
-            // sto uten PanelWidth - maalt. Panelet er uavhengig na, saa
-            // avslutningsstien virker ogsaa, men dette er fortsatt
-            // oyeblikket brukeren faktisk bestemmer storrelsen.
+            // The geometry is captured when the user lets go, not only on
+            // exit. When the panel was OWNED by the main window it was
+            // already torn down by the time WM_DESTROY got there, and the
+            // registry was left without PanelWidth - measured. The panel is
+            // independent now, so the exit path works too, but this is still
+            // the moment the user actually decides the size.
             SaveWindowPlacement(hwnd);
             return 0;
         }
 
         case WM_SIZE:
-            g_Ctx.wmValid = FALSE;   // bitmapen er bygget for forrige storrelse
+            g_Ctx.wmValid = FALSE;   // the bitmap is built for the previous size
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
 
@@ -4821,16 +4895,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             GetClientRect(hwnd, &rc);
             ChartRect g = ChartGeometry(rc.right, rc.bottom);
 
-            // Knappe-hover. Maa staa etter TrackMouseEvent-armeringen over
-            // (fallgruve 13) og for overlay- og panoreringsgrenene, som
-            // begge returnerer tidlig.
+            // Button hover. Must come after the TrackMouseEvent arming above
+            // (pitfall 13) and before the overlay and panning branches, which
+            // both return early.
             //
-            // Mens overlayet er apent skal ingen knapp lyse: den kan heller
-            // ikke klikkes, og en lysende knapp som ikke svarer er verre enn
-            // ingen. Det samme gjelder under panorering - der holder
-            // chart-flaten museknappen via SetCapture, saa en dra-bevegelse
-            // som passerer over headeren ville tent krysset rodt midt i
-            // panoreringen, uten at det gikk an aa klikke det.
+            // While the overlay is open no button should light up: it cannot
+            // be clicked either, and a lit button that does not respond is
+            // worse than none. The same applies during panning - there the
+            // chart surface holds the mouse button via SetCapture, so a drag
+            // that passes over the header would light the close cross red in
+            // the middle of the panning, without it being possible to click
+            // it.
             {
                 RECT btns[BTN_COUNT];
                 ButtonLayout(rc.right, btns);
@@ -4838,21 +4913,21 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                          ? -1 : ButtonHit(btns, mx, my);
                 if (bh != g_Ctx.btnHot) {
                     g_Ctx.btnHot = bh;
-                    // Kun knapperaden er skitten. PaintPopup har en hurtigsti
-                    // for nettopp dette rektangelet - uten den ville
-                    // invalideringen bare klippet den siste blitten, mens
-                    // hele bufferet ble bygget og grafen tegnet om.
+                    // Only the button row is dirty. PaintPopup has a fast
+                    // path for exactly this rectangle - without it the
+                    // invalidation would only clip the final blit, while
+                    // the whole buffer was built and the chart repainted.
                     RECT strip;
                     ButtonStrip(rc.right, &strip);
                     InvalidateRect(hwnd, &strip, FALSE);
                 }
             }
 
-            // Pille-hover (fase 22). Samme plass og samme sperrer som
-            // knappene. Bare verktoylinjas stripe er skitten; den gaar
-            // gjennom den trege stien (hurtigstien gjelder knapperaden),
-            // men blitten klippes til stripa, og et hover-skifte skjer
-            // hoyst en gang per pille pekeren passerer.
+            // Pill hover (phase 22). Same place and same guards as the
+            // buttons. Only the toolbar's strip is dirty; it goes through
+            // the slow path (the fast path applies to the button row), but
+            // the blit is clipped to the strip, and a hover change happens
+            // at most once per pill the cursor passes.
             {
                 RECT tb[TBAR_COUNT];
                 ToolbarLayout(rc.right, tb);
@@ -4866,13 +4941,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
             }
 
-            // Priskolonnen (fase 23). Samme plass og samme sperrer som
-            // knappene og pillene: foer de tidlige returene, og ingenting
-            // lyser mens overlayet eller et drag eier musa. dispValid er
-            // FALSE uten data - da finnes ingen akse aa peke paa. x > edge:
-            // kolonnen x = edge er linjas siste piksel, merkene begynner paa
-            // edge + 1. Hele flaten er skitten: spoekelseslinja gaar tvers
-            // over grafen, som traadkorset.
+            // The price column (phase 23). Same place and same guards as the
+            // buttons and the pills: before the early returns, and nothing
+            // lights up while the overlay or a drag owns the mouse. dispValid
+            // is FALSE without data - then there is no axis to point at.
+            // x > edge: the column x = edge is the line's last pixel, the
+            // tags start at edge + 1. The whole surface is dirty: the ghost
+            // line runs straight across the chart, like the crosshair.
             {
                 int axY = -1, aHot = -1;
                 if (!g_Ctx.overlayOpen && !g_Ctx.panning && g_Ctx.dispValid &&
@@ -4880,8 +4955,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     axY  = my;
                     aHot = AlertAxisHit(&g_Ctx, &g, my);
                 }
-                // Pekeren har forlatt det nysatte merket: fra naa er det
-                // et merke som alle andre, og blir roedt neste gang.
+                // The cursor has left the newly set tag: from now on it is
+                // a tag like all the others, and turns red next time.
                 if (g_Ctx.alertFresh != 0.0 &&
                     (aHot < 0 || g_Ctx.alerts[g_Ctx.symIdx][aHot] != g_Ctx.alertFresh)) {
                     g_Ctx.alertFresh = 0.0;
@@ -4893,11 +4968,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
             }
 
-            // Sperren staar etter TrackMouseEvent-armeringen over. Returnerte
-            // vi for den, sluttet WM_MOUSELEAVE a fyre og crosshairet ville
-            // blitt staaende etter at musa forlot vinduet.
-            // Sjekker overlayOpen, ikke overlayF: under uttoning er boksen
-            // fortsatt synlig, men musa skal styre grafen igjen.
+            // The guard comes after the TrackMouseEvent arming above. If we
+            // returned before it, WM_MOUSELEAVE would stop firing and the
+            // crosshair would stay after the mouse left the window.
+            // Checks overlayOpen, not overlayF: during fade-out the box is
+            // still visible, but the mouse should control the chart again.
             if (g_Ctx.overlayOpen) {
                 OverlayRects orr;
                 OverlayLayout(rc.right, rc.bottom, &orr);
@@ -4912,23 +4987,25 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (g_Ctx.panning) {
                 BOOL atWall = FALSE;
                 EnterCriticalSection(&g_Ctx.lock);
-                // Ankeret maa kompenseres FOER det leses: en bakfylling
-                // mellom forrige timer-tikk og dette museflyttet ville
-                // ellers gitt ett bilde med hopp paa k lys (fase 18).
+                // The anchor must be compensated BEFORE it is read: a
+                // backfill between the previous timer tick and this mouse
+                // move would otherwise give one frame with a jump of k
+                // candles (phase 18).
                 ApplyFrontShift(&g_Ctx);
                 int vs2, vc2;
                 GetView(&g_Ctx, &vs2, &vc2);
                 if (vc2 > 0 && g.cw > 0) {
                     double slot = (double)g.cw / (double)vc2;
                     int shift = (int)((double)(mx - g_Ctx.panAnchorX) / slot);
-                    int want  = g_Ctx.panAnchorView - shift;        // dra hoyre = bakover
+                    int want  = g_Ctx.panAnchorView - shift;        // drag right = backward
                     g_Ctx.viewStart = want;
                     ClampView(&g_Ctx);
-                    // I veggen glir fingeren: ankeret flyttes hit, saa
-                    // overskytingen ikke huskes. Uten dette ville draget
-                    // etter en bakfylling (fase 18) hoppet med akkurat det
-                    // brukeren dro forbi veggen foer lysene kom, og et drag
-                    // tilbake fra veggen ville staatt stille like lenge.
+                    // At the wall the finger slips: the anchor is moved here,
+                    // so the overshoot is not remembered. Without this the
+                    // drag after a backfill (phase 18) would jump by exactly
+                    // what the user dragged past the wall before the candles
+                    // arrived, and a drag back from the wall would stand
+                    // still for just as long.
                     if (g_Ctx.viewStart != want) {
                         g_Ctx.panAnchorView = g_Ctx.viewStart;
                         g_Ctx.panAnchorX    = mx;
@@ -4936,10 +5013,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     g_Ctx.followLive =
                         (g_Ctx.viewStart + g_Ctx.viewCount >= g_Ctx.candleCount);
                     atWall = (g_Ctx.viewStart == 0);
-                    // Dra-panorering eases IKKE i X. Fingeren og grafen maa
-                    // henge sammen; eased dra foles treigt, ikke mykt.
-                    // Y-aksen eases fortsatt - den skal gli naar nye topper
-                    // og bunner kommer inn i utsnittet.
+                    // Drag panning is NOT eased in X. The finger and the
+                    // chart must stay together; an eased drag feels sluggish,
+                    // not smooth. The Y axis is still eased - it should glide
+                    // when new highs and lows enter the view.
                     g_Ctx.dispStart = (double)g_Ctx.viewStart;
                     g_Ctx.dispCount = (double)((g_Ctx.viewCount > 0)
                                                ? g_Ctx.viewCount : g_Ctx.candleCount);
@@ -4947,8 +5024,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     g_Ctx.hoverY   = my;
                 }
                 LeaveCriticalSection(&g_Ctx.lock);
-                if (atWall) RequestHistory(&g_Ctx);   // fase 18
-                StartAnim(hwnd);   // Y-aksen kan ha nytt maal
+                if (atWall) RequestHistory(&g_Ctx);   // phase 18
+                StartAnim(hwnd);   // the Y axis may have a new target
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
@@ -4965,12 +5042,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
         }
 
-        // Ctrl + musehjul zoomer om punktet under pekeren. Merk at lParam
-        // her er SKJERM-koordinater, i motsetning til WM_MOUSEMOVE.
+        // Ctrl + mouse wheel zooms about the point under the cursor. Note
+        // that lParam here is SCREEN coordinates, unlike WM_MOUSEMOVE.
         case WM_MOUSEWHEEL: {
             if (g_Ctx.overlayOpen) return 0;
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            ScreenToClient(hwnd, &pt);   // lParam er SKJERM-koordinater her
+            ScreenToClient(hwnd, &pt);   // lParam is SCREEN coordinates here
 
             RECT rc;
             GetClientRect(hwnd, &rc);
@@ -4984,14 +5061,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             EnterCriticalSection(&g_Ctx.lock);
             if (g_Ctx.candleCount > 0) {
                 if (!ctrl) {
-                    // Uten Ctrl: panorer i tid. Hjul opp = bakover.
+                    // Without Ctrl: pan in time. Wheel up = backward.
                     int vs, vc;
                     GetView(&g_Ctx, &vs, &vc);
                     int step = vc / 8;
                     if (step < 1) step = 1;
                     atWall = PanView(&g_Ctx, -notches * step);
                 } else {
-                    // Med Ctrl: zoom om punktet under pekeren
+                    // With Ctrl: zoom about the point under the cursor
                     double frac = (double)(pt.x - g.left) / (double)g.cw;
                     atWall = ZoomView(&g_Ctx, frac, notches);
                 }
@@ -4999,10 +5076,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             LeaveCriticalSection(&g_Ctx.lock);
 
-            // Veggen (fase 18). Ogsaa zoom inn med ankeret helt til venstre
-            // paa et ferskt panel lander her - ett kall paa 50 KB, ufarlig.
+            // The wall (phase 18). Zooming in with the anchor at the far left
+            // on a fresh panel also lands here - one call of 50 KB, harmless.
             if (atWall) RequestHistory(&g_Ctx);
-            StartAnim(hwnd);   // maalet flyttet seg; visningen skal ease dit
+            StartAnim(hwnd);   // the target moved; the display should ease there
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -5010,24 +5087,24 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_MOUSELEAVE:
             g_Ctx.trackingMouse = FALSE;
             g_Ctx.hoverIdx      = -1;
-            g_Ctx.overlayHot    = -1;   // ellers blir en rad staaende framhevet
-            // Fyrer ogsaa naar pekeren gaar fra en knapp (HTCLIENT) ut i
-            // ledig headerflate (HTCAPTION): den forlater klientomraadet uten
-            // aa forlate vinduet. Uten dette blir knappen staaende opplyst.
+            g_Ctx.overlayHot    = -1;   // otherwise a row stays highlighted
+            // Also fires when the cursor goes from a button (HTCLIENT) out
+            // onto free header area (HTCAPTION): it leaves the client area
+            // without leaving the window. Without this the button stays lit.
             g_Ctx.btnHot        = -1;
             g_Ctx.tbHot         = -1;
-            g_Ctx.alertHot      = -1;   // fase 23: priskolonnen ligger helt
-            g_Ctx.axisHotY      = -1;   // ute ved kanten, pekeren gaar ofte ut her
+            g_Ctx.alertHot      = -1;   // phase 23: the price column is right
+            g_Ctx.axisHotY      = -1;   // at the edge, the cursor often exits here
             g_Ctx.alertFresh    = 0.0;
             StartAnim(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
 
 #ifdef TICKER_PROBE
-        // Testbygg (fase 18): leser indre tilstand uten aa roere den, saa en
-        // probe kan vente paa at en bakfylling har landet og sjekke at
-        // utsnittet peker paa de samme lysene foer og etter. Bygges bare med
-        // /DTICKER_PROBE; produksjonsbygget har ikke meldingen.
+        // Test build (phase 18): reads internal state without touching it,
+        // so a probe can wait for a backfill to land and check that the view
+        // points at the same candles before and after. Built only with
+        // /DTICKER_PROBE; the production build does not have the message.
         case WM_APP_PROBE: {
             LRESULT r = -1;
             EnterCriticalSection(&g_Ctx.lock);
@@ -5044,30 +5121,31 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                              ? (LRESULT)(g_Ctx.candles[0].openTime / 1000) : 0; break;
                 case 7:  r = (pvs < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[pvs].openTime / 1000) : 0; break;
-                case 8:  r = (LRESULT)(g_Ctx.dispStart * 1000.0); break;   // tusendels lys
+                case 8:  r = (LRESULT)(g_Ctx.dispStart * 1000.0); break;   // thousandths of a candle
                 case 9:  r = g_Ctx.netFailures; break;
                 case 10: r = g_Ctx.followLive; break;
                 case 11: r = g_Ctx.hoverIdx; break;
-                case 12: r = g_Ctx.panning; break;   // fase 20
-                case 13: r = (GetCapture() == hwnd); break;   // fase 20, egen traad
-                // Fase 21. lParam er lysindeksen. Volumet ganges med 100:
-                // LRESULT er 32 bit paa x86, og proben kjoerer BTC (1m-volum
-                // i tierklassen), saa to desimaler faar plass med god margin.
+                case 12: r = g_Ctx.panning; break;   // phase 20
+                case 13: r = (GetCapture() == hwnd); break;   // phase 20, own thread
+                // Phase 21. lParam is the candle index. The volume is
+                // multiplied by 100: LRESULT is 32 bit on x86, and the probe
+                // runs BTC (1m volume in the tens), so two decimals fit with
+                // a good margin.
                 case 14: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
-                             ? (LRESULT)floor(g_Ctx.candles[(int)lParam].volume * 100.0 + 0.5) : -1; break;   // avrundet, ikke trunkert (fallgruve 91)
+                             ? (LRESULT)floor(g_Ctx.candles[(int)lParam].volume * 100.0 + 0.5) : -1; break;   // rounded, not truncated (pitfall 91)
                 case 15: r = (LRESULT)g_probePaintUs; break;
-                // Fase 22: verktoylinja.
+                // Phase 22: the toolbar.
                 case 16: r = g_Ctx.ivIdx; break;
                 case 17: r = g_Ctx.symIdx; break;
-                case 18: r = ShowVolNow(&g_Ctx); break;   // modusens valg (fase 26)
+                case 18: r = ShowVolNow(&g_Ctx); break;   // the mode's choice (phase 26)
                 case 19: r = g_Ctx.tbHot; break;
                 case 20: r = g_Ctx.overlayOpen; break;
                 case 21: r = (LRESULT)(g_Ctx.dispVolF * 1000.0); break;
-                // Fase 23: prisvarsler. Nivaaer og priser ganges med 100 av
-                // samme grunn som volumet; BTC x 100 er syv sifre. 23 baerer
-                // fortegnet (siden), lParam er plassen. De SKRIVENDE feltene
-                // (100 og oppover) ligger i WndProc, paa hovedvinduet, saa
-                // et varsel kan fyres med panelet skjult.
+                // Phase 23: price alerts. Levels and prices are multiplied by
+                // 100 for the same reason as the volume; BTC x 100 is seven
+                // digits. 23 carries the sign (the side), lParam is the slot.
+                // The WRITING fields (100 and up) live in WndProc, on the
+                // main window, so an alert can be fired with the panel hidden.
                 case 22: r = g_Ctx.alertCount[g_Ctx.symIdx]; break;
                 case 23: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.alertCount[g_Ctx.symIdx])
                              ? (LRESULT)floor(g_Ctx.alerts[g_Ctx.symIdx][(int)lParam] * 100.0 + 0.5) : 0; break;
@@ -5081,10 +5159,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 31: r = (LRESULT)floor(g_Ctx.dispMin * 100.0 + 0.5); break;
                 case 32: r = (LRESULT)floor(g_Ctx.dispMax * 100.0 + 0.5); break;
                 case 33: r = (LRESULT)floor(g_Ctx.alertFresh * 100.0 + 0.5); break;
-                // Fase 25: glidende snitt. 36/37 er SMA/EMA paa lysindeksen
-                // i lParam, x100, -1 naar snittet ikke er definert der. 38
-                // er lukkekursen x100, saa proben kan regne snittene selv.
-                // 39 er tiden de to linjene tok i siste opptegning (us).
+                // Phase 25: moving averages. 36/37 are SMA/EMA at the candle
+                // index in lParam, x100, -1 when the average is not defined
+                // there. 38 is the close x100, so the probe can compute the
+                // averages itself. 39 is the time the two lines took in the
+                // last repaint (us).
                 case 34: r = ShowIndNow(&g_Ctx); break;
                 case 35: r = (LRESULT)(g_Ctx.dispIndF * 1000.0); break;
                 case 36: case 37: {
@@ -5097,16 +5176,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     break;
                 }
                 case 39: r = (LRESULT)g_probeIndUs; break;
-                // Fase 26: hoyden stempelfonten er bygget for (skrivebordsmodus).
+                // Phase 26: the height the stamp font is built for (desktop mode).
                 case 40: r = g_Ctx.pillFontH; break;
-                // Fase 27: dagens session. 41 er VWAP paa lysindeksen i
-                // lParam, x100, -1 naar den ikke er definert der. 42/43 er
-                // dagens hoy/lav x100. 44 er sessionens foerste lys (-1 =
-                // ingen session), 46 om bufferet rekker tilbake til
-                // doegnskiftet. 45 er tiden sessionblokkene tok i siste
-                // opptegning (us). 47-50 er lyset i lParam, saa proben kan
-                // regne alt selv: aapningstid (sekunder), typisk pris
-                // (H + L + C) / 3, high og low, prisene x100.
+                // Phase 27: today's session. 41 is VWAP at the candle index
+                // in lParam, x100, -1 when it is not defined there. 42/43 are
+                // today's high/low x100. 44 is the session's first candle
+                // (-1 = no session), 46 whether the buffer reaches back to
+                // the day rollover. 45 is the time the session blocks took in
+                // the last repaint (us). 47-50 are the candle in lParam, so
+                // the probe can compute everything itself: open time
+                // (seconds), typical price (H + L + C) / 3, high and low, the
+                // prices x100.
                 case 41: case 42: case 43: case 44: case 46: {
                     BOOL full = FALSE;
                     int ss = SessionStart(g_Ctx.candles, g_Ctx.candleCount,
@@ -5127,13 +5207,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     break;
                 }
                 case 45: r = (LRESULT)g_probeSessUs; break;
-                // Fase 28: gaarsdagen. 51/52/53 er forrige UTC-doegns hoy,
-                // lav og sluttkurs x100, -1 naar doegnet ikke er helt i
-                // bufferet. 55 er gaarsdagens foerste lys (-1 = finnes ikke).
-                // 54 er det WM_APP_DATA avgjoer: vil appen ha eldre lys for
-                // aa gjoere sessionene hele? Prober venter paa 54 == 0 og
-                // felt 5 == 0 foer de leser indekser. 56 er tiden
-                // gaarsdagsblokka tok i siste opptegning (us).
+                // Phase 28: yesterday. 51/52/53 are the previous UTC day's
+                // high, low and close x100, -1 when the day is not wholly in
+                // the buffer. 55 is yesterday's first candle (-1 = does not
+                // exist). 54 is what WM_APP_DATA decides: does the app want
+                // older candles to make the sessions whole? Probes wait for
+                // 54 == 0 and field 5 == 0 before they read indices. 56 is
+                // the time the yesterday block took in the last repaint (us).
                 case 51: case 52: case 53: case 55: {
                     int pe = -1;
                     BOOL pfull = FALSE;
@@ -5182,8 +5262,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
 #endif
 
-        // Animasjonsklokka. Driver alt tidsavhengig fra ett sted, og dor
-        // naar alt har satt seg - i hvile gaar det ingen timer.
+        // The animation clock. Drives everything time-dependent from one
+        // place, and dies once everything has settled - at rest no timer runs.
         case WM_TIMER:
             if (wParam == TIMER_ANIM_ID) {
                 ULONGLONG now = GetTickCount64();
@@ -5193,7 +5273,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 BOOL redraw  = FALSE;
                 BOOL settled = TRUE;
 
-                // Overlay-fade.
+                // Overlay fade.
                 double ovlTarget = g_Ctx.overlayOpen ? 255.0 : 0.0;
                 if (g_Ctx.overlayF != ovlTarget) {
                     double before = g_Ctx.overlayF;
@@ -5203,9 +5283,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     if (g_Ctx.overlayF != ovlTarget) settled = FALSE;
                 }
 
-                // Ettergloeden til et varsel som har fyrt (fase 23): 1 -> 0.
-                // Snapper paa 0,02: fem av 242 fargetrinn over CLR_BG i den
-                // sterkeste kanalen (roed), saa det siste hoppet ikke synes.
+                // The afterglow of an alert that has fired (phase 23): 1 -> 0.
+                // Snaps at 0.02: five of 242 color steps above CLR_BG in the
+                // strongest channel (red), so the last jump is not visible.
                 if (g_Ctx.alertFlashF > 0.0) {
                     g_Ctx.alertFlashF = AnimStep(g_Ctx.alertFlashF, 0.0, dt,
                                                  ALERT_TAU_FLASH, 0.02);
@@ -5213,9 +5293,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     if (g_Ctx.alertFlashF > 0.0) settled = FALSE;
                 }
 
-                // MA-bryteren (fase 25): dispIndF toner linjene og
-                // forklaringen mot 0 eller 1. Snapper paa 0,02 som
-                // ettergloeden - de siste fargetrinnene over CLR_BG synes ikke.
+                // The MA toggle (phase 25): dispIndF fades the lines and
+                // the legend towards 0 or 1. Snaps at 0.02 like the
+                // afterglow - the last color steps above CLR_BG are not visible.
                 {
                     double ifT = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
                     if (g_Ctx.dispIndF != ifT) {
@@ -5226,11 +5306,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                 }
 
-                // View- og Y-akse-easing. Maalet leses under laas; selve
-                // interpolasjonen skjer utenfor, paa UI-eide felter.
+                // View and Y-axis easing. The target is read under the lock;
+                // the interpolation itself happens outside, on UI-owned fields.
                 //
-                // Terskelen er en kvart piksel omregnet til den enheten som
-                // eases - derfor trengs chart-geometrien her.
+                // The threshold is a quarter pixel converted to the unit being
+                // eased - hence the chart geometry is needed here.
                 {
                     RECT rcE;
                     GetClientRect(hwnd, &rcE);
@@ -5244,14 +5324,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     GetView(&g_Ctx, &tvs, &tvc);
                     if (tn > 0 && tvc > 0) {
                         PriceRange(&g_Ctx, tvs, tvc, &tMin, &tMax);
-                        tVol = VolumeMax(&g_Ctx, tvs, tvc);   // fase 21
+                        tVol = VolumeMax(&g_Ctx, tvs, tvc);   // phase 21
                     }
                     LeaveCriticalSection(&g_Ctx.lock);
 
-                    // VOL-bryteren (fase 22): dispVolF eases mot 0 eller 1,
-                    // uavhengig av om det finnes lys - et bytte rett foer et
-                    // intervallbytte skal ogsaa sette seg. Snapp er en kvart
-                    // piksel av baandhoeyden, som for de andre.
+                    // The VOL toggle (phase 22): dispVolF eases towards 0 or 1,
+                    // regardless of whether there are candles - a toggle just
+                    // before an interval switch must also settle. The snap is a
+                    // quarter pixel of the band height, as for the others.
                     {
                         double vfT = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
                         if (g_Ctx.dispVolF != vfT) {
@@ -5272,10 +5352,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         if (snapX <= 0.0) snapX = 1e-9;
                         if (snapY <= 0.0) snapY = 1e-9;
 
-                        // Volumskalaen eases som prisaksen: en kvart piksel av
-                        // baandhoeyden i volum-enheter (fase 21). Uten easing
-                        // ville stolpene hoppet idet et stoerre lys kom inn i
-                        // utsnittet, mens lysene glir.
+                        // The volume scale eases like the price axis: a quarter
+                        // pixel of the band height in volume units (phase 21).
+                        // Without easing the bars would jump the moment a larger
+                        // candle entered the view, while the candles glide.
                         double snapV = SNAP_PX * tVol / ((double)gE.ch * VOL_FRAC);
                         if (snapV <= 0.0) snapV = 1e-9;
 
@@ -5296,18 +5376,18 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                 }
 
-                // Stale-telleren. Klokka maa ga mens vi er frakoblet, men
-                // teksten endrer seg bare en gang i sekundet - vi tegner
-                // derfor kun naar sifferet faktisk blir et annet.
+                // The stale counter. The clock must run while we are
+                // disconnected, but the text only changes once a second - so
+                // we repaint only when the digit actually changes.
                 ULONGLONG okTick;
                 EnterCriticalSection(&g_Ctx.lock);
                 okTick = g_Ctx.lastOkTick;
                 LeaveCriticalSection(&g_Ctx.lock);
 
-                // IsWindowVisible er avgjorende: uten den holder en frakoblet
-                // linje klokka i live paa et skjult panel, og vi tikker 60
-                // ganger i sekundet uten a tegne noe. TogglePopup starter den
-                // igjen naar panelet vises.
+                // IsWindowVisible is decisive: without it a disconnected
+                // line keeps the clock alive on a hidden panel, and we tick 60
+                // times a second without painting anything. TogglePopup starts
+                // it again when the panel is shown.
                 if (okTick != 0 && now - okTick > STALE_AFTER &&
                     IsWindowVisible(hwnd)) {
                     int secs = (int)((now - okTick) / 1000);
@@ -5315,7 +5395,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         g_Ctx.staleSecsShown = secs;
                         redraw = TRUE;
                     }
-                    settled = FALSE;   // hold klokka i live mens vi er borte
+                    settled = FALSE;   // keep the clock alive while we are away
                 }
 
                 if (redraw) InvalidateRect(hwnd, NULL, FALSE);
@@ -5326,27 +5406,28 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             return 0;
 
-        // Dobbeltklikk paa grafen eller prisaksen nullstiller zoom og
-        // panorering. Krever CS_DBLCLKS paa vindusklassen - uten den kommer
-        // meldingen aldri. Alt som ikke er graf eller akse - knappene, og
-        // hele panelet mens overlayet er apent - faller gjennom til
-        // WM_LBUTTONDOWN, slik at andre klikk i et raskt dobbeltklikk
-        // oppforer seg som for CS_DBLCLKS kom inn.
+        // A double-click on the chart or the price axis resets zoom and
+        // panning. Requires CS_DBLCLKS on the window class - without it the
+        // message never arrives. Everything that is not chart or axis - the
+        // buttons, and the whole panel while the overlay is open - falls
+        // through to WM_LBUTTONDOWN, so the second click of a fast
+        // double-click behaves as it did before CS_DBLCLKS came in.
         //
-        // Forste klikk har allerede startet en panorering, men WM_LBUTTONUP
-        // har sluppet den igjen for DBLCLK kommer. Ledig headerflate er
-        // HTCAPTION og gir WM_NCLBUTTONDBLCLK (maksimer) - den naar ikke hit.
+        // The first click has already started panning, but WM_LBUTTONUP
+        // has released it again before DBLCLK arrives. Free header area is
+        // HTCAPTION and gives WM_NCLBUTTONDBLCLK (maximize) - it never gets here.
         case WM_LBUTTONDBLCLK: {
             if (!g_Ctx.overlayOpen) {
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
                 ChartRect gd = ChartGeometry(rcD.right, rcD.bottom);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
-                // [g.left, edge]: grafen og luftrommet. Til og med fase 22
-                // gikk flaten helt til W, med aksemargen. Priskolonnen er
-                // varslenes naa (fase 23) og faller gjennom til
-                // WM_LBUTTONDOWN som knappene: der er andre klikk i et raskt
-                // dobbeltklikk et klikk til paa merket det foerste satte.
+                // [g.left, edge]: the chart and the headroom. Up to and
+                // including phase 22 the area went all the way to W, with the
+                // axis margin. The price column now belongs to the alerts
+                // (phase 23) and falls through to WM_LBUTTONDOWN like the
+                // buttons: there the second click of a fast double-click is
+                // one more click on the mark the first one set.
                 if (mx >= gd.left && mx <= gd.edge && my >= gd.top && my <= gd.bottom) {
                     ResetView(&g_Ctx);
                     EnterCriticalSection(&g_Ctx.lock);
@@ -5361,9 +5442,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
         // fall through
         case WM_LBUTTONDOWN: {
-            // Staar forst med vilje: mens overlayet er apent skal ingen del
-            // av panelet ta klikket - heller ikke krysset. Forste klikk
-            // lukker overlayet, neste lukker panelet.
+            // First on purpose: while the overlay is open no part of the
+            // panel may take the click - not even the close cross. The first
+            // click closes the overlay, the next closes the panel.
             if (g_Ctx.overlayOpen) {
                 RECT rcO;
                 GetClientRect(hwnd, &rcO);
@@ -5371,7 +5452,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 OverlayLayout(rcO.right, rcO.bottom, &orr);
                 int hit = OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
                 if (hit >= 0) ApplyConfigChoice(&g_Ctx, hit);
-                g_Ctx.overlayOpen = FALSE;   // klikk utenfor lukker uten endring
+                g_Ctx.overlayOpen = FALSE;   // a click outside closes without change
                 g_Ctx.overlayHot  = -1;
                 StartAnim(hwnd);
                 InvalidateRect(hwnd, NULL, FALSE);
@@ -5380,9 +5461,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             RECT rc;
             GetClientRect(hwnd, &rc);
             int dx = GET_X_LPARAM(lParam), dy = GET_Y_LPARAM(lParam);
-            // Knappene. Etter overlayet - forste klikk lukker overlayet, ogsaa
-            // naar det treffer en knapp - og for panoreringen, som uansett
-            // bare gjelder chart-flaten.
+            // The buttons. After the overlay - the first click closes the
+            // overlay, even when it hits a button - and before panning, which
+            // in any case only applies to the chart area.
             {
                 RECT btns[BTN_COUNT];
                 ButtonLayout(rc.right, btns);
@@ -5392,7 +5473,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     return 0;
                 }
             }
-            // Verktoylinja (fase 22), samme plass i rekkefolgen.
+            // The toolbar (phase 22), same place in the order.
             {
                 RECT tb[TBAR_COUNT];
                 ToolbarLayout(rc.right, tb);
@@ -5404,28 +5485,28 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
 
             ChartRect gg = ChartGeometry(rc.right, rc.bottom);
-            // Priskolonnen (fase 23): sett eller fjern et varsel. Samme
-            // flate som hover-blokka i WM_MOUSEMOVE, og samme krav om data.
+            // The price column (phase 23): set or remove an alert. Same
+            // area as the hover block in WM_MOUSEMOVE, and same data requirement.
             if (g_Ctx.dispValid && dx > gg.edge && dy >= gg.top && dy <= gg.bottom) {
                 OnAxisClick(hwnd, &gg, dy);
                 return 0;
             }
             if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= gg.bottom) {
-                // Start panorering. SetCapture sikrer at vi faar museslipp
-                // ogsaa hvis pekeren forlater vinduet underveis.
+                // Start panning. SetCapture ensures we get the mouse release
+                // even if the pointer leaves the window along the way.
                 int vs, vc;
                 EnterCriticalSection(&g_Ctx.lock);
                 GetView(&g_Ctx, &vs, &vc);
                 g_Ctx.viewCount     = vc;
                 LeaveCriticalSection(&g_Ctx.lock);
                 g_Ctx.panning       = TRUE;
-                g_Ctx.alertHot      = -1;   // fase 23: draget eier musa
+                g_Ctx.alertHot      = -1;   // phase 23: the drag owns the mouse
                 g_Ctx.axisHotY      = -1;
                 g_Ctx.panAnchorX    = dx;
                 g_Ctx.panAnchorView = vs;
                 SetCapture(hwnd);
-                // WM_SETCURSOR fyrer forst ved neste musebevegelse. Uten
-                // dette kallet viser forste bilde av draget fortsatt pil.
+                // WM_SETCURSOR only fires on the next mouse move. Without
+                // this call the first frame of the drag still shows the arrow.
                 SetCursor(g_Ctx.curPan);
                 return 0;
             }
@@ -5441,7 +5522,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
                 g_Ctx.overlayOpen = TRUE;
                 g_Ctx.overlayHot  = -1;
-                g_Ctx.hoverIdx    = -1;   // crosshairet skal ikke sta igjen under
+                g_Ctx.hoverIdx    = -1;   // the crosshair must not remain underneath
                 StartAnim(hwnd);
                 InvalidateRect(hwnd, NULL, FALSE);
             }
@@ -5452,22 +5533,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (g_Ctx.panning) {
                 g_Ctx.panning = FALSE;
                 ReleaseCapture();
-                // Samme grunn som ved start, motsatt vei: uten dette viser
-                // forste bilde etter slipp fortsatt firevegskrysset.
+                // Same reason as at the start, the other way round: without
+                // this the first frame after release still shows the four-way arrow.
                 SetCursor(g_Ctx.curArrow);
             }
             return 0;
 
-        // Capture tatt fra oss midt i et drag (fase 20): Alt+Tab, Win-tasten,
-        // en meny eller et annet vindu som kaller SetCapture. WM_LBUTTONUP
-        // kommer da aldri hit, og panning ble staaende TRUE til neste klikk
-        // i grafen - med fase 19-snarveiene sperret saa lenge. Maalt i
-        // proben: pan=1 etter Alt+Tab, museslippet gikk til et annet vindu.
+        // Capture taken from us in the middle of a drag (phase 20): Alt+Tab,
+        // the Win key, a menu or another window calling SetCapture.
+        // WM_LBUTTONUP then never arrives here, and panning stayed TRUE until
+        // the next click in the chart - with the phase 19 shortcuts blocked
+        // for that long. Measured in the probe: pan=1 after Alt+Tab, the
+        // mouse release went to another window.
         //
-        // Var egen ReleaseCapture i WM_LBUTTONUP sender ogsaa denne, men da
-        // er panning allerede FALSE, og lParam er vinduet som tar over -
-        // begge deler gjoer handleren til en no-op der. Ingen ReleaseCapture
-        // her inne: det er dokumentert forbudt i denne meldingen.
+        // Our own ReleaseCapture in WM_LBUTTONUP also sends this one, but then
+        // panning is already FALSE, and lParam is the window taking over -
+        // both make the handler a no-op there. No ReleaseCapture in here:
+        // it is documented as forbidden in this message.
         case WM_CAPTURECHANGED:
             if (g_Ctx.panning && (HWND)lParam != hwnd) {
                 g_Ctx.panning = FALSE;
@@ -5477,24 +5559,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         case WM_KEYDOWN: {
             BOOL ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            // Ctrl+0: tilbake til fabrikkgeometri, sentrert paa den skjermen
-            // vinduet staar paa. Vindusgeometri, ikke zoom - se R under.
+            // Ctrl+0: back to factory geometry, centered on the monitor the
+            // window is on. Window geometry, not zoom - see R below.
             if (wParam == '0' && ctrl) {
                 ResetToDefaultView(hwnd);
                 return 0;
             }
-            // Kontrollknappene fra tastaturet (fase 19): Ctrl+N = [ + ],
-            // Ctrl+M = minimer, F11 = maksimer/gjenopprett, Ctrl+W = lukk.
-            // Alt+F4 gaar allerede gjennom DefWindowProc til WM_CLOSE, ogsaa
-            // uten WS_SYSMENU - maalt. Alle fire gaar gjennom OnButtonClick,
-            // saa tast og klikk deler samme sti: geometrien lagres foer
-            // maksimering, en gjenopprettet rekt utenfor alt synlig fanges,
-            // og et duplikat avsluttes av lukking. Ikke midt i en panorering:
-            // en minimering under drag ville hoppet over WM_LBUTTONUP, som
-            // slipper capture og setter pekeren tilbake. Ikke i
-            // skrivebordsmodus: flaten er et barn av WorkerW og faar aldri
-            // tastaturfokus, men SW_MINIMIZE paa den skal ikke engang vaere
-            // mulig i teorien.
+            // The control buttons from the keyboard (phase 19): Ctrl+N = [ + ],
+            // Ctrl+M = minimize, F11 = maximize/restore, Ctrl+W = close.
+            // Alt+F4 already goes through DefWindowProc to WM_CLOSE, even
+            // without WS_SYSMENU - measured. All four go through OnButtonClick,
+            // so key and click share the same path: the geometry is saved
+            // before maximizing, a restored rect outside everything visible is
+            // caught, and a duplicate exits on close. Not in the middle of
+            // panning: a minimize during a drag would skip WM_LBUTTONUP, which
+            // releases capture and restores the pointer. Not in desktop mode:
+            // the surface is a child of WorkerW and never gets keyboard focus,
+            // but SW_MINIMIZE on it should not even be possible in theory.
             if (!g_desktopMode && !g_Ctx.panning) {
                 int bh = -1;
                 if (ctrl && wParam == 'N')      bh = BTN_NEW;
@@ -5506,33 +5587,33 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     return 0;
                 }
             }
-            // Navigasjon i grafen (fase 20), gjennom samme PanView/ZoomView
-            // som hjulet. Venstre/hoeyre er ett hjulhakk (vc / 8 lys), PgUp/
-            // PgDn et helt utsnitt, Home eldste lys (veggen ber om historikk
-            // som et drag ville gjort, fase 18), End den levende kanten.
-            // + og - er ett zoomtrinn om MIDTEN av utsnittet - hjulet zoomer
-            // om pekeren, men en tast har ingen peker. Baade hovedtastaturets
-            // OEM-koder og det numeriske tastaturets. Ctrl er tillatt paa
-            // + og - (Ctrl++ som i en nettleser), men ikke paa de andre, saa
-            // Ctrl+piltast staar ledig.
+            // Navigation in the chart (phase 20), through the same
+            // PanView/ZoomView as the wheel. Left/right is one wheel notch
+            // (vc / 8 candles), PgUp/PgDn a whole view, Home the oldest candle
+            // (the wall requests history as a drag would, phase 18), End the
+            // live edge. + and - are one zoom step about the MIDDLE of the
+            // view - the wheel zooms about the pointer, but a key has no
+            // pointer. Both the main keyboard's OEM codes and the numeric
+            // keypad's. Ctrl is allowed on + and - (Ctrl++ as in a browser),
+            // but not on the others, so Ctrl+arrow stays free.
             //
-            // Samme sperrer som hjulet og snarveiene over: ikke med overlayet
-            // aapent (det eier hjulet og R), ikke i skrivebordsmodus, ikke
-            // midt i en panorering (ankeret ville hoppet). Hover nullstilles
-            // som R gjoer: aa regne lyset under pekeren paa nytt ville latt
-            // traadkorset gli med lyset under easingen og bli staaende
-            // forskjoevet fra pekeren til neste musebevegelse.
+            // Same blocks as the wheel and the shortcuts above: not with the
+            // overlay open (it owns the wheel and R), not in desktop mode, not
+            // in the middle of panning (the anchor would jump). Hover is reset
+            // as R does: recomputing the candle under the pointer would let
+            // the crosshair glide with the candle during the easing and stay
+            // offset from the pointer until the next mouse move.
             if (!g_desktopMode && !g_Ctx.panning && !g_Ctx.overlayOpen) {
-                // Verktoylinja fra tastaturet (fase 22): V er VOL-pillen,
-                // 1..6 intervallpillene i rekkefolge. Samme sti som klikket.
-                // Uten Ctrl - Ctrl+0 er standardvisningen, og Ctrl+siffer
-                // staar ledig.
+                // The toolbar from the keyboard (phase 22): V is the VOL pill,
+                // 1..6 the interval pills in order. Same path as the click.
+                // Without Ctrl - Ctrl+0 is the default view, and Ctrl+digit
+                // stays free.
                 if (!ctrl && wParam == 'V') {
                     OnToolbarClick(hwnd, TBAR_VOL);
                     return 0;
                 }
-                // M (fase 25): MA-pillen. Uten Ctrl - Ctrl+M minimerer.
-                // Virker ogsaa naar pillen er skjult paa et smalt panel.
+                // M (phase 25): the MA pill. Without Ctrl - Ctrl+M minimizes.
+                // Also works when the pill is hidden on a narrow panel.
                 if (!ctrl && wParam == 'M') {
                     OnToolbarClick(hwnd, TBAR_IND);
                     return 0;
@@ -5541,12 +5622,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     OnToolbarClick(hwnd, TBAR_IV_FIRST + (int)(wParam - '1'));
                     return 0;
                 }
-                // A (fase 23): sett et varsel paa traadkorsets pris - det
-                // samme tallet som staar i etiketten paa aksen, rundet som
-                // et klikk i kolonnen ville gjort. Uten traadkors finnes
-                // ingen pris aa peke paa, og tasten gjoer ingenting. hoverY
-                // klemmes som i DrawChart: krysset tegnes aldri utenfor
-                // [top, bottom], saa varselet skal heller ikke havne der.
+                // A (phase 23): set an alert at the crosshair's price - the
+                // same number shown in the label on the axis, rounded as a
+                // click in the column would. Without a crosshair there is no
+                // price to point at, and the key does nothing. hoverY is
+                // clamped as in DrawChart: the crosshair is never drawn outside
+                // [top, bottom], so the alert must not end up there either.
                 if (!ctrl && wParam == 'A') {
                     if (g_Ctx.hoverIdx >= 0 && g_Ctx.dispValid) {
                         RECT rcA;
@@ -5561,12 +5642,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
                 int  pan = 0, zoom = 0, navKey = 1;
                 switch (wParam) {
-                    case VK_LEFT:       pan = -1; break;    // hakk
+                    case VK_LEFT:       pan = -1; break;    // notch
                     case VK_RIGHT:      pan = +1; break;
-                    case VK_PRIOR:      pan = -2; break;    // helt utsnitt
+                    case VK_PRIOR:      pan = -2; break;    // whole view
                     case VK_NEXT:       pan = +2; break;
-                    case VK_HOME:       pan = -3; break;    // til veggen
-                    case VK_END:        pan = +3; break;    // til kanten
+                    case VK_HOME:       pan = -3; break;    // to the wall
+                    case VK_END:        pan = +3; break;    // to the edge
                     case VK_OEM_PLUS:   case VK_ADD:      zoom = +1; break;
                     case VK_OEM_MINUS:  case VK_SUBTRACT: zoom = -1; break;
                     default:            navKey = 0; break;
@@ -5594,14 +5675,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                     LeaveCriticalSection(&g_Ctx.lock);
                     if (atWall) RequestHistory(&g_Ctx);
-                    StartAnim(hwnd);   // maalet flyttet seg; visningen eases dit
+                    StartAnim(hwnd);   // the target moved; the display eases there
                     InvalidateRect(hwnd, NULL, FALSE);
                     return 0;
                 }
             }
-            // ESC er lagvis, innerst forst: lukk overlayet, nullstill
-            // utsnittet, skjul panelet. Ingen av lagene forsvinner for et
-            // annet - den som vil skjule et zoomet panel trykker to ganger.
+            // ESC works in layers, innermost first: close the overlay, reset
+            // the view, hide the panel. No layer disappears for another -
+            // whoever wants to hide a zoomed panel presses twice.
             if (wParam == VK_ESCAPE && g_Ctx.overlayOpen) {
                 g_Ctx.overlayOpen = FALSE;
                 g_Ctx.overlayHot  = -1;
@@ -5609,9 +5690,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
-            // R: zoom og panorering tilbake til standardutsnittet. Ikke mens
-            // overlayet er apent - der eier det tastaturet, som hjulet.
-            // VK-kodene for bokstaver er de store ASCII-tegnene.
+            // R: zoom and panning back to the default view. Not while the
+            // overlay is open - there it owns the keyboard, like the wheel.
+            // The VK codes for letters are the upper-case ASCII characters.
             if ((wParam == 'R' && !ctrl && !g_Ctx.overlayOpen) ||
                 (wParam == VK_ESCAPE && !ViewIsDefault(&g_Ctx))) {
                 ResetView(&g_Ctx);
@@ -5621,29 +5702,29 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 return 0;
             }
             if (wParam == VK_ESCAPE) {
-                // Krysset i headeren er det opplagte alternativet, men
-                // tastatursnarveien er billig a beholde.
+                // The cross in the header is the obvious alternative, but
+                // the keyboard shortcut is cheap to keep.
                 HidePanel(hwnd);
             }
             return 0;
         }
 
         case WM_CLOSE:
-            // Lukkeknappen skjuler til systemstatusfeltet. Tickeren er et
-            // tray-program; "Avslutt TickC" i tray-menyen avslutter det.
-            // Posisjonen lagres for vi forsvinner. Et duplikat avsluttes.
+            // The close button hides to the notification area. The ticker is
+            // a tray program; "Quit TickC" in the tray menu exits it.
+            // The position is saved before we disappear. A duplicate exits.
             HidePanel(hwnd);
             return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-// Plasser popupen i hjornet av arbeidsomraadet naermest musepekeren.
-// Handterer oppgavelinje i alle kanter + flere skjermer.
+// Place the popup in the corner of the work area nearest the mouse pointer.
+// Handles a taskbar on any edge + multiple monitors.
 
 
-// Plasserer vinduet forste gang det opprettes: lagret posisjon hvis den
-// finnes og fortsatt er synlig, ellers sentrert.
+// Places the window the first time it is created: the saved position if it
+// exists and is still visible, otherwise centered.
 static void PlacePopupInitially(HWND hwnd) {
     int w = (g_savedPanelW > 0) ? g_savedPanelW : POPUP_W;
     int h = (g_savedPanelH > 0) ? g_savedPanelH : POPUP_H;
@@ -5657,10 +5738,10 @@ static void PlacePopupInitially(HWND hwnd) {
     ResetToDefaultView(hwnd);
 }
 
-// Windows nekter SetForegroundWindow fra en prosess som ikke eier
-// forgrunnen. Uten dette blir vinduet vist, men aldri aktivert - og
-// tastaturfokus havner ingen steder, saa Ctrl+0 og ESC ikke naar frem.
-// Losningen er a koble input-koen var til forgrunnstraden mens vi bytter.
+// Windows refuses SetForegroundWindow from a process that does not own
+// the foreground. Without this the window is shown but never activated - and
+// keyboard focus ends up nowhere, so Ctrl+0 and ESC never get through.
+// The fix is to attach our input queue to the foreground thread while we switch.
 static void ForceForeground(HWND hwnd) {
     HWND hFore = GetForegroundWindow();
     if (hFore == hwnd) return;
@@ -5681,15 +5762,15 @@ static void ForceForeground(HWND hwnd) {
     }
 }
 
-// --- Skrivebordsmodus -------------------------------------------------------
+// --- Desktop mode -----------------------------------------------------------
 
-// Udokumentert: faar Progman til aa lage WorkerW-vinduet som skrivebordets
-// tapetovergang tegnes i.
+// Undocumented: makes Progman create the WorkerW window that the desktop's
+// wallpaper transition is drawn in.
 #define PROGMAN_SPAWN_WORKERW 0x052C
 
-// Klassisk vindustre (for Windows 11 24H2): WorkerW-en vi vil ha er et
-// TOPPNIVAvindu, soesken rett etter det vinduet som har SHELLDLL_DefView
-// (ikonene) i seg.
+// Classic window tree (before Windows 11 24H2): the WorkerW we want is a
+// TOP-LEVEL window, the sibling right after the window that has
+// SHELLDLL_DefView (the icons) in it.
 static BOOL CALLBACK FindLegacyWorkerW(HWND top, LPARAM lParam) {
     if (FindWindowExW(top, NULL, L"SHELLDLL_DefView", NULL)) {
         *(HWND*)lParam = FindWindowExW(NULL, top, L"WorkerW", NULL);
@@ -5698,17 +5779,17 @@ static BOOL CALLBACK FindLegacyWorkerW(HWND top, LPARAM lParam) {
     return TRUE;
 }
 
-// Finner WorkerW-en flaten skal ligge i, og lager den om noedvendig.
+// Finds the WorkerW the surface is to live in, and creates it if necessary.
 //
-// Maalt paa 26100 (24H2): foer meldingen har Progman ett barn,
-// SHELLDLL_DefView. Etter meldingen har den to - DefView oeverst og WorkerW
-// under - og det finnes INGEN toppnivaa-WorkerW med DefView i seg. Den
-// klassiske traverseringen finner altsaa ingenting der, og proves bare naar
-// Progman ikke har WorkerW som barn.
+// Measured on 26100 (24H2): before the message Progman has one child,
+// SHELLDLL_DefView. After the message it has two - DefView on top and WorkerW
+// below - and there is NO top-level WorkerW with DefView in it. So the
+// classic traversal finds nothing there, and is only tried when Progman does
+// not have WorkerW as a child.
 //
-// Begge meldingsvariantene sendes: (0xD, 1) er den nyere formen, (0, 0) den
-// klassiske. Kombinasjonen er det som er maalt; en av dem alene er ikke.
-// Tidsgrense 1 s: en Explorer som henger skal ikke fryse UI-traaden var.
+// Both message variants are sent: (0xD, 1) is the newer form, (0, 0) the
+// classic one. The combination is what was measured; either alone was not.
+// Timeout 1 s: a hung Explorer must not freeze our UI thread.
 static HWND FindDesktopWorkerW(void) {
     HWND progman = FindWindowW(L"Progman", NULL);
     if (!progman) return NULL;
@@ -5727,25 +5808,25 @@ static HWND FindDesktopWorkerW(void) {
     return legacy;
 }
 
-// Gjor et nyopprettet WS_POPUP om til skrivebordsflaten.
+// Turns a newly created WS_POPUP into the desktop surface.
 //
-// Rekkefolgen er maalt, ikke valgt. Et vanlig barnevindu under WorkerW blir
-// ALDRI synlig paa 24H2 - forelderen har ingen overflate aa tegne i (Progman
-// har WS_EX_NOREDIRECTIONBITMAP). Et lagdelt barn faar sin egen. Men:
-//   - WS_EX_LAYERED paa et barn krever supportedOS Windows 8+ i manifestet.
-//     Uten avvises stilen stille (exstil 0, 0 av 41 punkter synlige).
-//   - SetLayeredWindowAttributes maa kalles ETTER SetParent. Satt mens
-//     vinduet var toppnivaa, overlever stilen, men flaten vises ikke.
-// Med begge paa plass: 28 av 41 skrivebordspunkter fikk flatens farge, og
-// resten var ikoner.
+// The order is measured, not chosen. A plain child window under WorkerW is
+// NEVER visible on 24H2 - the parent has no surface to draw in (Progman
+// has WS_EX_NOREDIRECTIONBITMAP). A layered child gets its own. But:
+//   - WS_EX_LAYERED on a child requires supportedOS Windows 8+ in the manifest.
+//     Without it the style is silently rejected (exstyle 0, 0 of 41 points visible).
+//   - SetLayeredWindowAttributes must be called AFTER SetParent. Set while
+//     the window was top-level, the style survives, but the surface is not shown.
+// With both in place: 28 of 41 desktop points got the surface's color, and
+// the rest were icons.
 //
-// WS_EX_TRANSPARENT slipper musa gjennom. Flaten ligger uansett under
-// ikonenes SysListView32, men lagdelt maa den vaere, saa det koster ingenting.
-// Legger flaten over primaerskjermen. Primaerskjermen staar i 0,0 i
-// skjermkoordinater, men WorkerW dekker hele den virtuelle skjermen og har
-// sitt origo i dens hjorne. Paa et oppsett med en skjerm til venstre for den
-// primaere er de ikke det samme. Skilt ut av AttachToDesktop i fase 26, saa
-// et skjermbytte kan legge flaten paa nytt uten aa lage den paa nytt.
+// WS_EX_TRANSPARENT lets the mouse through. The surface lies under the
+// icons' SysListView32 anyway, but it has to be layered, so it costs nothing.
+// Places the surface over the primary monitor. The primary monitor is at 0,0 in
+// screen coordinates, but WorkerW covers the whole virtual screen and has
+// its origin in that screen's corner. On a setup with a monitor to the left of
+// the primary one they are not the same. Split out of AttachToDesktop in phase
+// 26, so a monitor change can place the surface again without recreating it.
 static void PlaceDesktopSurface(HWND hwnd, HWND ww) {
     POINT org = { 0, 0 };
     MapWindowPoints(NULL, ww, &org, 1);
@@ -5770,27 +5851,29 @@ static BOOL AttachToDesktop(HWND hwnd) {
     return TRUE;
 }
 
-// Skjermen er en annen enn da flaten ble lagt (fase 26): ny opploesning, ny
-// primaerskjerm, en skjerm koblet til eller fra. WM_DISPLAYCHANGE gaar bare
-// til toppnivaavinduer, saa det er det skjulte hovedvinduet som faar den -
-// flaten er et barn av WorkerW og hoerer ingenting. Kalles ogsaa en gang
-// til et sekund senere: Explorer legger sin egen WorkerW paa nytt etter
-// samme melding, og origo regnes i DENS koordinater.
+// The screen is different from when the surface was placed (phase 26): new
+// resolution, new primary monitor, a monitor connected or disconnected.
+// WM_DISPLAYCHANGE goes only to top-level windows, so it is the hidden main
+// window that gets it - the surface is a child of WorkerW and hears nothing.
+// Also called once more a second later: Explorer places its own WorkerW
+// again after the same message, and the origin is computed in ITS
+// coordinates.
 //
-// Sitter flaten ikke lenger i dagens WorkerW, rives den; WM_NCDESTROY
-// starter da gjenoppbyggingen, samme sti som naar Explorer startes paa nytt.
-// Ellers legges den paa nytt. SetWindowPos med uendret geometri er en
-// no-op; endres storrelsen, kommer WM_SIZE, som kaster vannmerket, og
-// dobbeltbufferet og stempelfonten (H/40) er noklet paa storrelsen og
-// bygges paa nytt av seg selv.
+// If the surface no longer sits in the current WorkerW, it is torn down;
+// WM_NCDESTROY then starts the rebuild, the same path as when Explorer is
+// restarted. Otherwise it is placed again. SetWindowPos with unchanged
+// geometry is a no-op; if the size changes, WM_SIZE arrives, which discards
+// the watermark, and the double buffer and the stamp font (H/40) are keyed
+// on the size and rebuild themselves.
 //
-// Per-monitor-bevisst rundt kallene, som da flaten ble laget (se
-// TogglePopup): GetSystemMetrics foelger traadens kontekst, og hovedtraaden
-// er DPI-uvitende - uten dette ville flaten faatt virtualiserte maal.
+// Per-monitor aware around the calls, as when the surface was created (see
+// TogglePopup): GetSystemMetrics follows the thread's context, and the main
+// thread is DPI-unaware - without this the surface would get virtualized
+// measurements.
 //
-// En ren SKALERINGSendring (100 % -> 150 %, samme opploesning) krever
-// ingenting: flaten regner i fysiske piksler. Vannmerkets fontgrenser leser
-// DPI, saa det kastes uansett.
+// A pure SCALING change (100 % -> 150 %, same resolution) needs nothing:
+// the surface works in physical pixels. The watermark's font limits read
+// DPI, so it is discarded anyway.
 static void RefitDesktopSurface(void) {
     if (!g_desktopMode || !g_Ctx.hPopup) return;
     DPI_AWARENESS_CONTEXT prev =
@@ -5807,9 +5890,9 @@ static void RefitDesktopSurface(void) {
 }
 
 
-// Tray-klikk. Med et vanlig vindu er den forventede oppforselen: er det
-// fremme og aktivt, skjul det; ellers vis det og gi det fokus. Minimert
-// vindu gjenopprettes.
+// Tray click. With a normal window the expected behavior is: if it is in
+// front and active, hide it; otherwise show it and give it focus. A
+// minimized window is restored.
 static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
         if (!IsIconic(ctx->hPopup) && GetForegroundWindow() == ctx->hPopup) {
@@ -5830,35 +5913,36 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 
     BOOL created = FALSE;
     if (!ctx->hPopup) {
-        // Rammelost vindu i TradingView/Bloomberg-tradisjon. WS_THICKFRAME
-        // beholder OS-ets egen skalering; hele den synlige rammen fjernes i
-        // WM_NCCALCSIZE. WS_MINIMIZEBOX og WS_MAXIMIZEBOX tegner ingenting
-        // uten tittellinje, men de er det som lar Win+Pil, Aero Snap og
-        // gjenoppretting fra oppgavelinje-miniatyren virke.
+        // Frameless window in the TradingView/Bloomberg tradition.
+        // WS_THICKFRAME keeps the OS's own resizing; the whole visible frame
+        // is removed in WM_NCCALCSIZE. WS_MINIMIZEBOX and WS_MAXIMIZEBOX draw
+        // nothing without a title bar, but they are what makes Win+Arrow,
+        // Aero Snap and restoring from the taskbar thumbnail work.
         //
-        // 0,0 og ikke CW_USEDEFAULT: CW_USEDEFAULT er udefinert for WS_POPUP
-        // og kan legge vinduet utenfor skjermen. PlacePopupInitially setter
-        // riktig geometri like etter.
+        // 0,0 and not CW_USEDEFAULT: CW_USEDEFAULT is undefined for WS_POPUP
+        // and can put the window off screen. PlacePopupInitially sets the
+        // correct geometry right after.
         //
-        // Ingen WS_EX_TOOLWINDOW og ingen eier, saa vinduet beholder knappen
-        // i oppgavelinja. Ingen WS_EX_TOPMOST.
+        // No WS_EX_TOOLWINDOW and no owner, so the window keeps its button
+        // in the taskbar. No WS_EX_TOPMOST.
         //
-        // Skrivebordsmodus: WS_POPUP alene. Ingen ramme aa skalere i, og
-        // ingen minimer/maksimer - flaten er skrivebordet. AttachToDesktop
-        // gjor den om til WS_CHILD for den vises, og foer hPopup publiseres:
-        // traden skal ikke se et vindu som kanskje rives ned igjen.
+        // Desktop mode: WS_POPUP alone. No frame to resize by, and no
+        // minimize/maximize - the surface is the desktop. AttachToDesktop
+        // turns it into WS_CHILD before it is shown, and before hPopup is
+        // published: the thread must not see a window that may be torn down
+        // again.
         DWORD style = g_desktopMode
             ? WS_POPUP
             : (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
 
-        // Skrivebordsflaten lages per-monitor-bevisst, resten av prosessen er
-        // fortsatt DPI-uvitende. Maalt ved 150 %: uten dette ga
-        // SM_CXSCREEN/SM_CYSCREEN virtualiserte 2560x1067, og flaten dekket
-        // bare det oevre venstre hjoernet av en WorkerW paa 3840x1600 fysiske
-        // piksler. Et vindu laget i denne konteksten beholder den, og
-        // WM_PAINT kjoeres i vinduets kontekst - GetClientRect gir da fysiske
-        // piksler, og layouten tegnes 1:1 i raa piksler som ved 100 %.
-        // Konteksten settes tilbake straks flaten er plassert.
+        // The desktop surface is created per-monitor aware; the rest of the
+        // process is still DPI-unaware. Measured at 150 %: without this
+        // SM_CXSCREEN/SM_CYSCREEN gave a virtualized 2560x1067, and the
+        // surface covered only the upper left corner of a WorkerW of
+        // 3840x1600 physical pixels. A window created in this context keeps
+        // it, and WM_PAINT runs in the window's context - GetClientRect then
+        // gives physical pixels, and the layout is drawn 1:1 in raw pixels as
+        // at 100 %. The context is restored as soon as the surface is placed.
         DPI_AWARENESS_CONTEXT prevDpi = g_desktopMode
             ? SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
             : NULL;
@@ -5874,9 +5958,9 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 
         if (g_desktopMode) {
             if (!attached) {
-                // Ingen WorkerW (Explorer starter, eller kjorer ikke). hPopup
-                // er ikke satt, saa WM_NCDESTROY lar timeren vaere - den
-                // settes her.
+                // No WorkerW (Explorer is starting, or not running). hPopup
+                // is not set, so WM_NCDESTROY leaves the timer alone - it is
+                // set here.
                 DestroyWindow(hp);
                 SetTimer(ctx->hWnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
                 return;
@@ -5885,47 +5969,47 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             SquareCorners(hp);
         }
 
-        EnterCriticalSection(&ctx->lock);   // traden leser hPopup
+        EnterCriticalSection(&ctx->lock);   // the thread reads hPopup
         ctx->hPopup = hp;
         LeaveCriticalSection(&ctx->lock);
         created = TRUE;
     }
 
-    ResetView(ctx);   // utsnittet settes pa nytt; bufferet beholdes
+    ResetView(ctx);   // the view is set again; the buffer is kept
 
     ctx->panning   = FALSE;
     ctx->hoverIdx  = -1;
-    ctx->overlayOpen = FALSE;   // overlayet skal aldri sta apent ved apning
+    ctx->overlayOpen = FALSE;   // the overlay must never be open on opening
     ctx->overlayF    = 0.0;
     ctx->overlayHot  = -1;
-    // btnHot nullstilles av samme grunn som overlayHot over: tilstanden er
-    // hover, og hover eier ingenting naar vinduet forsvinner eller aapnes paa
-    // nytt. WM_MOUSELEAVE fyrer riktignok paa SW_HIDE og SW_MINIMIZE - maalt,
-    // ingen av de to stiene etterlot en opplyst knapp - men det er en
-    // meldingsrekkefolge vi ikke styrer, og en rod lukkeknapp som henger igjen
-    // ved gjenapning er ikke verdt aa vaere avhengig av den.
+    // btnHot is reset for the same reason as overlayHot above: the state is
+    // hover, and hover owns nothing when the window disappears or is opened
+    // again. WM_MOUSELEAVE does fire on SW_HIDE and SW_MINIMIZE - measured,
+    // neither of the two paths left a lit button - but it is a message order
+    // we do not control, and a red close button lingering on reopening is
+    // not worth depending on it.
     ctx->btnHot      = -1;
-    ctx->alertHot    = -1;      // fase 23, samme grunn
+    ctx->alertHot    = -1;      // phase 23, same reason
     ctx->axisHotY    = -1;
-    ctx->dispValid   = FALSE;   // panelet skal apne ferdig, ikke gli paa plass
+    ctx->dispValid   = FALSE;   // the panel opens finished, does not glide into place
 
     UpdatePopupTitle(ctx);
     if (g_desktopMode) {
-        // Geometrien satte AttachToDesktop. Ingen aktivering og ingen
-        // forgrunn: et barn av Explorers WorkerW skal aldri ta fokus fra
-        // det brukeren holder paa med.
+        // AttachToDesktop set the geometry. No activation and no
+        // foreground: a child of Explorer's WorkerW must never take focus
+        // from what the user is doing.
         ShowWindow(ctx->hPopup, SW_SHOWNA);
     } else {
         if (created) PlacePopupInitially(ctx->hPopup);
         ShowWindow(ctx->hPopup, SW_SHOW);
         ForceForeground(ctx->hPopup);
     }
-    SetEvent(ctx->hWakeEvent);   // hent lys na, ikke om opptil 3 sekunder
+    SetEvent(ctx->hWakeEvent);   // fetch candles now, not in up to 3 seconds
 
-    // Er linja nede idet panelet apnes, maa klokka starte her. WM_TIMER
-    // lar den do mens panelet er skjult, og neste WM_APP_DATA kan vaere
-    // opptil en hel backoff-periode unna - sekundtelleren ville statt
-    // stille helt til da.
+    // If the line is down as the panel opens, the clock must start here.
+    // WM_TIMER lets it die while the panel is hidden, and the next
+    // WM_APP_DATA can be up to a whole backoff period away - the seconds
+    // counter would stand still until then.
     ULONGLONG okTick;
     EnterCriticalSection(&ctx->lock);
     okTick = ctx->lastOkTick;
@@ -5937,68 +6021,71 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
-// Bytter mellom panel og skrivebordsflate mens prosessen kjoerer (fase 12).
+// Switches between the panel and the desktop surface while the process runs
+// (phase 12).
 //
-// Vinduet LAGES PAA NYTT, det flyttes ikke med SetParent. DPI-konteksten
-// settes idet et vindu lages og kan ikke endres: skrivebordsflaten maa lages
-// per-monitor-bevisst (ellers dekker den en firedel av skjermen ved 150 %,
-// se TogglePopup), og panelet DPI-uvitende. Et flyttet vindu ville haatt feil
-// kontekst i den ene modusen. TogglePopup lager allerede begge riktig, og
-// alle g_desktopMode-grenene gjelder et nytt vindu uten mer arbeid.
+// The window is CREATED AGAIN, it is not moved with SetParent. The DPI
+// context is set when a window is created and cannot be changed: the desktop
+// surface must be created per-monitor aware (otherwise it covers a quarter
+// of the screen at 150 %, see TogglePopup), and the panel DPI-unaware. A
+// moved window would have the wrong context in one of the modes.
+// TogglePopup already creates both correctly, and all the g_desktopMode
+// branches apply to a new window without more work.
 //
-// Det som overlever: candles[], utsnittet, nettverkstraaden, GDI-objektene,
-// dobbeltbufferet og vannmerke-cachen. De to siste bygges paa nytt av seg
-// selv hvis storrelsen er en annen, og det er den nesten alltid.
+// What survives: candles[], the view, the network thread, the GDI objects,
+// the double buffer and the watermark cache. The last two rebuild
+// themselves if the size is different, and it nearly always is.
 static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on) {
     if (g_isDuplicate || on == g_desktopMode) return;
 
-    // Timeren prover aa bygge en skrivebordsflate som mangler. Den skal ikke
-    // fyre etter at vi har gaatt tilbake til panelet.
+    // The timer tries to build a missing desktop surface. It must not fire
+    // after we have gone back to the panel.
     KillTimer(hWnd, TIMER_EMBED_ID);
 
     if (ctx->hPopup) {
         HWND hp = ctx->hPopup;
-        // Lagres FOER flagget endres: SaveGeometry gjoer ingenting i
-        // skrivebordsmodus.
+        // Saved BEFORE the flag changes: SaveGeometry does nothing in
+        // desktop mode.
         if (!g_desktopMode) SaveWindowPlacement(hp);
         if (GetCapture() == hp) ReleaseCapture();
 
-        // Samme rekkefolge som WM_DESTROY i WndProc: hPopup nulles under
-        // laas FOER vinduet rives. Da er WM_NCDESTROY en no-op og starter
-        // ikke gjenoppbyggingstimeren.
+        // Same order as WM_DESTROY in WndProc: hPopup is cleared under the
+        // lock BEFORE the window is torn down. Then WM_NCDESTROY is a no-op
+        // and does not start the rebuild timer.
         EnterCriticalSection(&ctx->lock);
         ctx->hPopup = NULL;
         LeaveCriticalSection(&ctx->lock);
         DestroyWindow(hp);
     }
 
-    // Tilstand som hang paa det gamle vinduet. Timeren doede med det;
-    // TrackMouseEvent er bestilt for et vindu som ikke finnes, og uten
-    // nullstillingen ville det nye panelet aldri bestilt WM_MOUSELEAVE.
+    // State that belonged to the old window. The timer died with it;
+    // TrackMouseEvent was requested for a window that does not exist, and
+    // without the reset the new panel would never request WM_MOUSELEAVE.
     ctx->animRunning   = FALSE;
     ctx->trackingMouse = FALSE;
     ctx->panning       = FALSE;
     ctx->bbValid       = FALSE;
-    // Vannmerket er noklet paa (W, H, symIdx, ivIdx), ikke paa modus, og
-    // cachen ligger i ctx - den overlever at vinduet lages paa nytt. Etter
-    // fase 14 avhenger plasseringen av geometrien, som avhenger av modus.
+    // The watermark is keyed on (W, H, symIdx, ivIdx), not on mode, and the
+    // cache lives in ctx - it survives the window being created again. Since
+    // phase 14 the placement depends on the geometry, which depends on mode.
     ctx->wmValid       = FALSE;
 
     g_desktopMode = on;
     SaveDesktopMode(on);
-    // Overleggene foelger modusen (fase 26). Den nye flaten finnes ikke
-    // enda, saa visningen snapper - samme regel som SetShowVolume naar
-    // ingenting synes.
+    // The overlays follow the mode (phase 26). The new surface does not
+    // exist yet, so the display snaps - the same rule as SetShowVolume when
+    // nothing is visible.
     ctx->dispVolF = ShowVolNow(ctx) ? 1.0 : 0.0;
     ctx->dispIndF = ShowIndNow(ctx) ? 1.0 : 0.0;
 
     TogglePopup(ctx, hInst);
 }
 
-// Undermenyene for symbol og intervall (fase 17): ett punkt per tabellrad og
-// radiohake paa den valgte. Hengt paa hovedmenyen med MF_POPUP eies de av
-// den, saa DestroyMenu paa hovedmenyen river dem ned - ingen nye haandtak i
-// hvile. Etikettene er tabellenes label, samme tekst som overlayet.
+// The submenus for symbol and interval (phase 17): one item per table row
+// and a radio check on the selected one. Attached to the main menu with
+// MF_POPUP they are owned by it, so DestroyMenu on the main menu tears them
+// down - no new handles at rest. The labels are the tables' label, the same
+// text as the overlay.
 static HMENU BuildSymbolMenu(void) {
     HMENU h = CreatePopupMenu();
     if (!h) return NULL;
@@ -6019,25 +6106,26 @@ static HMENU BuildIntervalMenu(void) {
     return h;
 }
 
-// Tray-menyen. Egen funksjon saa hake og innhold kan testes uten et
-// tray-ikon.
+// The tray menu. A separate function so the check marks and content can be
+// tested without a tray icon.
 //
 //       Symbol            >   (o) BTC/USDT  ( ) ETH/USDT  ...
-//       Intervall         >   (o) 1m  ( ) 5m  ...
+//       Interval          >   (o) 1m  ( ) 5m  ...
 //   ---------------------------
-//   [x] Skrivebordsmodus
-//       Standardvisning   Ctrl+0     (graa i skrivebordsmodus)
+//   [x] Desktop mode
+//       Default view      Ctrl+0     (grayed in desktop mode)
 //   ---------------------------
-//   [x] Start ved paalogging
+//   [x] Start at sign-in
 //   ---------------------------
-//       Avslutt Ticker
+//       Quit TickC
 //
-// "Standardvisning" er graa, ikke borte, i skrivebordsmodus: den ville gjort
-// flaten om til et 1280x720-vindu inne i WorkerW. Et duplikat faar hverken
-// modusvalget eller autostart - det eier ikke registret og avsluttes naar
-// panelet lukkes. Symbol og intervall faar det derimot: overlayet lar det
-// alt bytte sin egen visning, og SaveConfig hopper over duplikater selv.
-// Haken for autostart leses fra Run-nokkelen hver gang.
+// "Default view" is grayed, not gone, in desktop mode: it would turn the
+// surface into a 1280x720 window inside WorkerW. A duplicate gets neither
+// the mode choice nor autostart - it does not own the registry and exits
+// when the panel is closed. It does get symbol and interval, though: the
+// overlay already lets it switch its own view, and SaveConfig skips
+// duplicates itself. The autostart check is read from the Run key every
+// time.
 static HMENU BuildTrayMenu(void) {
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return NULL;
@@ -6046,17 +6134,18 @@ static HMENU BuildTrayMenu(void) {
         HMENU hIv  = BuildIntervalMenu();
         if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
         if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Interval");
-        // VOL-bryteren (fase 22) - skrivebordsmodus har ingen verktoylinje.
+        // The VOL toggle (phase 22) - desktop mode has no toolbar.
         AppendMenuW(hMenu, MF_STRING | (ShowVolNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_VOLUME, L"Volume bars	V");
-        // MA-bryteren (fase 25), samme grunn. Fra fase 27 baerer den ogsaa
-        // VWAP og dagens hoy/lav, saa den heter det den er.
+        // The MA toggle (phase 25), same reason. Since phase 27 it also
+        // carries VWAP and today's high/low, so it is named for what it is.
         AppendMenuW(hMenu, MF_STRING | (ShowIndNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_INDICATORS, L"Indicators	M");
-        // Prisvarslene (fase 23) settes i panelets priskolonne, men maa kunne
-        // ryddes herfra: skrivebordsmodus tegner linjene og har ingen input.
-        // Antallet gjelder symbolet som vises. Graatt, ikke borte, uten
-        // varsler - punktet er ogsaa stedet brukeren ser AT de finnes.
+        // The price alerts (phase 23) are set in the panel's price column,
+        // but must be clearable from here: desktop mode draws the lines and
+        // has no input. The count applies to the symbol shown. Grayed, not
+        // gone, without alerts - the item is also where the user sees THAT
+        // they exist.
         {
             wchar_t lbl[48];
             int na = g_Ctx.alertCount[g_Ctx.symIdx];
@@ -6087,9 +6176,9 @@ static HMENU BuildTrayMenu(void) {
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_TRAYICON:
-            // Skrivebordsmodus: flaten skal ikke skjules eller faa fokus, saa
-            // venstreklikk gjoer ingenting der. Menyen bygges paa nytt ved
-            // hvert hoyreklikk, saa haken alltid viser gjeldende modus.
+            // Desktop mode: the surface must not be hidden or get focus, so
+            // a left click does nothing there. The menu is rebuilt on every
+            // right click, so the check mark always shows the current mode.
             if (lParam == WM_LBUTTONUP && !g_desktopMode) {
                 TogglePopup(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
             } else if (lParam == WM_RBUTTONUP) {
@@ -6127,9 +6216,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 return 0;
             }
             {
-                // Symbol og intervall (fase 17). Omraadesjekk foerst: en postet
-                // ID utenfor tabellene er en stille no-op, ikke en indeks.
-                // Kodingen av hit er den samme som OverlayHit bruker.
+                // Symbol and interval (phase 17). Range check first: a posted
+                // ID outside the tables is a silent no-op, not an index.
+                // The hit encoding is the same as OverlayHit uses.
                 int id = (int)LOWORD(wParam);
                 if (id >= ID_TRAY_SYMBOL_FIRST && id < ID_TRAY_SYMBOL_FIRST + SYMBOL_COUNT) {
                     ApplyConfigChoice(&g_Ctx, id - ID_TRAY_SYMBOL_FIRST);
@@ -6141,11 +6230,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             if (LOWORD(wParam) == ID_TRAY_RESET) {
-                // Graa i menyen i skrivebordsmodus; sperres her ogsaa, for en
-                // postet melding bryr seg ikke om menyen.
+                // Grayed in the menu in desktop mode; blocked here too, since
+                // a posted message does not care about the menu.
                 if (g_desktopMode) return 0;
-                // Finnes ikke vinduet enda, lag det forst - ellers ville
-                // menypunktet vaert en stille no-op.
+                // If the window does not exist yet, create it first -
+                // otherwise the menu item would be a silent no-op.
                 if (!g_Ctx.hPopup || !IsWindowVisible(g_Ctx.hPopup)) {
                     TogglePopup(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
                 }
@@ -6158,8 +6247,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             break;
 
-        // Arbeidertraden har lagt inn nye data. Alt vi gjor her er a lese
-        // prisen under laas og tegne - ingen nettverkstrafikk.
+        // The worker thread has stored new data. All we do here is read the
+        // price under the lock and paint - no network traffic.
         case WM_APP_DATA: {
             double price;
             ULONGLONG okTick;
@@ -6168,48 +6257,51 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             okTick = g_Ctx.lastOkTick;
             LeaveCriticalSection(&g_Ctx.lock);
 #ifdef TICKER_PROBE
-            // Injisert pris (fase 23): wParam 1 baerer prisen x 100 i lParam
-            // og gaar foran lastPrice. Arbeidertraaden kan skrive en ekte
-            // pris mellom probens skriving og denne lesingen; da ville
-            // injeksjonen blitt borte omtrent en gang per tusen, og en test
-            // av en utloeser som feiler av og til er verre enn ingen.
+            // Injected price (phase 23): wParam 1 carries the price x 100 in
+            // lParam and takes precedence over lastPrice. The worker thread
+            // can write a real price between the probe's write and this
+            // read; then the injection would be lost about once in a
+            // thousand, and a test of a trigger that fails now and then is
+            // worse than none.
             if (wParam == 1) price = (double)(LONG)lParam / 100.0;
 #endif
 
-            // okTick == 0 betyr at vi aldri har lykkes enda. Da er vi ikke
-            // "frakoblet" - vi har bare ikke kommet i gang.
+            // okTick == 0 means we have never succeeded yet. Then we are not
+            // "disconnected" - we just have not got started.
             BOOL stale = (okTick != 0) &&
                          (GetTickCount64() - okTick > STALE_AFTER);
 
-            // Gjenopprettet forbindelse nullstiller telleren (fase 19). Uten
-            // dette sto forrige frakoblings siste sekundtall igjen, og en ny
-            // frakobling hoppet over en opptegning naar tallet tilfeldigvis
-            // var det samme. Telleren starter paa STALE_AFTER / 1000 = 9, saa
-            // 0 er aldri et ekte sekundtall.
+            // A restored connection resets the counter (phase 19). Without
+            // this the previous disconnect's last seconds value was left
+            // behind, and a new disconnect skipped a repaint when the number
+            // happened to be the same. The counter starts at
+            // STALE_AFTER / 1000 = 9, so 0 is never a real seconds value.
             if (!stale) g_Ctx.staleSecsShown = 0;
 
             UpdateIcon(&g_Ctx, price, stale);
-            // Prisvarslene (fase 23) proeves HER, ikke i traaden og ikke i
-            // MergeCandles: dette er det ene stedet hver ny pris passerer
-            // paa UI-traaden, med panelet aapent (lysenes lukkekurs), lukket
-            // (ticker-prisen) og i skrivebordsmodus. Etter UpdateIcon, saa
-            // ballongen kommer fra et ikon som alt viser prisen som fyrte.
-            // En frakoblet linje gir ingen ny pris, og samme pris to ganger
-            // fyrer ingenting nytt: varselet er borte etter foerste gang.
+            // The price alerts (phase 23) are checked HERE, not in the thread
+            // and not in MergeCandles: this is the one place every new price
+            // passes on the UI thread, with the panel open (the candles'
+            // close), closed (the ticker price) and in desktop mode. After
+            // UpdateIcon, so the balloon comes from an icon that already
+            // shows the price that fired. A disconnected line gives no new
+            // price, and the same price twice fires nothing new: the alert
+            // is gone after the first time.
             CheckAlerts(&g_Ctx, price);
             if (g_Ctx.hPopup && IsWindowVisible(g_Ctx.hPopup)) {
-                // Dagens session (fase 27): VWAP og dagens hoy/lav trenger
-                // lysene tilbake til 00:00 UTC, og de 360 fra foerste henting
-                // er seks timer ved 1m. Rekker bufferet ikke tilbake, ber vi
-                // om eldre lys - samme bakfylling som et drag i veggen (fase
-                // 18). Gaarsdagens nivaaer (fase 28) trenger ett doegn til,
-                // saa maalet er FORRIGE doegnskifte: hoeyst aatte hentinger
-                // (2880 lys ved 1m), en ved 5m, ingen fra 15m og opp. Hver
-                // henting poster WM_APP_DATA, som spoer igjen - kjeden er
-                // ferdig paa noen sekunder. Bare mens indikatorene er paa i
-                // modusen vi staar i: skrivebordet, der de er av som
-                // standard, henter ingenting ekstra.
-                // RequestHistory er idempotent og stopper paa histDone.
+                // Today's session (phase 27): VWAP and today's high/low need
+                // the candles back to 00:00 UTC, and the 360 from the first
+                // fetch are six hours at 1m. If the buffer does not reach
+                // back, we ask for older candles - the same backfill as a
+                // drag into the wall (phase 18). Yesterday's levels (phase
+                // 28) need one more day, so the target is the PREVIOUS day
+                // rollover: at most eight fetches (2880 candles at 1m), one
+                // at 5m, none from 15m up. Each fetch posts WM_APP_DATA,
+                // which asks again - the chain is done in a few seconds.
+                // Only while the indicators are on in the mode we are in:
+                // the desktop, where they are off by default, fetches
+                // nothing extra.
+                // RequestHistory is idempotent and stops at histDone.
                 if (ShowIndNow(&g_Ctx)) {
                     EnterCriticalSection(&g_Ctx.lock);
                     BOOL need = SessionsNeedHistory(g_Ctx.candles, g_Ctx.candleCount,
@@ -6217,9 +6309,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     LeaveCriticalSection(&g_Ctx.lock);
                     if (need) RequestHistory(&g_Ctx);
                 }
-                // Klokka maa ga mens vi er frakoblet, ellers fryser
-                // sekundtelleren i undertittelen.
-                // Nye lys kan flytte Y-maalet, og frakoblet maa telleren ga.
+                // The clock must run while we are disconnected, otherwise
+                // the seconds counter in the subtitle freezes.
+                // New candles can move the Y target, and when disconnected
+                // the counter must run.
                 StartAnim(g_Ctx.hPopup);
                 InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
             }
@@ -6227,16 +6320,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
 #ifdef TICKER_PROBE
-        // Testbygg (fase 23): de SKRIVENDE probe-feltene. Til og med fase 22
-        // leste proben bare; en utloeser som henger paa at den levende prisen
-        // krysser en linje kan ikke framprovoseres slik. Feltene bor paa
-        // hovedvinduet, ikke paa panelet, saa et varsel kan fyres mens
-        // panelet er skjult eller ikke finnes. Produksjonsbygget har ikke
-        // meldingen, saa der er proben fortsatt bare lesende - den finnes ikke.
-        //   100  injiser pris: lParam = pris x 100. Skriver lastPrice og
-        //        kjoerer WM_APP_DATA SYNKRONT, saa utloeseren er proevd naar
-        //        SendMessage returnerer.
-        //   101  demp ballong og lyd: lParam 0/1.
+        // Test build (phase 23): the WRITING probe fields. Up to and
+        // including phase 22 the probe only read; a trigger that depends on
+        // the live price crossing a line cannot be provoked that way. The
+        // fields live on the main window, not on the panel, so an alert can
+        // fire while the panel is hidden or does not exist. The production
+        // build does not have the message, so there the probe is still
+        // read-only - it does not exist.
+        //   100  inject price: lParam = price x 100. Writes lastPrice and
+        //        runs WM_APP_DATA SYNCHRONOUSLY, so the trigger has been
+        //        checked when SendMessage returns.
+        //   101  mute balloon and sound: lParam 0/1.
         case WM_APP_PROBE:
             if (wParam == 100) {
                 EnterCriticalSection(&g_Ctx.lock);
@@ -6249,11 +6343,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_probeMute = (lParam != 0);
                 return 1;
             }
-            //   102  sett et varsel paa et EKSAKT nivaa: lParam = nivaa x 100.
-            //        Gjennom AlertAdd, saa side, tak og duplikatvern er de
-            //        ekte. Lar utloesertestene staa uavhengig av y -> pris,
-            //        som testes for seg med postede klikk.
-            //   103  fjern varslene for symbolet (samme som tray-punktet).
+            //   102  set an alert at an EXACT level: lParam = level x 100.
+            //        Through AlertAdd, so side, cap and duplicate guard are
+            //        the real ones. Keeps the trigger tests independent of
+            //        y -> price, which is tested separately with posted clicks.
+            //   103  remove the alerts for the symbol (same as the tray item).
             if (wParam == 102) {
                 return AlertAdd(&g_Ctx, (double)(LONG)lParam / 100.0) ? 1 : 0;
             }
@@ -6261,35 +6355,35 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 AlertsClear(&g_Ctx);
                 return 1;
             }
-            //   110-112  LESENDE (fase 24), her og ikke paa panelet fordi
-            //        oppvaakning og prisgrenen skal kunne proeves med panelet
-            //        lukket: hentesykluser, oppvaakninger, forkastede verdier.
+            //   110-112  READING (phase 24), here and not on the panel because
+            //        wake-up and the price branch must be testable with the
+            //        panel closed: fetch cycles, wake-ups, rejected values.
             if (wParam == 110) return (LRESULT)g_probeFetches;
             if (wParam == 111) return (LRESULT)g_probeResumes;
             if (wParam == 112) return (LRESULT)g_probeRejects;
             if (wParam == 113) return (LRESULT)g_probeConnDrops;
-            if (wParam == 114) return (LRESULT)g_probeDisplayChanges;   // fase 26
-            if (wParam == 115) return (LRESULT)g_probeMigrate;          // fase 30
+            if (wParam == 114) return (LRESULT)g_probeDisplayChanges;   // phase 26
+            if (wParam == 115) return (LRESULT)g_probeMigrate;          // phase 30
             return 0;
 #endif
 
-        // Oppvaakning fra dvale (fase 24). Uten dette kunne foerste forsoek
-        // ligge et helt backoff-tak (60 s) unna, mot en forbindelse som doede
-        // mens maskinen sov. hWakeEvent nullstiller backoffen og gir et
-        // forsoek med en gang, som naar panelet aapnes; dropConn faar
-        // traaden til aa slippe hConnect foerst. Bare AUTOMATIC: den kommer
-        // ved HVER oppvaakning, RESUMESUSPEND bare i tillegg naar en bruker
-        // staar bak, og to vekkinger er en henting for mye. Nettet er ofte
-        // ikke oppe enda - da feiler forsoeket, og backoffen tar det derfra
-        // med 3 s, 6 s, ... i stedet for aa staa der den sto foer dvalen.
-        // SetEvent utenfor laasen, som ellers i fila.
+        // Wake from sleep (phase 24). Without this the first attempt could
+        // be a whole backoff cap (60 s) away, against a connection that died
+        // while the machine slept. hWakeEvent resets the backoff and gives an
+        // attempt at once, as when the panel is opened; dropConn makes the
+        // thread release hConnect first. Only AUTOMATIC: it arrives on EVERY
+        // wake-up, RESUMESUSPEND only in addition when a user is behind it,
+        // and two wake-ups are one fetch too many. The network is often not
+        // up yet - then the attempt fails, and the backoff takes it from
+        // there with 3 s, 6 s, ... instead of staying where it was before
+        // the sleep. SetEvent outside the lock, as elsewhere in the file.
         //
-        // hWakeEvent-sjekken er et vern, ikke pynt: vinduet lages FOER
-        // InitializeCriticalSection i WinMain, og en sendt melding kan
-        // leveres i det vinduet. hWakeEvent settes etter laasen, saa er den
-        // satt, finnes laasen.
-        // Skjermbytte (fase 26). lParam leses ikke: hovedtraaden er
-        // DPI-uvitende, saa maalene der er virtualiserte.
+        // The hWakeEvent check is a guard, not decoration: the window is
+        // created BEFORE InitializeCriticalSection in WinMain, and a sent
+        // message can be delivered in that window. hWakeEvent is set after
+        // the lock, so if it is set, the lock exists.
+        // Display change (phase 26). lParam is not read: the main thread is
+        // DPI-unaware, so the measurements there are virtualized.
         case WM_DISPLAYCHANGE:
 #ifdef TICKER_PROBE
             InterlockedIncrement(&g_probeDisplayChanges);
@@ -6314,12 +6408,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             SaveConfig(&g_Ctx);
             if (g_Ctx.hPopup) {
                 SaveWindowPlacement(g_Ctx.hPopup);
-                // Panelet er IKKE eid av hovedvinduet lenger - eierskap ville
-                // fjernet knappen i oppgavelinja. Da river ikke Windows det
-                // ned for oss, saa vi gjor det selv.
+                // The panel is NOT owned by the main window any more -
+                // ownership would remove the button in the taskbar. Then
+                // Windows does not tear it down for us, so we do it ourselves.
                 HWND hp = g_Ctx.hPopup;
-                // hPopup er i laasedomenet, og arbeidertraden lever fortsatt
-                // her - den stoppes forst etter meldingslokka.
+                // hPopup is in the lock domain, and the worker thread is still
+                // alive here - it is stopped only after the message loop.
                 EnterCriticalSection(&g_Ctx.lock);
                 g_Ctx.hPopup = NULL;
                 LeaveCriticalSection(&g_Ctx.lock);
@@ -6328,11 +6422,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             PostQuitMessage(0);
             break;
 
-        // Skrivebordsmodus uten flate: WorkerW fantes ikke, eller Explorer
-        // rev den ned. Proeves til den sitter; TogglePopup setter timeren
-        // paa nytt selv om det feiler igjen.
+        // Desktop mode without a surface: WorkerW did not exist, or Explorer
+        // tore it down. Retried until it sticks; TogglePopup sets the timer
+        // again itself if it fails again.
         case WM_TIMER:
-            if (wParam == TIMER_REFIT_ID) {   // fase 26: en gang til, naar Explorer har satt seg
+            if (wParam == TIMER_REFIT_ID) {   // phase 26: once more, when Explorer has settled
                 KillTimer(hwnd, TIMER_REFIT_ID);
                 RefitDesktopSurface();
                 return 0;
@@ -6347,16 +6441,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             break;
 
         default:
-            // Explorer er startet paa nytt. Ikonet er borte fra
-            // systemstatusfeltet. I skrivebordsmodus har Windows allerede revet
-            // ned flaten sammen med den gamle WorkerW-en (maalt: borte innen
-            // 20 ms), og WM_NCDESTROY har startet timeren.
+            // Explorer has been restarted. The icon is gone from the
+            // notification area. In desktop mode Windows has already torn
+            // down the surface along with the old WorkerW (measured: gone
+            // within 20 ms), and WM_NCDESTROY has started the timer.
             //
-            // Timeren kan dermed ha rukket aa bygge en ny flate foer denne
-            // meldingen kommer: ny flate etter 1,1 s, TaskbarCreated etter
-            // ~1,6 s. Da ble den ferske flaten revet ned og bygget paa nytt,
-            // og skrivebordet sto uten graf i et sekund. Rives derfor bare
-            // ned hvis den IKKE sitter i dagens WorkerW.
+            // The timer may thus have had time to build a new surface before
+            // this message arrives: new surface after 1.1 s, TaskbarCreated
+            // after ~1.6 s. Then the fresh surface was torn down and rebuilt,
+            // and the desktop stood without a chart for a second. So it is
+            // torn down only if it does NOT sit in the current WorkerW.
             if (msg == g_msgTaskbarCreated && g_msgTaskbarCreated != 0) {
                 Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
                 if (g_desktopMode) {
@@ -6378,24 +6472,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
-    // Ingen single-instance-mutex lenger: [ + ] starter nettopp en instans
-    // til. Hver prosess har sin egen arbeidertraad, sitt eget tray-ikon og
-    // sine egne vindusklasser (klasser er per prosess, saa navnene kolliderer
-    // ikke).
+    // No single-instance mutex any more: [ + ] starts precisely one more
+    // instance. Each process has its own worker thread, its own tray icon and
+    // its own window classes (classes are per process, so the names do not
+    // collide).
 
     memset(&g_Ctx, 0, sizeof(AppContext));
-    g_Ctx.hoverIdx = -1;   // 0 fra memset ville betydd "hover pa forste lys"
-    g_Ctx.overlayHot = -1; // samme grunn: 0 ville betydd "forste rad framhevet"
-    g_Ctx.dispValid  = FALSE; // snap paa forste bilde
+    g_Ctx.hoverIdx = -1;   // 0 from memset would mean "hover on the first candle"
+    g_Ctx.overlayHot = -1; // same reason: 0 would mean "first row highlighted"
+    g_Ctx.dispValid  = FALSE; // snap on the first frame
 
     g_Ctx.hSession = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 
     if (!g_Ctx.hSession) return 1;
 
-    // Uten dette er standard mottakstimeout 30 sekunder. Da ville en hengende
-    // forbindelse holdt arbeidertraden fast lenger enn de 3 sekundene vi
-    // venter ved avslutning - og vi ville lukket sesjonen under den.
+    // Without this the default receive timeout is 30 seconds. Then a hanging
+    // connection would hold the worker thread longer than the 3 seconds we
+    // wait at exit - and we would close the session under it.
     WinHttpSetTimeouts(g_Ctx.hSession, 5000, 5000, 5000, 5000);
 
     g_Ctx.hFontBig = CreateFontW(-19, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
@@ -6404,16 +6498,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    // Maalt med GetGlyphOutlineW(GGO_METRICS) paa '0': Lucida Console em 15
-    // gir 11 px sifferhoyde, 9 px tegnbredde og tmHeight 15. Consolas hopper
-    // fra 10 til 12 px (em 16 -> 17), Cascadia Mono em 16 gir 11 px men
-    // tmHeight 21, som ikke faar plass i tidsaksens 18 px.
+    // Measured with GetGlyphOutlineW(GGO_METRICS) on '0': Lucida Console em 15
+    // gives 11 px digit height, 9 px character width and tmHeight 15. Consolas
+    // jumps from 10 to 12 px (em 16 -> 17), Cascadia Mono em 16 gives 11 px
+    // but tmHeight 21, which does not fit in the time axis's 18 px.
     g_Ctx.hFontAxis = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                   DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                   ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
                                   L"Lucida Console");
-    // hFontWm lages ikke her: hoyden avhenger av panelstorrelsen, saa den
-    // bygges i EnsureWatermark og bare naar hoyden endrer seg.
+    // hFontWm is not created here: the height depends on the panel size, so
+    // it is built in EnsureWatermark and only when the height changes.
 
     WNDCLASSW wc = {0};
     wc.lpfnWndProc   = WndProc;
@@ -6426,11 +6520,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     pwc.hInstance     = hInstance;
     pwc.lpszClassName = L"BTCPopupClass";
     pwc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
-    pwc.hbrBackground = NULL; // vi tegner alt selv
-    pwc.style         = CS_DBLCLKS;   // dobbeltklikk nullstiller zoom og panorering
+    pwc.hbrBackground = NULL; // we paint everything ourselves
+    pwc.style         = CS_DBLCLKS;   // double click resets zoom and panning
     RegisterClassW(&pwc);
 
-    // Kringkastes til toppnivaavinduer naar Explorer har startet paa nytt.
+    // Broadcast to top-level windows when Explorer has restarted.
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 
     g_Ctx.hWnd =CreateWindowExW(0, wc.lpszClassName, L"TickC", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
@@ -6445,7 +6539,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
 
-    // Faste GDI-objekter: lages en gang, ikke 16 ganger per opptegning
+    // Fixed GDI objects: created once, not 16 times per repaint
     g_Ctx.penGrid   = CreatePen(PS_SOLID, 1, CLR_GRID);
     g_Ctx.penCross  = CreatePen(PS_DOT,   1, CLR_CROSS);
     g_Ctx.penBtn      = CreatePen(PS_SOLID, 1, CLR_DIM);
@@ -6457,39 +6551,39 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.curHand     = LoadCursorW(NULL, IDC_HAND);
     g_Ctx.btnHot      = -1;
     g_Ctx.tbHot       = -1;
-    g_Ctx.alertHot    = -1;     // fase 23: 0 ville betydd "foerste varsel under pekeren"
+    g_Ctx.alertHot    = -1;     // phase 23: 0 would mean "first alert under the pointer"
     g_Ctx.axisHotY    = -1;
-    g_Ctx.showVol     = TRUE;   // fase 22; LoadConfig kan skru det av
+    g_Ctx.showVol     = TRUE;   // phase 22; LoadConfig can turn it off
     g_Ctx.dispVolF    = 1.0;
-    g_Ctx.showInd     = TRUE;   // fase 25; LoadConfig kan skru det av
+    g_Ctx.showInd     = TRUE;   // phase 25; LoadConfig can turn it off
     g_Ctx.dispIndF    = 1.0;
-    // Stiplet, ikke prikket: holder siste-pris-linja visuelt atskilt fra
-    // baade rutenettet (heltrukket, dempet) og traadkorset (prikket).
+    // Dashed, not dotted: keeps the last-price line visually distinct from
+    // both the grid (solid, muted) and the crosshair (dotted).
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
     g_Ctx.penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
     g_Ctx.brBg      = CreateSolidBrush(CLR_BG);
     g_Ctx.brBox     = CreateSolidBrush(CLR_BOX);
     g_Ctx.brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
-    g_Ctx.brVolUp   = CreateSolidBrush(CLR_VOL_UP);     // fase 21
+    g_Ctx.brVolUp   = CreateSolidBrush(CLR_VOL_UP);     // phase 21
     g_Ctx.brVolDown = CreateSolidBrush(CLR_VOL_DOWN);
 
-    // Arbeidertraden startes forst naar vinduet og ikonet finnes, siden
-    // den poster meldinger til hWnd med en gang.
-    // MA staa for CreateThread: forste henting skal gaa mot riktig par, og
-    // vannmerket skal vaere korrekt fra forste bilde.
-    MigrateLegacyNames();   // fase 30: foer foerste lesning fra registret
+    // The worker thread is started only when the window and the icon exist,
+    // since it posts messages to hWnd right away.
+    // MUST come before CreateThread: the first fetch must go to the right
+    // pair, and the watermark must be correct from the first frame.
+    MigrateLegacyNames();   // phase 30: before the first read from the registry
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
 
-    // Duplikat: "--dup x y w h sym iv", skrevet av SpawnInstance. Overstyrer
-    // det LoadConfig leste, med samme grenser - en haandskrevet kommandolinje
-    // skal ikke kunne indeksere utenfor tabellene. Feiler sjekken, starter
-    // vi som vanlig hovedinstans i stedet for aa gjette.
+    // Duplicate: "--dup x y w h sym iv", written by SpawnInstance. Overrides
+    // what LoadConfig read, with the same limits - a hand-written command
+    // line must not be able to index outside the tables. If the check fails,
+    // we start as a normal main instance instead of guessing.
     {
         int argc = 0;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-        // Skrivebordsmodus tar ingen argumenter og kan ikke kombineres med
-        // --dup: et duplikat startes fra [ + ], som ikke finnes her.
+        // Desktop mode takes no arguments and cannot be combined with
+        // --dup: a duplicate is started from [ + ], which does not exist here.
         if (argv && argc == 2 && wcscmp(argv[1], L"--desktop-mode") == 0) {
             g_desktopMode = TRUE;
         }
@@ -6511,34 +6605,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
         if (argv) LocalFree(argv);
     }
-    // Uten --desktop-mode avgjoer registret: tray-menyen husker sist valgte
-    // modus (fase 12). Flagget vinner for denne kjoeringen, og et duplikat
-    // er alltid et panel.
+    // Without --desktop-mode the registry decides: the tray menu remembers
+    // the last chosen mode (phase 12). The flag wins for this run, and a
+    // duplicate is always a panel.
     if (!g_desktopMode && !g_isDuplicate) g_desktopMode = LoadDesktopMode();
-    // Ingen animasjon ved oppstart (fase 22 og 25). Her, og ikke rett etter
-    // LoadConfig: hvilket valg som gjelder avhenger av modusen (fase 26).
+    // No animation at startup (phases 22 and 25). Here, and not right after
+    // LoadConfig: which choice applies depends on the mode (phase 26).
     g_Ctx.dispVolF = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
     g_Ctx.dispIndF = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
-    // Prisvarslene (fase 23). Etter --dup-tolkingen: LoadAlerts hopper over
-    // duplikater, og g_isDuplicate er foerst kjent her. Foer traaden: foerste
-    // pris skal proeves mot varslene fra forrige kjoering.
+    // The price alerts (phase 23). After the --dup parsing: LoadAlerts skips
+    // duplicates, and g_isDuplicate is known only here. Before the thread:
+    // the first price must be checked against the alerts from the last run.
     LoadAlerts(&g_Ctx);
 #ifdef TICKER_PROBE
-    // Et varsel fra registret kan fyre paa FOERSTE pris, foer en probe rekker
-    // aa sende 101. Proben setter derfor variabelen i sitt eget miljoe, og
-    // testbygget arver den.
+    // An alert from the registry can fire on the FIRST price, before a probe
+    // has time to send 101. The probe therefore sets the variable in its own
+    // environment, and the test build inherits it.
     g_probeMute = GetEnvironmentVariableW(L"TICKER_PROBE_MUTE", NULL, 0) > 0;
 #endif
 
     InitializeCriticalSection(&g_Ctx.lock);
-    g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manuell reset
+    g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manual reset
     g_Ctx.hWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);  // auto reset
     g_Ctx.hThread    = CreateThread(NULL, 0, NetworkThread, &g_Ctx, 0, NULL);
 
-    // Et duplikat er startet fra et klikk og skal vise seg med en gang - en
-    // hovedinstans starter i systemstatusfeltet. Etter laasen og hendelsene:
-    // TogglePopup gaar inn i laasen og vekker traden. Skrivebordsflaten
-    // likesaa - den finnes bare mens den vises.
+    // A duplicate is started from a click and must show itself at once - a
+    // main instance starts in the notification area. After the lock and the
+    // events: TogglePopup enters the lock and wakes the thread. The desktop
+    // surface likewise - it exists only while it is shown.
     if (g_isDuplicate || g_desktopMode) TogglePopup(&g_Ctx, hInstance);
 
     MSG msg;
@@ -6547,7 +6641,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         DispatchMessageW(&msg);
     }
 
-    // Stopp traden for vi river ned noe den kan rore
+    // Stop the thread before we tear down anything it can touch
     if (g_Ctx.hStopEvent) SetEvent(g_Ctx.hStopEvent);
     if (g_Ctx.hThread) {
         WaitForSingleObject(g_Ctx.hThread, 3000);
@@ -6557,8 +6651,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (g_Ctx.hWakeEvent) CloseHandle(g_Ctx.hWakeEvent);
     DeleteCriticalSection(&g_Ctx.lock);
 
-    // Bufferet forst: fonter, penner og pensler fra siste bilde kan staa
-    // valgt inn i DC-en, og DeleteObject paa et valgt objekt feiler stille.
+    // The buffer first: fonts, pens and brushes from the last frame can be
+    // selected into the DC, and DeleteObject on a selected object fails
+    // silently.
     FreeBackBuffer(&g_Ctx);
 
     if (g_Ctx.nid.hIcon) DestroyIcon(g_Ctx.nid.hIcon);
@@ -6575,8 +6670,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     DeleteObject(g_Ctx.penBtn);      DeleteObject(g_Ctx.penBtnHot);
     DeleteObject(g_Ctx.penBtnWhite); DeleteObject(g_Ctx.brClose);
 
-    // Vannmerke-cachen. Rekkefolgen er viktig: bitmapen maa velges ut av
-    // DC-en for begge slettes.
+    // The watermark cache. The order matters: the bitmap must be selected
+    // out of the DC before both are deleted.
     if (g_Ctx.wmDC) {
         if (g_Ctx.wmOldBmp) SelectObject(g_Ctx.wmDC, g_Ctx.wmOldBmp);
         DeleteDC(g_Ctx.wmDC);
