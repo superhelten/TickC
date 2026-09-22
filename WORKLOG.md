@@ -3065,7 +3065,7 @@ menu sketches — verbatim records of the Norwegian history, like the git log.
 **Verified.** `doc_check.py` per file against the original: code blocks
 identical apart from comments, inline code identical as a multiset, links,
 counts of headings, numbered items and table rows, no Norwegian-looking prose,
-no æ ø å « » outside code. This log: 2 470 inline code spans, 72 headings,
+no Norwegian letters or guillemets outside code. This log: 2 470 inline code spans, 72 headings,
 111 numbered items, 382 table rows. The agents found two bugs in the checker
 (inline code wrapping onto a new line, code blocks indented under list items);
 both were fixed and every file was checked again. A final scan of the repo:
