@@ -211,7 +211,7 @@ exactly as large as the window rectangle — measured 1280×720 vs 1280×720.
 A button in the taskbar, not always on top.
 
 > **History, two rounds.** Phase 1 was borderless with a hover chrome that
-> faded in. `c77b6eb` tore it all out and moved to `WS_OVERLAPPEDWINDOW` with an
+> faded in. `9bd5da2` tore it all out and moved to `WS_OVERLAPPEDWINDOW` with an
 > OS title bar. This round goes back to borderless, but *not* to the
 > phase 1 design: the buttons are always visible, without fade, and without auto-hide
 > on focus loss. See "Removed in phase 3".
@@ -757,7 +757,7 @@ own.
 4. **Crosshair + hover box** — time and OHLC for the candle under the mouse.
 5. **Movable / resizable panel** — `WS_THICKFRAME` + `WM_NCCALCSIZE`.
 6. **Hover controls** — close cross, grip dots, frame and resize grip that fade
-   in on hover and are invisible at rest. **Removed in `c77b6eb`** — replaced by
+   in on hover and are invisible at rest. **Removed in `9bd5da2`** — replaced by
    the OS frame.
 7. **Ctrl + wheel = zoom**, anchored at the mouse pointer.
 8. **Accumulating history + panning** — wheel and drag.
@@ -777,12 +777,12 @@ way it did. This is what no longer exists, and where it went:
 
 | What | Why | Commit |
 |---|---|---|
-| Hover chrome: close cross, grip dots, resize grip, frame, fade | the OS frame has all of it | `c77b6eb` |
-| `EnsureChromeCache` and six cached GDI objects | went with the chrome; GDI 35 → 29 | `c77b6eb` |
-| Auto-hide on focus loss, `pinned`, `SHOW_GRACE_MS`, `REOPEN_GUARD_MS` | a window with a title bar that disappears when you click in another window is unusable | `c77b6eb` |
-| `inSizeMove` (bug #6) | used for the drag frame's color, which is gone | `c77b6eb` |
-| `WM_SETCURSOR` | `DefWindowProc` does the job again | `c77b6eb` |
-| `CLR_WHITE`, `CLR_HDRHOT` | the chrome was their only user | `c77b6eb` |
+| Hover chrome: close cross, grip dots, resize grip, frame, fade | the OS frame has all of it | `9bd5da2` |
+| `EnsureChromeCache` and six cached GDI objects | went with the chrome; GDI 35 → 29 | `9bd5da2` |
+| Auto-hide on focus loss, `pinned`, `SHOW_GRACE_MS`, `REOPEN_GUARD_MS` | a window with a title bar that disappears when you click in another window is unusable | `9bd5da2` |
+| `inSizeMove` (bug #6) | used for the drag frame's color, which is gone | `9bd5da2` |
+| `WM_SETCURSOR` | `DefWindowProc` does the job again | `9bd5da2` |
+| `CLR_WHITE`, `CLR_HDRHOT` | the chrome was their only user | `9bd5da2` |
 
 The measurements of the fade colors (`#0D1117 → #333D4B`) apply to code that
 no longer exists. They remain as a method: *measure pixel colors, don't judge
@@ -1482,7 +1482,7 @@ the process via the tray menu's own path when the panel is closed (`HidePanel`).
 the probe used a freshly opened panel as the reference. `TogglePopup` sets `viewCount = 0`
 when the buffer is empty, and `MergeCandles` called `ClampView`, which clamps 0 up
 to `MIN_VIEW` = 8, *before* `WorkerFetchKlines` got to its own "0 →
-`DEFAULT_VIEW`". The old build (`75da78c`) also showed "(8m)" on first
+`DEFAULT_VIEW`". The old build (`ac98f83`) also showed "(8m)" on first
 open, and the same applied after a symbol switch. The bug is from phase 1, but every
 duplicate opens precisely before it has data. Fixed in `MergeCandles`: when
 the view follows live and is not set, it becomes the default view there, before
@@ -1521,7 +1521,7 @@ green in at least one full pass, and the disputed ones were run in isolation:
 >
 > | Build | Median | Outliers (> 100 ms) |
 > |---|---|---|
-> | old (`75da78c`) | 24 ms | **6 of 40**, all ~2 s, wrong state at the timeout |
+> | old (`ac98f83`) | 24 ms | **6 of 40**, all ~2 s, wrong state at the timeout |
 > | new | 29 ms | 0 |
 > | old | 25 ms | 0 |
 > | new | 24 ms | 1 of 40, 1.76 s, right in the end |
@@ -1533,7 +1533,7 @@ green in at least one full pass, and the disputed ones were run in isolation:
 **Painting.** QPC around `DrawButtons` in both paths, around the whole
 fast path (DC, bitmap, blit and buttons, without `BeginPaint`/`EndPaint`) and
 around the header text in `DrawChart`. The same markers inserted by script in
-old (`75da78c`) and new code. Three rounds, old and new alternating, 1037×678,
+old (`ac98f83`) and new code. Three rounds, old and new alternating, 1037×678,
 each round 5 s of hover jiggling and 5 s of `RedrawWindow`, no screen capture
 along the way:
 
@@ -1615,13 +1615,13 @@ outside (`EnumChildWindows`, `GetParent`, `GetWindow`, `GetWindowLong`,
 | The button row | one color, no glyphs |
 | Screenshot | candles visible between and behind the icons, price at top left |
 | Quit via the tray path | process gone, wallpaper back, no leftovers |
-| Real Explorer restart (after `1dbc75f`) | new surface in new WorkerW after **566 ms**, stays, 14/14 green, tray icon back (`Shell_NotifyIconGetRect` = `S_OK`) |
+| Real Explorer restart (after `f6de0c1`) | new surface in new WorkerW after **566 ms**, stays, 14/14 green, tray icon back (`Shell_NotifyIconGetRect` = `S_OK`) |
 
 **Explorer restart**, run with the user's go-ahead: `Stop-Process -Force`
 on explorer.exe while `--desktop-mode` was running, and `AutoRestartShell = 1`
 started it again. A probe followed the window tree every 100 ms:
 
-| Time | 1st run (`56b67b1`, retry 1 s) | 2nd run (`2e43190`, retry 1 s) | 3rd run (`1dbc75f`, retry 250 ms) |
+| Time | 1st run (`1ac4da4`, retry 1 s) | 2nd run (`94c66d9`, retry 1 s) | 3rd run (`f6de0c1`, retry 250 ms) |
 |---|---|---|---|
 | ~20 ms | old surface **gone** (`IsWindow` false), process alive | same | same |
 | ~160 ms | new explorer.exe | same | same |
@@ -1641,8 +1641,8 @@ started it again. A probe followed the window tree every 100 ms:
 
 | Build | Process | Panel | Tray icon before → after |
 |---|---|---|---|
-| master `084f724` | alive | alive | `S_OK` → **`E_FAIL`, for good** |
-| master `bc9e409` | alive | alive | `S_OK` → `S_OK` |
+| master `24bcf0f` | alive | alive | `S_OK` → **`E_FAIL`, for good** |
+| master `67a373d` | alive | alive | `S_OK` → `S_OK` |
 
 > A build from before phase 9 **does not die** when Explorer restarts, but it
 > loses the tray icon, and with it "Quit". The user's instance (pid 30852)
@@ -1655,7 +1655,7 @@ started it again. A probe followed the window tree every 100 ms:
 > So `WM_NCDESTROY` is the path actually used, and the timer rebuilt the
 > surface before `TaskbarCreated` arrived. In the first run `TaskbarCreated`
 > tore down the fresh surface, and the desktop was without a chart for one more
-> second. Fixed in `2e43190` (own branch, `desktop-mode-explorer-restart`): the
+> second. Fixed in `94c66d9` (own branch, `desktop-mode-explorer-restart`): the
 > surface is now torn down only if the parent is not the current WorkerW. After
 > the restart UI Automation found `BTC/USDT: $76274.09` in `Shell_TrayWnd`,
 > where no other `ticker.exe` was running. After the fix a posted
@@ -1668,7 +1668,7 @@ rect, same hit test (`HTCAPTION`/`HTCLIENT`/`HTLEFT`/`HTCLIENT`), and the button
 row **0 differences out of 3600 pixels** with `PrintWindow`.
 
 **Painting.** The same QPC markers were inserted by script into master
-(`084f724`) and into the new build. Total is from before `BeginPaint` to after
+(`24bcf0f`) and into the new build. Total is from before `BeginPaint` to after
 `EndPaint` on the slow path. Drawing is from `CreateCompatibleDC` to
 `DeleteDC` and is 0.03–0.06 ms below total in every row. Desktop mode at
 1280×720 is a measurement build where `DM_W`/`DM_H` override the surface's
@@ -1719,7 +1719,7 @@ start, then five readings 2 s apart, two rounds.
 > between frames. USER 6 vs 14: the surface gets no mouse messages, and there is
 > neither cursor nor hover state to hold on to.
 
-**Scaling above 100 %** (`e070e34`, own branch `desktop-mode-dpi`), run with
+**Scaling above 100 %** (`0df6627`, own branch `desktop-mode-dpi`), run with
 the user's go-ahead. The scaling on the primary monitor was changed with
 `DisplayConfigSetDeviceInfo` (type −4, recommended 100 %) and set back to
 100 % in a `finally`. The probe is per-monitor aware and counts physical
@@ -3065,7 +3065,7 @@ show the `1h` pill, the span `12d 12h` and the axis labels `09-12 00:00` and
 Regression: `probe_migrate` 24/24, `probe_lbl` 27/27, `probe_sess` 51/51,
 `probe_ind` 54/54, `probe_desk` 49/49, `probe_prev` 51/52. The `probe_prev`
 FAIL is the one from phase 30, and a **control run against a phase 29 test
-build** (4d3dc21, `REG_PATH` rewritten to the test key) fails the same way
+build** (1f7477b, `REG_PATH` rewritten to the test key) fails the same way
 on the same row with the same 40 of 54 pixels: the data, not the code.
 **Exe unchanged at 206 336 bytes.**
 

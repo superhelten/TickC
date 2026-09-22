@@ -1,7 +1,7 @@
 # Ticker phase 2 — design
 
 Date: 2026-09-16. Builds on phase 1 as documented in `WORKLOG.md`.
-Starting point: commit `f7d3997`.
+Starting point: commit `8f6861f`.
 
 ## Purpose
 
