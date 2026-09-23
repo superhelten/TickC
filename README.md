@@ -89,6 +89,7 @@ In the chart panel:
 | `1` … `6`                       | Switch interval                                                   |
 | `V`                             | Volume bars on/off                                                |
 | `M`                             | Indicators on/off (moving averages, VWAP, levels)                 |
+| `I`                             | RSI band on/off (RSI 14 under the chart)                          |
 | `A`                             | Set an alert at the crosshair price                               |
 | `R`, double-click               | Reset zoom and pan                                                |
 | `Esc`                           | Close the symbol picker, then reset the view, then hide the panel |

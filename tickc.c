@@ -34,6 +34,7 @@
 #define ID_TRAY_VOLUME   1005   // volume bars on/off (phase 22)
 #define ID_TRAY_ALERTS_CLEAR 1006   // remove the price alerts for the symbol (phase 23)
 #define ID_TRAY_INDICATORS 1007   // moving averages on/off (phase 25)
+#define ID_TRAY_RSI      1008   // the RSI band on/off (phase 39)
 // Symbol and interval from the tray menu (phase 17). Item i gets FIRST + i.
 // The ranges are 100 wide; #error below the tables ensures they never overlap.
 #define ID_TRAY_SYMBOL_FIRST   1100
@@ -180,13 +181,15 @@ C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 #define TBAR_IV_W          28    // "15m"
 #define TBAR_VOL_W         32
 #define TBAR_IND_W         26    // "MA" (phase 25)
+#define TBAR_RSI_W         30    // "RSI" (phase 39)
 #define TBAR_GAP           2     // between the interval pills
 #define TBAR_GROUP_GAP     8     // between symbol, intervals and VOL
 #define TBAR_SYM           0
 #define TBAR_IV_FIRST      1
 #define TBAR_VOL           (TBAR_IV_FIRST + INTERVAL_COUNT)
 #define TBAR_IND           (TBAR_VOL + 1)   // same group as VOL: overlays
-#define TBAR_COUNT         (TBAR_IND + 1)
+#define TBAR_RSI           (TBAR_IND + 1)   // phase 39, same group; the first to go on a narrow panel
+#define TBAR_COUNT         (TBAR_RSI + 1)
 
 // 4x9 pixel font. One row per byte, bit 3 = left column, bit 0 = right.
 // One line of 9px high digits is almost twice as readable as two lines of
@@ -328,6 +331,13 @@ typedef struct {
     // ShowVolNow/ShowIndNow, never directly.
     BOOL   showVolDesk;
     BOOL   showIndDesk;
+    // The RSI band (phase 39), one choice per mode like the others, and OFF
+    // in both by default: it takes a fifth of the chart's height, which is a
+    // change to the panel nobody asked for yet, and the desktop stays quiet.
+    // The region follows the choice at once (it is geometry); dispRsiF fades
+    // the content.
+    BOOL   showRsi;
+    BOOL   showRsiDesk;
     // Price alerts (phase 23). Everything is UI-owned: the alerts are set
     // from the mouse and tested in WM_APP_DATA, both on the UI thread, so the
     // thread contract is untouched. Per symbol - a level in dollars is
@@ -422,6 +432,9 @@ static BOOL ShowVolNow(const AppContext* ctx) {
 }
 static BOOL ShowIndNow(const AppContext* ctx) {
     return g_desktopMode ? ctx->showIndDesk : ctx->showInd;
+}
+static BOOL ShowRsiNow(const AppContext* ctx) {
+    return g_desktopMode ? ctx->showRsiDesk : ctx->showRsi;
 }
 static UINT g_msgTaskbarCreated = 0;   // Explorer restarted
 static char s_httpBuf[98304];    // 360 candles give a ~60 KB response
@@ -604,6 +617,8 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->showInd    = TRUE;
     ctx->showVolDesk = FALSE;   // phase 26: the desktop starts clean
     ctx->showIndDesk = FALSE;
+    ctx->showRsi     = FALSE;   // phase 39: off in both modes
+    ctx->showRsiDesk = FALSE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
 
@@ -623,11 +638,15 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // phase 25, on by default
     DWORD svd = RegReadDword(k, L"ShowVolumeDesktop", 0);       // phase 26, OFF by default
     DWORD sid = RegReadDword(k, L"ShowIndicatorsDesktop", 0);
+    DWORD sr  = RegReadDword(k, L"ShowRsi", 0);          // phase 39, off by default
+    DWORD srd = RegReadDword(k, L"ShowRsiDesktop", 0);
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
     ctx->showInd = (si != 0);
     ctx->showVolDesk = (svd != 0);
     ctx->showIndDesk = (sid != 0);
+    ctx->showRsi     = (sr != 0);
+    ctx->showRsiDesk = (srd != 0);
 
     // Bounds check. A registry edited by hand, or left behind by a newer
     // version with more symbols, must not be able to index outside the
@@ -835,6 +854,9 @@ static void SaveConfig(const AppContext* ctx) {
     DWORD svd = ctx->showVolDesk ? 1 : 0, sid = ctx->showIndDesk ? 1 : 0;
     RegSetValueExW(k, L"ShowVolumeDesktop",     0, REG_DWORD, (const BYTE*)&svd, sizeof(svd));
     RegSetValueExW(k, L"ShowIndicatorsDesktop", 0, REG_DWORD, (const BYTE*)&sid, sizeof(sid));
+    DWORD sr = ctx->showRsi ? 1 : 0, srd = ctx->showRsiDesk ? 1 : 0;
+    RegSetValueExW(k, L"ShowRsi",        0, REG_DWORD, (const BYTE*)&sr, sizeof(sr));
+    RegSetValueExW(k, L"ShowRsiDesktop", 0, REG_DWORD, (const BYTE*)&srd, sizeof(srd));
     RegCloseKey(k);
 }
 
@@ -1820,7 +1842,7 @@ static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
     BOOL cut = FALSE;
     for (int i = 0; i < TBAR_COUNT; ++i) {
         int w = Dp((i == TBAR_SYM) ? TBAR_SYM_W : (i == TBAR_VOL) ? TBAR_VOL_W
-                 : (i == TBAR_IND) ? TBAR_IND_W : TBAR_IV_W);
+                 : (i == TBAR_IND) ? TBAR_IND_W : (i == TBAR_RSI) ? TBAR_RSI_W : TBAR_IV_W);
         if (i == TBAR_IV_FIRST || i == TBAR_VOL) x += Dp(TBAR_GROUP_GAP);
         else if (i > 0)                          x += Dp(TBAR_GAP);
         if (!cut && x + w > limit) cut = TRUE;
@@ -2104,7 +2126,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     SetTextColor(ctx->wmDC, Blend(CLR_BG, CLR_WM_INK,
                                   (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
 
-    ChartRect g = ChartGeometry(W, H, g_desktopMode, g_Ctx.sty.dpi);
+    ChartRect g = ChartGeometry(W, H, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
 
     // The font height follows the height of the chart surface, not a fixed
     // value: a small panel must not get the watermark clipped, and a large
@@ -2320,6 +2342,7 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         if (i == TBAR_SYM)      { on = ctx->overlayOpen; lbl = SYMBOLS[ctx->symIdx].label; }
         else if (i == TBAR_VOL) { on = ShowVolNow(ctx);  lbl = L"VOL"; }
         else if (i == TBAR_IND) { on = ShowIndNow(ctx);  lbl = L"MA"; }
+        else if (i == TBAR_RSI) { on = ShowRsiNow(ctx);  lbl = L"RSI"; }
         else { on = (i - TBAR_IV_FIRST == ctx->ivIdx);   lbl = INTERVALS[i - TBAR_IV_FIRST].label; }
 
         if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
@@ -2530,6 +2553,7 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
     in.alertFresh = ctx->alertFresh;
     in.alertFlashLevel = ctx->alertFlashLevel; in.alertFlashF = ctx->alertFlashF;
     in.utcOffsetMs = ChartUtcOffsetMs();
+    in.band = ShowRsiNow(ctx);   // phase 39
 
     ChartStyle sty = ctx->sty;
     sty.fontPill = ctx->hFontPill;
@@ -2732,6 +2756,27 @@ static void SetShowIndicators(AppContext* ctx, BOOL on) {
     }
 }
 
+// The RSI band (phase 39): same shape as the two above, from the pill, the I
+// key and the tray menu. The band is geometry, so the price pane changes
+// height at once - the watermark, centered in that pane, is rebuilt, and the
+// hover is dropped (the candle under the pointer is recomputed on the next
+// move). The line fades in and out with dispRsiF.
+static void SetShowRsi(AppContext* ctx, BOOL on) {
+    if (ShowRsiNow(ctx) == on) return;
+    if (g_desktopMode) ctx->showRsiDesk = on;
+    else               ctx->showRsi     = on;
+    SaveConfig(ctx);
+    ctx->wmValid = FALSE;
+    ctx->ch.hoverIdx = -1;
+    ctx->axisHotY = -1;
+    if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
+        StartAnim(ctx->hPopup);
+        InvalidateRect(ctx->hPopup, NULL, FALSE);
+    } else {
+        ctx->ch.dispRsiF = on ? 1.0 : 0.0;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Price alerts (phase 23). Everything here runs on the UI thread and touches
 // only UI-owned fields; the lock is taken only to read the reference price.
@@ -2877,6 +2922,8 @@ static void OnToolbarClick(HWND hwnd, int th) {
         SetShowVolume(&g_Ctx, !ShowVolNow(&g_Ctx));
     } else if (th == TBAR_IND) {
         SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
+    } else if (th == TBAR_RSI) {
+        SetShowRsi(&g_Ctx, !ShowRsiNow(&g_Ctx));
     } else if (th >= TBAR_IV_FIRST && th < TBAR_VOL) {
         ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (th - TBAR_IV_FIRST));
     }
@@ -3261,7 +3308,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
+            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
 
             // Button hover. Must come after the TrackMouseEvent arming above
             // (pitfall 13) and before the overlay and panning branches, which
@@ -3419,7 +3466,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
+            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
             if (g.cw <= 0) return 0;
 
             BOOL ctrl   = (GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0;
@@ -3553,7 +3600,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 104: {
                     RECT rcH;
                     GetClientRect(hwnd, &rcH);
-                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom, g_desktopMode, g_Ctx.sty.dpi);
+                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gH, LOWORD(lParam), HIWORD(lParam));
                     g_Ctx.ch.hoverY   = HIWORD(lParam);
                     InvalidateRect(hwnd, NULL, FALSE);
@@ -3638,6 +3685,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 59: r = (LRESULT)g_Ctx.ch.probeLblUs; break;
                 // 60 (phase 37): the dpi the panel is drawn for.
                 case 60: r = g_Ctx.sty.dpi; break;
+                // 61-63 (phase 39): the RSI band's choice for this mode, its
+                // display x1000, and the RSI at the candle in lParam x100
+                // (-1 = not defined there).
+                case 61: r = ShowRsiNow(&g_Ctx); break;
+                case 62: r = (LRESULT)(g_Ctx.ch.dispRsiF * 1000.0); break;
+                case 63: {
+                    double v;
+                    r = RsiValueAt(g_Ctx.candles, g_Ctx.candleCount, (int)lParam, &v)
+                            ? (LRESULT)floor(v * 100.0 + 0.5) : -1;
+                    break;
+                }
                 case 47: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[(int)lParam].openTime / 1000) : -1; break;
                 case 48: {
@@ -3706,6 +3764,16 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         if (g_Ctx.ch.dispIndF != ifT) settled = FALSE;
                     }
                 }
+                // The RSI band's content (phase 39), the same fade.
+                {
+                    double rfT = ShowRsiNow(&g_Ctx) ? 1.0 : 0.0;
+                    if (g_Ctx.ch.dispRsiF != rfT) {
+                        g_Ctx.ch.dispRsiF = AnimStep(g_Ctx.ch.dispRsiF, rfT, dt,
+                                                  IND_TAU_FADE, 0.02);
+                        redraw = TRUE;
+                        if (g_Ctx.ch.dispRsiF != rfT) settled = FALSE;
+                    }
+                }
 
                 // View and Y-axis easing. The target is read under the lock;
                 // the interpolation itself happens outside, on UI-owned fields.
@@ -3715,7 +3783,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 {
                     RECT rcE;
                     GetClientRect(hwnd, &rcE);
-                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom, g_desktopMode, g_Ctx.sty.dpi);
+                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
 
                     int tvs = 0, tvc = 0, tn = 0;
                     double tMin = 0.0, tMax = 1.0, tVol = 0.0;
@@ -3821,7 +3889,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (!g_Ctx.overlayOpen) {
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
-                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom, g_desktopMode, g_Ctx.sty.dpi);
+                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
                 // [g.left, edge]: the chart and the headroom. Up to and
                 // including phase 22 the area went all the way to W, with the
@@ -3885,7 +3953,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
             }
 
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
+            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
             // The price column (phase 23): set or remove an alert. Same
             // area as the hover block in WM_MOUSEMOVE, and same data requirement.
             if (g_Ctx.ch.dispValid && dx > gg.edge && dy >= gg.top && dy <= gg.bottom) {
@@ -3917,7 +3985,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_RBUTTONUP: {
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
+            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             if (!g_Ctx.overlayOpen &&
                 mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
@@ -4019,6 +4087,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     OnToolbarClick(hwnd, TBAR_IND);
                     return 0;
                 }
+                // I (phase 39): the RSI band. Works when the pill is hidden.
+                if (!ctrl && wParam == 'I') {
+                    OnToolbarClick(hwnd, TBAR_RSI);
+                    return 0;
+                }
                 if (!ctrl && wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
                     OnToolbarClick(hwnd, TBAR_IV_FIRST + (int)(wParam - '1'));
                     return 0;
@@ -4033,7 +4106,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     if (g_Ctx.ch.hoverIdx >= 0 && g_Ctx.ch.dispValid) {
                         RECT rcA;
                         GetClientRect(hwnd, &rcA);
-                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom, g_desktopMode, g_Ctx.sty.dpi);
+                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
                         int hy = g_Ctx.ch.hoverY;
                         if (hy < ga.top)    hy = ga.top;
                         if (hy > ga.bottom) hy = ga.bottom;
@@ -4511,6 +4584,7 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     // nothing is visible.
     ctx->ch.dispVolF = ShowVolNow(ctx) ? 1.0 : 0.0;
     ctx->ch.dispIndF = ShowIndNow(ctx) ? 1.0 : 0.0;
+    ctx->ch.dispRsiF = ShowRsiNow(ctx) ? 1.0 : 0.0;
 
     TogglePopup(ctx, hInst);
 }
@@ -4575,6 +4649,9 @@ static HMENU BuildTrayMenu(void) {
         // carries VWAP and today's high/low, so it is named for what it is.
         AppendMenuW(hMenu, MF_STRING | (ShowIndNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_INDICATORS, L"Indicators	M");
+        // The RSI band (phase 39): for the mode we are in, like the two above.
+        AppendMenuW(hMenu, MF_STRING | (ShowRsiNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
+                    ID_TRAY_RSI, L"RSI band	I");
         // The price alerts (phase 23) are set in the panel's price column,
         // but must be clearable from here: desktop mode draws the lines and
         // has no input. The count applies to the symbol shown. Grayed, not
@@ -4643,6 +4720,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (LOWORD(wParam) == ID_TRAY_INDICATORS) {
                 SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
+                return 0;
+            }
+            if (LOWORD(wParam) == ID_TRAY_RSI) {
+                SetShowRsi(&g_Ctx, !ShowRsiNow(&g_Ctx));
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_ALERTS_CLEAR) {
@@ -5036,6 +5117,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // LoadConfig: which choice applies depends on the mode (phase 26).
     g_Ctx.ch.dispVolF = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
     g_Ctx.ch.dispIndF = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
+    g_Ctx.ch.dispRsiF = ShowRsiNow(&g_Ctx) ? 1.0 : 0.0;
     // The price alerts (phase 23). After the --dup parsing: LoadAlerts skips
     // duplicates, and g_isDuplicate is known only here. Before the thread:
     // the first price must be checked against the alerts from the last run.
