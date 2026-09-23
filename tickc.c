@@ -404,6 +404,17 @@ static BOOL g_isDuplicate = FALSE;
 // painting as the panel, but no frame, no buttons, no input and no geometry
 // in the registry.
 static BOOL g_desktopMode = FALSE;
+
+// The panel's lengths at its dpi (phase 37). Every fixed length in the
+// header, the buttons, the toolbar and the overlay is given at 96 dpi and
+// goes through Dp, the same MulDiv as the chart engine's ChartPx: the
+// identity at 96. g_Ctx.sty.dpi is the dpi the panel is drawn for - its
+// monitor's, or 96 on the desktop surface (see PanelDpi).
+static int Dp(int v) {
+    return ChartPx((g_Ctx.sty.dpi > 0) ? g_Ctx.sty.dpi : CHART_DPI_BASE, v);
+}
+static int  PanelDpi(HWND hwnd);
+static void ApplyPanelDpi(AppContext* ctx, int dpi);
 // The overlay choices for the mode we are in (phase 26). Everything that
 // paints, eases, checks items in the menu or answers a probe reads these.
 static BOOL ShowVolNow(const AppContext* ctx) {
@@ -426,6 +437,10 @@ static LONGLONG g_probePaintUs = 0;
 // Set with WM_APP_PROBE 101 to the main window. One run fires one alert
 // unmuted and reads the result from Shell_NotifyIconW (field 29).
 static BOOL g_probeMute = FALSE;
+// TICKER_FORCE_DPI (phase 37): the panel is drawn at this dpi whatever its
+// monitor has, so golden.ps1 can prove on a 150 % machine that the layout at
+// 96 is unchanged. 0 = the monitor's.
+static int g_forceDpi = 0;
 // Test build only (phase 34): recorded responses instead of the network.
 // TICKER_FIXTURE_DIR names a folder; HttpGet then answers every request from
 // a file there and never touches WinHTTP, so a capture shows the same candles
@@ -488,9 +503,11 @@ static double AnimStep(double cur, double target, double dt, double tau, double 
 // W is the client width in device pixels. At 400 px (the minimum width) the
 // formula gives 0.037 and the floor takes over; at 1280 it is 0.065; above
 // 3000 px the ceiling takes over.
+// W is in device pixels; the alpha is defined on the logical width (phase
+// 37), so a panel keeps its watermark strength when it moves to 150 %.
 static double WatermarkAlpha(int W) {
     if (W <= 0) return WM_ALPHA_MIN;
-    double a = WM_ALPHA_BASE * sqrt((double)W / WM_W_NOMINAL);
+    double a = WM_ALPHA_BASE * sqrt((double)MulDiv(W, 96, Dp(96)) / WM_W_NOMINAL);
     if (a < WM_ALPHA_MIN) a = WM_ALPHA_MIN;
     if (a > WM_ALPHA_MAX) a = WM_ALPHA_MAX;
     return a;
@@ -601,6 +618,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD hasPos = RegReadDword(k, L"PanelHasPos", 0);
     DWORD px = RegReadDword(k, L"PanelX", 0);
     DWORD py = RegReadDword(k, L"PanelY", 0);
+    DWORD dev = RegReadDword(k, L"PanelGeomDevice", 0);   // phase 37
     DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // phase 22, on by default
     DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // phase 25, on by default
     DWORD svd = RegReadDword(k, L"ShowVolumeDesktop", 0);       // phase 26, OFF by default
@@ -626,6 +644,21 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     // the primary one, so it is read as signed. PanelHasPos distinguishes
     // "not saved" from "saved as 0,0".
     if (hasPos) { *outX = (int)(LONG)px; *outY = (int)(LONG)py; }
+
+    // Until phase 37 the process was DPI-unaware, and the geometry was saved
+    // in Windows' virtualized coordinates: device pixels divided by the
+    // system scale. Without PanelGeomDevice they are scaled up once, so the
+    // panel opens where and as large as it was; SaveGeometry writes device
+    // pixels and the flag from then on. Exact on one monitor; with monitors
+    // of mixed scale the virtualized space was the system dpi's too.
+    if (!dev) {
+        int sd = (int)GetDpiForSystem();
+        if (sd > 0 && sd != 96) {
+            if (*outW > 0) *outW = MulDiv(*outW, sd, 96);
+            if (*outH > 0) *outH = MulDiv(*outH, sd, 96);
+            if (hasPos) { *outX = MulDiv(*outX, sd, 96); *outY = MulDiv(*outY, sd, 96); }
+        }
+    }
 }
 
 // Last chosen mode from the tray menu. Its own value and its own functions,
@@ -891,6 +924,7 @@ static void SaveGeometry(int x, int y, int w, int h) {
     RegSetValueExW(k, L"PanelX",      0, REG_DWORD, (const BYTE*)&dx, sizeof(dx));
     RegSetValueExW(k, L"PanelY",      0, REG_DWORD, (const BYTE*)&dy, sizeof(dy));
     RegSetValueExW(k, L"PanelHasPos", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
+    RegSetValueExW(k, L"PanelGeomDevice", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));   // phase 37
     RegCloseKey(k);
 }
 
@@ -935,17 +969,10 @@ static void ResetToDefaultView(HWND hwnd) {
     if (!GetMonitorInfoW(hMon, &mi)) return;
     RECT wa = mi.rcWork;
 
-    // "DPI-scaled 1280x720". The process is DPI-unaware today, so
-    // GetDpiForWindow gives 96 and MulDiv is the identity. If we turned on
-    // DPI awareness, this would be correct without further changes - unlike
-    // a hardcoded 1280, which would give a small window on a 200 % display.
-    // We do NOT turn it on here: the whole layout is in raw pixels, and the
-    // watermark's clamp limits would count the scaling twice (see the DPI
-    // comment in EnsureWatermark).
-    UINT dpi = GetDpiForWindow(hwnd);
-    if (dpi == 0) dpi = 96;
-    int w = MulDiv(POPUP_W, (int)dpi, 96);
-    int h = MulDiv(POPUP_H, (int)dpi, 96);
+    // "DPI-scaled 1280x720": the process is per-monitor aware (phase 37), so
+    // this is 1920x1080 device pixels on a 150 % monitor.
+    int w = Dp(POPUP_W);
+    int h = Dp(POPUP_H);
 
     // If the factory size does not fit, clamp it. A 1280x720 centered on
     // a 1366x768 display would otherwise put the button row outside the
@@ -1720,13 +1747,13 @@ static BOOL PtInRect2(const RECT* r, int x, int y) {
 typedef enum { BTN_NEW = 0, BTN_MIN, BTN_MAX, BTN_CLOSE, BTN_COUNT } BtnId;
 
 static void ButtonLayout(int W, RECT out[BTN_COUNT]) {
-    int right = W - BTN_MARGIN_R;
+    int right = W - Dp(BTN_MARGIN_R);
     for (int i = BTN_COUNT - 1; i >= 0; --i) {
         out[i].right  = right;
-        out[i].left   = right - BTN_W;
-        out[i].top    = BTN_TOP;
-        out[i].bottom = BTN_TOP + BTN_H;
-        right = out[i].left - BTN_GAP;
+        out[i].left   = right - Dp(BTN_W);
+        out[i].top    = Dp(BTN_TOP);
+        out[i].bottom = Dp(BTN_TOP) + Dp(BTN_H);
+        right = out[i].left - Dp(BTN_GAP);
     }
 }
 
@@ -1754,14 +1781,14 @@ static void ButtonStrip(int W, RECT* out) {
 // that ends at rightBound and a right-aligned one that starts at leftBound may
 // share a row only with at least HDR_GAP px of space between them.
 static BOOL HeaderFits(int rightBound, int leftBound) {
-    return rightBound < leftBound - HDR_GAP;
+    return rightBound < leftBound - Dp(HDR_GAP);
 }
 
 // Right limit for the header's row 2: the price axis's top label sits at
 // y = top +- 8 from x = edge + AXIS_LBL_GAP, and the row must keep HDR_GAP
 // of space to it. The toolbar and the offline text both read this.
 static int HeaderRow2Limit(int W) {
-    return W - PAD_R + AXIS_LBL_GAP - HDR_GAP;
+    return W - ChartAxisW(g_Ctx.sty.dpi) + Dp(AXIS_LBL_GAP) - Dp(HDR_GAP);
 }
 
 // The toolbar up to and including VOL must fit at the minimum width. If a
@@ -1789,13 +1816,13 @@ C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + INTERVAL_COUNT * TBAR_IV_W +
 // from 400.
 static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
     int limit = HeaderRow2Limit(W);
-    int x = PAD_L, n = 0;
+    int x = Dp(PAD_L), n = 0;
     BOOL cut = FALSE;
     for (int i = 0; i < TBAR_COUNT; ++i) {
-        int w = (i == TBAR_SYM) ? TBAR_SYM_W : (i == TBAR_VOL) ? TBAR_VOL_W
-              : (i == TBAR_IND) ? TBAR_IND_W : TBAR_IV_W;
-        if (i == TBAR_IV_FIRST || i == TBAR_VOL) x += TBAR_GROUP_GAP;
-        else if (i > 0)                          x += TBAR_GAP;
+        int w = Dp((i == TBAR_SYM) ? TBAR_SYM_W : (i == TBAR_VOL) ? TBAR_VOL_W
+                 : (i == TBAR_IND) ? TBAR_IND_W : TBAR_IV_W);
+        if (i == TBAR_IV_FIRST || i == TBAR_VOL) x += Dp(TBAR_GROUP_GAP);
+        else if (i > 0)                          x += Dp(TBAR_GAP);
         if (!cut && x + w > limit) cut = TRUE;
         if (cut) {
             out[i].left = out[i].top = out[i].right = out[i].bottom = 0;
@@ -1803,8 +1830,8 @@ static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
         }
         out[i].left   = x;
         out[i].right  = x + w;
-        out[i].top    = TBAR_TOP;
-        out[i].bottom = TBAR_TOP + TBAR_H;
+        out[i].top    = Dp(TBAR_TOP);
+        out[i].bottom = Dp(TBAR_TOP) + Dp(TBAR_H);
         x += w;
         n = i + 1;
     }
@@ -1817,6 +1844,18 @@ static int ToolbarHit(const RECT* tb, int x, int y) {
         if (PtInRect2(&tb[i], x, y)) return i;
     }
     return -1;
+}
+
+// The narrowest panel whose toolbar still holds every pill up to and
+// including VOL at the current dpi (phase 37). At 96 it is 398, inside
+// POPUP_MIN_W as the C_ASSERT above demands; at 150 % the lengths round
+// separately, the column alone grows 4 px more than 1.5 x 84, and 1.5 x 400
+// would have hidden VOL on a panel of minimum size. Same sums as
+// ToolbarLayout and HeaderRow2Limit.
+static int ToolbarMinW(void) {
+    int need = Dp(PAD_L) + Dp(TBAR_SYM_W) + Dp(TBAR_GROUP_GAP) + INTERVAL_COUNT * Dp(TBAR_IV_W) +
+               (INTERVAL_COUNT - 1) * Dp(TBAR_GAP) + Dp(TBAR_GROUP_GAP) + Dp(TBAR_VOL_W);
+    return need + ChartAxisW(g_Ctx.sty.dpi) - Dp(AXIS_LBL_GAP) + Dp(HDR_GAP);
 }
 
 // The toolbar's combined rectangle, derived from ToolbarLayout (see
@@ -1887,8 +1926,9 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
     memset(r, 0, sizeof(*r));
 
     int rowsMax = (SYMBOL_COUNT > INTERVAL_COUNT) ? SYMBOL_COUNT : INTERVAL_COUNT;
-    int boxW = OVL_PAD * 3 + OVL_COL_W * 2;
-    int boxH = OVL_PAD * 2 + OVL_HDR_H + rowsMax * OVL_ROW_H;
+    const int pad = Dp(OVL_PAD), colW0 = Dp(OVL_COL_W), hdrH = Dp(OVL_HDR_H), rowH = Dp(OVL_ROW_H);
+    int boxW = pad * 3 + colW0 * 2;
+    int boxH = pad * 2 + hdrH + rowsMax * rowH;
 
     // Centered, but never outside the panel - the panel can be smaller than
     // the box at the minimum size.
@@ -1901,28 +1941,28 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
     r->box.left = bx; r->box.top = by;
     r->box.right = bx + boxW; r->box.bottom = by + boxH;
 
-    int colW = (boxW - OVL_PAD * 3) / 2;
+    int colW = (boxW - pad * 3) / 2;
     if (colW < 1) colW = 1;
-    int c1 = bx + OVL_PAD, c2 = c1 + colW + OVL_PAD;
-    int y0 = by + OVL_PAD;
+    int c1 = bx + pad, c2 = c1 + colW + pad;
+    int y0 = by + pad;
 
     r->symHdr.left = c1; r->symHdr.right = c1 + colW;
-    r->symHdr.top  = y0; r->symHdr.bottom = y0 + OVL_HDR_H;
+    r->symHdr.top  = y0; r->symHdr.bottom = y0 + hdrH;
     r->ivHdr.left  = c2; r->ivHdr.right  = c2 + colW;
-    r->ivHdr.top   = y0; r->ivHdr.bottom = y0 + OVL_HDR_H;
+    r->ivHdr.top   = y0; r->ivHdr.bottom = y0 + hdrH;
 
-    int ry = y0 + OVL_HDR_H;
+    int ry = y0 + hdrH;
     r->count = 0;
     for (int i = 0; i < SYMBOL_COUNT && r->count < OVL_ROWS_MAX; ++i) {
         RECT* q = &r->rows[r->count++];
         q->left = c1; q->right = c1 + colW;
-        q->top = ry + i * OVL_ROW_H; q->bottom = q->top + OVL_ROW_H;
+        q->top = ry + i * rowH; q->bottom = q->top + rowH;
         if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
     }
     for (int i = 0; i < INTERVAL_COUNT && r->count < OVL_ROWS_MAX; ++i) {
         RECT* q = &r->rows[r->count++];
         q->left = c2; q->right = c2 + colW;
-        q->top = ry + i * OVL_ROW_H; q->bottom = q->top + OVL_ROW_H;
+        q->top = ry + i * rowH; q->bottom = q->top + rowH;
         if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
     }
 }
@@ -1957,7 +1997,7 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, Blend(CLR_BG, CLR_DIM, a));
     RECT h1 = r.symHdr, h2 = r.ivHdr;
-    h1.left += 6; h2.left += 6;
+    h1.left += Dp(6); h2.left += Dp(6);
     DrawTextW(hdc, L"SYMBOL",    -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     DrawTextW(hdc, L"INTERVAL",  -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
@@ -1974,7 +2014,7 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
         }
         COLORREF fg = active ? CLR_UP : CLR_TEXT;
         SetTextColor(hdc, Blend(CLR_BG, fg, a));
-        RECT t = r.rows[i]; t.left += 6;
+        RECT t = r.rows[i]; t.left += Dp(6);
         DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
@@ -2074,13 +2114,12 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     // device pixels, so the proportional part scales itself when the window
     // gets larger on a high-DPI screen. The limits, however, are given in
     // logical pixels, and a floor of 32 would be 16 logical pixels at 200 %.
-    // If we multiply H/5 by DPI as well, we count the scaling twice. The
-    // process is DPI-unaware today, so GetDeviceCaps gives 96 and MulDiv is
-    // an identity - this comes alive the moment a manifest is added.
-    int dpi = GetDeviceCaps(ref, LOGPIXELSY);
-    if (dpi <= 0) dpi = 96;
-    int fMin = MulDiv(WM_FONT_MIN, dpi, 96);
-    int fMax = MulDiv(WM_FONT_MAX, dpi, 96);
+    // If we multiply H/5 by DPI as well, we count the scaling twice. The dpi
+    // is the panel's (phase 37), not GetDeviceCaps: in a per-monitor-aware
+    // process that is the system dpi, and the desktop surface - drawn at 96
+    // - would have got 150 % limits and a larger watermark.
+    int fMin = Dp(WM_FONT_MIN);
+    int fMax = Dp(WM_FONT_MAX);
     int fh = g.ch / WM_FONT_DIV;
     if (fh < fMin) fh = fMin;
     if (fh > fMax) fh = fMax;
@@ -2104,11 +2143,11 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     // scaled down in the same ratio if it does not fit.
     HFONT prevFit = (HFONT)SelectObject(ctx->wmDC, ctx->hFontWm);
     SIZE sz = { 0, 0 };
-    int availW = g.cw - 8;
+    int availW = g.cw - Dp(8);
     if (GetTextExtentPoint32W(ctx->wmDC, wmText, wmLen, &sz) &&
         sz.cx > availW && sz.cx > 0 && availW > 0) {
         int fitted = MulDiv(fh, availW, sz.cx);
-        if (fitted < 8) fitted = 8;
+        if (fitted < Dp(8)) fitted = Dp(8);
         if (fitted < fh) {
             SelectObject(ctx->wmDC, prevFit);
             DeleteObject(ctx->hFontWm);
@@ -2131,7 +2170,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     SelectObject(ctx->wmDC, ctx->sty.fontSmall);
     // The distance down to the interval follows the font height, otherwise the
     // text would sit inside the main line on large panels.
-    RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + 4, g.right, g.bottom };
+    RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + Dp(4), g.right, g.bottom };
     DrawTextW(ctx->wmDC, INTERVALS[ctx->ivIdx].label, -1, &rcIv,
               DT_CENTER | DT_SINGLELINE | DT_TOP);
     SelectObject(ctx->wmDC, prev);
@@ -2191,7 +2230,7 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
 
         int cx = (r->left + r->right) / 2;
         int cy = (r->top + r->bottom) / 2;
-        int g  = 4;   // half glyph width: 9x9 pixels in total
+        int g  = Dp(4);   // half glyph width: 9x9 pixels in total at 96 dpi
 
         switch (i) {
             case BTN_NEW:
@@ -2199,14 +2238,14 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                 // LineTo does not draw the end point, hence +4 - that is what
                 // makes the cross symmetric. 7 and not 9 like the others: a
                 // 9x9 plus weighs optically heavier than the X next to it.
-                MoveToEx(hdc, cx - 3, cy, NULL);
-                LineTo(hdc, cx + 4, cy);
-                MoveToEx(hdc, cx, cy - 3, NULL);
-                LineTo(hdc, cx, cy + 4);
+                MoveToEx(hdc, cx - Dp(3), cy, NULL);
+                LineTo(hdc, cx + Dp(3) + 1, cy);
+                MoveToEx(hdc, cx, cy - Dp(3), NULL);
+                LineTo(hdc, cx, cy + Dp(3) + 1);
                 break;
             case BTN_MIN:
-                MoveToEx(hdc, cx - g, cy + 3, NULL);
-                LineTo(hdc, cx + g + 1, cy + 3);
+                MoveToEx(hdc, cx - g, cy + Dp(3), NULL);
+                LineTo(hdc, cx + g + 1, cy + Dp(3));
                 break;
             case BTN_MAX:
                 if (zoomed) {
@@ -2224,16 +2263,17 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                     // top, the right edge, and the stub of the bottom.
                     // Polyline does not draw the last point, so it stops just
                     // before the front one's right edge.
+                    int d2 = Dp(2);
                     POINT bak[5] = {
-                        { cx - 2, cy - 2 },
-                        { cx - 2, cy - 4 },
-                        { cx + 4, cy - 4 },
-                        { cx + 4, cy + 2 },
-                        { cx + 2, cy + 2 },
+                        { cx - d2, cy - d2 },
+                        { cx - d2, cy - g },
+                        { cx + g,  cy - g },
+                        { cx + g,  cy + d2 },
+                        { cx + d2, cy + d2 },
                     };
                     Polyline(hdc, bak, 5);
                     // NULL_BRUSH is selected above, so Rectangle gives only an outline.
-                    Rectangle(hdc, cx - 4, cy - 2, cx + 3, cy + 5);
+                    Rectangle(hdc, cx - g, cy - d2, cx + d2 + 1, cy + g + 1);
                 } else {
                     // NULL_BRUSH is selected above, so Rectangle gives only an outline.
                     Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
@@ -2293,10 +2333,11 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
             // filled triangle, 7 px wide and 4 tall - vector, like the
             // button glyphs.
             RECT t = *r;
-            t.left += 6; t.right -= 14;
+            t.left += Dp(6); t.right -= Dp(14);
             DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            int ax = r->right - 9, ay = (r->top + r->bottom) / 2 - 1;
-            POINT tri[3] = { { ax - 3, ay }, { ax + 3, ay }, { ax, ay + 3 } };
+            int ax = r->right - Dp(9), ay = (r->top + r->bottom) / 2 - Dp(1);
+            int t3 = Dp(3);
+            POINT tri[3] = { { ax - t3, ay }, { ax + t3, ay }, { ax, ay + t3 } };
             HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(DC_PEN));
             HGDIOBJ oldBr  = SelectObject(hdc, GetStockObject(DC_BRUSH));
             SetDCPenColor(hdc, CLR_DIM);
@@ -2358,15 +2399,15 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
         int lenPrice = (int)wcslen(buf);
         SIZE szPrice = { 0, 0 };
         GetTextExtentPoint32W(hdc, buf, lenPrice, &szPrice);
-        int priceRight = PAD_L + szPrice.cx;   // X_right_bound
-        RECT rcPrice = { PAD_L, 10, btnLeft - HDR_GAP, 30 };
+        int priceRight = Dp(PAD_L) + szPrice.cx;   // X_right_bound
+        RECT rcPrice = { Dp(PAD_L), Dp(10), btnLeft - Dp(HDR_GAP), Dp(30) };
         DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
         // Row 1, right: the percentage in three steps. Full with span, then
         // without span, then hidden. Never clipped in the middle of a number -
         // "+0.5" where it says "+0.50%" is a wrong value, not a shorter one.
         SelectObject(hdc, ctx->sty.fontSmall);
-        int pctRight = btnLeft - HDR_GAP;
+        int pctRight = btnLeft - Dp(HDR_GAP);
         wchar_t pctFull[48], pctShort[24];
         swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
         swprintf_s(pctShort, 24, L"%+.2f%%", chg);
@@ -2390,7 +2431,7 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
         }
         if (pct) {
             SetTextColor(hdc, chgClr);
-            RECT rcPct = { priceRight + HDR_GAP, 10, pctRight, 30 };
+            RECT rcPct = { priceRight + Dp(HDR_GAP), Dp(10), pctRight, Dp(30) };
             DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
         }
 
@@ -2405,7 +2446,7 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
         if (stale) {
             RECT tb[TBAR_COUNT];
             int tbN = ToolbarLayout(W, tb);
-            int subLeft  = (tbN > 0) ? tb[tbN - 1].right + HDR_GAP : PAD_L;
+            int subLeft  = (tbN > 0) ? tb[tbN - 1].right + Dp(HDR_GAP) : Dp(PAD_L);
             int subLimit = HeaderRow2Limit(W);
             swprintf_s(buf, 64, L"offline %ds", staleSecs);
             int lenSub = (int)wcslen(buf);
@@ -2413,7 +2454,7 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
             GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
             if (subLeft + szSub.cx <= subLimit) {
                 SetTextColor(hdc, CLR_DIM);
-                RECT rcSub = { subLeft, TBAR_TOP, subLimit, TBAR_TOP + TBAR_H };
+                RECT rcSub = { subLeft, Dp(TBAR_TOP), subLimit, Dp(TBAR_TOP) + Dp(TBAR_H) };
                 DrawTextW(hdc, buf, lenSub, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             }
         }
@@ -2912,7 +2953,7 @@ static void SpawnInstance(HWND hwnd) {
         return;
     }
     int w = r.right - r.left, h = r.bottom - r.top;
-    int x = r.left + SPAWN_OFFSET, y = r.top + SPAWN_OFFSET;
+    int x = r.left + Dp(SPAWN_OFFSET), y = r.top + Dp(SPAWN_OFFSET);
 
     // The cascade goes back to the corner when the next step would push the
     // button row out of the work area - otherwise [ + ] after a few clicks
@@ -3053,6 +3094,29 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // The RESIZE_BORDER zones give the OS's own resizing; free header
         // area gives HTCAPTION, which is what DefWindowProc needs to send
         // WM_NCLBUTTONDOWN and run native moving with Aero Snap.
+        // The panel moved to a monitor with another scale, or the scale was
+        // changed (phase 37). Windows suggests a rectangle that keeps the
+        // panel's logical size; the fonts and every length follow the new dpi.
+        case WM_DPICHANGED: {
+            if (g_desktopMode) return 0;
+            const RECT* nr = (const RECT*)lParam;
+            g_Ctx.ch.hoverIdx = -1;
+            g_Ctx.alertHot = -1;
+            g_Ctx.axisHotY = -1;
+            // The new dpi is in the message (a probe can send one without a
+            // second monitor); the test build's forced dpi still wins.
+            int nd = HIWORD(wParam);
+#ifdef TICKER_PROBE
+            if (g_forceDpi > 0) nd = g_forceDpi;
+#endif
+            ApplyPanelDpi(&g_Ctx, (nd > 0) ? nd : PanelDpi(hwnd));
+            SetWindowPos(hwnd, NULL, nr->left, nr->top,
+                         nr->right - nr->left, nr->bottom - nr->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+
         case WM_NCHITTEST: {
             // Desktop mode: nothing here should take the mouse.
             // WS_EX_TRANSPARENT does the same for the system; this keeps the
@@ -3068,8 +3132,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // click 2 px from the screen edge would start a drag-resize of
             // something that by definition fills the screen.
             if (!IsZoomed(hwnd)) {
-                int lft = (x < RESIZE_BORDER), rgt = (x >= w - RESIZE_BORDER);
-                int tp  = (y < RESIZE_BORDER), bot = (y >= h - RESIZE_BORDER);
+                int rb = Dp(RESIZE_BORDER);
+                int lft = (x < rb), rgt = (x >= w - rb);
+                int tp  = (y < rb), bot = (y >= h - rb);
                 if (tp  && lft) return HTTOPLEFT;
                 if (tp  && rgt) return HTTOPRIGHT;
                 if (bot && lft) return HTBOTTOMLEFT;
@@ -3080,7 +3145,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (bot) return HTBOTTOM;
             }
 
-            if (y < HEADER_H) {
+            if (y < Dp(HEADER_H)) {
                 // The buttons must be HTCLIENT, otherwise WM_LBUTTONDOWN
                 // never reaches them: an HTCAPTION area gives NC messages,
                 // and DefWindowProc would start a window move from a click
@@ -3137,13 +3202,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         case WM_GETMINMAXINFO: {
             MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-            // DPI-scaled for the same reason as PlacePopupInitially: the
-            // process is DPI-unaware today, so this is 400x250, but the limit
-            // should follow along the day a manifest is added.
-            UINT dpi = GetDpiForWindow(hwnd);
-            if (dpi == 0) dpi = 96;
-            mmi->ptMinTrackSize.x = MulDiv(POPUP_MIN_W, (int)dpi, 96);
-            mmi->ptMinTrackSize.y = MulDiv(POPUP_MIN_H, (int)dpi, 96);
+            // DPI-scaled like the factory size: 600x375 device pixels at 150 %.
+            mmi->ptMinTrackSize.x = Dp(POPUP_MIN_W);
+            if (mmi->ptMinTrackSize.x < ToolbarMinW()) mmi->ptMinTrackSize.x = ToolbarMinW();
+            mmi->ptMinTrackSize.y = Dp(POPUP_MIN_H);
 
             // A WS_POPUP window maximizes to the whole SCREEN, not to the
             // work area - and the OS adds the frame width outside. Measured
@@ -3498,6 +3560,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     r = g_Ctx.ch.hoverIdx;
                     break;
                 }
+                // 105 (phase 37): WRITING. A scale change to the dpi in
+                // lParam, as Windows sends it when the panel moves to another
+                // monitor: the real WM_DPICHANGED, with the window rectangle
+                // scaled by new / old around its top left corner. The RECT
+                // cannot cross from the probe's process, so it is built here.
+                case 105: {
+                    int nd = (int)lParam, od = g_Ctx.sty.dpi;
+                    if (nd < 48 || nd > 480 || od <= 0) { r = -1; break; }
+                    RECT rw;
+                    GetWindowRect(hwnd, &rw);
+                    RECT nr = { rw.left, rw.top,
+                                rw.left + MulDiv(rw.right - rw.left, nd, od),
+                                rw.top  + MulDiv(rw.bottom - rw.top, nd, od) };
+                    SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(nd, nd), (LPARAM)&nr);
+                    r = g_Ctx.sty.dpi;
+                    break;
+                }
                 // Phase 27: today's session. 41 is VWAP at the candle index
                 // in lParam, x100, -1 when it is not defined there. 42/43 are
                 // today's high/low x100. 44 is the session's first candle
@@ -3557,6 +3636,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 57: r = g_Ctx.ch.probeLblMask; break;
                 case 58: r = g_Ctx.ch.probeCrossTag; break;
                 case 59: r = (LRESULT)g_Ctx.ch.probeLblUs; break;
+                // 60 (phase 37): the dpi the panel is drawn for.
+                case 60: r = g_Ctx.sty.dpi; break;
                 case 47: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[(int)lParam].openTime / 1000) : -1; break;
                 case 48: {
@@ -4187,9 +4268,9 @@ static BOOL AttachToDesktop(HWND hwnd) {
 // on the size and rebuild themselves.
 //
 // Per-monitor aware around the calls, as when the surface was created (see
-// TogglePopup): GetSystemMetrics follows the thread's context, and the main
-// thread is DPI-unaware - without this the surface would get virtualized
-// measurements.
+// TogglePopup): GetSystemMetrics follows the thread's context. The whole
+// process is per-monitor aware from phase 37, so this is now a no-op kept
+// as a guard - it made the surface work while the rest was DPI-unaware.
 //
 // A pure SCALING change (100 % -> 150 %, same resolution) needs nothing:
 // the surface works in physical pixels. The watermark's font limits read
@@ -4209,6 +4290,35 @@ static void RefitDesktopSurface(void) {
     if (prev) SetThreadDpiAwarenessContext(prev);
 }
 
+
+// The dpi the surface is drawn for (phase 37). The panel follows its
+// monitor; the desktop surface stays at 96 - its only text is the stamp,
+// which already follows the surface height, and the desktop is meant to
+// look the same as before (it has been per-monitor aware since phase 9).
+static int PanelDpi(HWND hwnd) {
+    if (g_desktopMode) return CHART_DPI_BASE;
+#ifdef TICKER_PROBE
+    if (g_forceDpi > 0) return g_forceDpi;
+#endif
+    UINT d = hwnd ? GetDpiForWindow(hwnd) : 0;
+    return d ? (int)d : CHART_DPI_BASE;
+}
+
+// Rebuilds everything that is sized for the dpi: the chart's style (fonts,
+// and the dpi Dp and the engine read), and the header's price font. The
+// watermark is keyed on the size alone, so it is invalidated here. A no-op
+// when the dpi is unchanged.
+static void ApplyPanelDpi(AppContext* ctx, int dpi) {
+    if (ctx->sty.fontSmall && ctx->sty.dpi == dpi) return;
+    ChartStyleDestroy(&ctx->sty);
+    ChartStyleCreate(&ctx->sty, dpi);
+    if (ctx->hFontBig) DeleteObject(ctx->hFontBig);
+    ctx->hFontBig = CreateFontW(-ChartPx(dpi, 19), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    ctx->wmValid = FALSE;
+    ctx->bbValid = FALSE;
+}
 
 // Tray click. With a normal window the expected behavior is: if it is in
 // front and active, hide it; otherwise show it and give it focus. A
@@ -4255,8 +4365,9 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ? WS_POPUP
             : (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
 
-        // The desktop surface is created per-monitor aware; the rest of the
-        // process is still DPI-unaware. Measured at 150 %: without this
+        // The desktop surface is created per-monitor aware (phase 9; the
+        // whole process is from phase 37, and this is then a no-op kept as a
+        // guard). Measured at 150 % while the process was unaware: without this
         // SM_CXSCREEN/SM_CYSCREEN gave a virtualized 2560x1067, and the
         // surface covered only the upper left corner of a WorkerW of
         // 3840x1600 physical pixels. A window created in this context keeps
@@ -4313,6 +4424,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->axisHotY    = -1;
     ctx->ch.dispValid   = FALSE;   // the panel opens finished, does not glide into place
 
+    ApplyPanelDpi(ctx, PanelDpi(ctx->hPopup));   // phase 37: before the placement reads Dp
     UpdatePopupTitle(ctx);
     if (g_desktopMode) {
         // AttachToDesktop set the geometry. No activation and no
@@ -4347,8 +4459,10 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 // The window is CREATED AGAIN, it is not moved with SetParent. The DPI
 // context is set when a window is created and cannot be changed: the desktop
 // surface must be created per-monitor aware (otherwise it covers a quarter
-// of the screen at 150 %, see TogglePopup), and the panel DPI-unaware. A
-// moved window would have the wrong context in one of the modes.
+// of the screen at 150 %, see TogglePopup); until phase 37 the panel was
+// DPI-unaware, and a moved window would have had the wrong context in one of
+// the modes. Both are per-monitor aware now, but the surface is still drawn
+// at 96 and the panel at its monitor's dpi (PanelDpi).
 // TogglePopup already creates both correctly, and all the g_desktopMode
 // branches apply to a new window without more work.
 //
@@ -4702,8 +4816,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         // created BEFORE InitializeCriticalSection in WinMain, and a sent
         // message can be delivered in that window. hWakeEvent is set after
         // the lock, so if it is set, the lock exists.
-        // Display change (phase 26). lParam is not read: the main thread is
-        // DPI-unaware, so the measurements there are virtualized.
+        // Display change (phase 26). lParam is not read: until phase 37 the
+        // main thread was DPI-unaware and the measurements virtualized, and
+        // RefitDesktopSurface measures for itself.
         case WM_DISPLAYCHANGE:
 #ifdef TICKER_PROBE
             InterlockedIncrement(&g_probeDisplayChanges);
@@ -4792,6 +4907,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
+    // Per-monitor aware (phase 37), before the first window: the panel is
+    // drawn in device pixels at its monitor's dpi instead of being stretched
+    // as a bitmap by Windows at 150 %. Every length goes through Dp.
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     // No single-instance mutex any more: [ + ] starts precisely one more
     // instance. Each process has its own worker thread, its own tray icon and
     // its own window classes (classes are per process, so the names do not
@@ -4812,12 +4932,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // wait at exit - and we would close the session under it.
     WinHttpSetTimeouts(g_Ctx.hSession, 5000, 5000, 5000, 5000);
 
-    g_Ctx.hFontBig = CreateFontW(-19, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    g_Ctx.hFontBig = CreateFontW(-19, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,   // 96; ApplyPanelDpi rebuilds
                                  DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     // The chart's fonts, pens and brushes (phase 35: one definition, shared
     // with the golden tests in tests/).
-    // 96 dpi: the panel is DPI-unaware, and Windows scales it as a bitmap.
+    // 96 dpi until a surface exists: ApplyPanelDpi sets the panel's own dpi
+    // when it opens (phase 37).
     ChartStyleCreate(&g_Ctx.sty, CHART_DPI_BASE);
     // hFontWm is not created here: the height depends on the panel size, so
     // it is built in EnsureWatermark and only when the height changes.
@@ -4924,8 +5045,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // has time to send 101. The probe therefore sets the variable in its own
     // environment, and the test build inherits it.
     g_probeMute = GetEnvironmentVariableW(L"TICKER_PROBE_MUTE", NULL, 0) > 0;
+    {
+        wchar_t fd[16];
+        if (GetEnvironmentVariableW(L"TICKER_FORCE_DPI", fd, 16) > 0) {
+            int v = _wtoi(fd);
+            if (v >= 48 && v <= 480) g_forceDpi = v;
+        }
+    }
     // Recorded responses (phase 34); see g_fixtureDir. Read before the thread
     // starts, which is the only reader.
+    // GetLastError is not cleared by a call that succeeds, and the
+    // TICKER_FORCE_DPI lookup above leaves ERROR_ENVVAR_NOT_FOUND behind when
+    // it is unset (phase 37: the fixtures were silently dropped).
+    SetLastError(ERROR_SUCCESS);
     if (GetEnvironmentVariableW(L"TICKER_FIXTURE_DIR", g_fixtureDir, MAX_PATH) == 0 ||
         GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
         g_fixtureDir[0] = L'\0';
