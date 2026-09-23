@@ -91,6 +91,13 @@ typedef struct {
     COLORREF sma, ema, vwap, session, prev;
     COLORREF alert, alertLine;
     COLORREF rsi;                // phase 39
+    // Phase 40: the alert as text. onAlert is the number on the filled
+    // alert tag, alertText the ghost tag's frame and number on the box. A
+    // color cannot both carry light text at 4.5:1 and be text at 4.5:1 on a
+    // light background (the luminance gap is at about 0.175), so the light
+    // theme keeps its amber surface and needs both; the dark theme uses
+    // CLR_BG and CLR_ALERT, as before.
+    COLORREF onAlert, alertText;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look

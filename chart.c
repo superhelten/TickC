@@ -894,6 +894,8 @@ const ChartTheme ChartThemeDark = {
     CLR_ALERT,
     CLR_ALERT_LINE,
     CLR_RSI,
+    CLR_BG,        // onAlert: dark text on the amber tag
+    CLR_ALERT,     // alertText
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -924,6 +926,8 @@ const ChartTheme ChartThemeLight = {
     RGB(0xD9, 0x8A, 0x00),   // alert
     RGB(0xE8, 0xC4, 0x80),   // alertLine
     RGB(0x00, 0x89, 0x7B),   // rsi
+    RGB(0xFA, 0xFA, 0xFB),   // onAlert
+    RGB(0xD9, 0x8A, 0x00),   // alertText
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -1513,7 +1517,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             }
             if (covered) continue;
             FormatTagPrice(hdc, lvl, range, axR - axL, buf, 64);
-            SetTextColor(hdc, hot ? sty->clr.onHot : sty->clr.bg);
+            SetTextColor(hdc, hot ? sty->clr.onHot : sty->clr.onAlert);
             RECT rcAT = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
@@ -1545,7 +1549,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         if (ghost) {
             int y = in->axisHotY;
             BOOL full = (nA >= ALERT_MAX);
-            COLORREF gc = full ? sty->clr.dim : sty->clr.alert;
+            COLORREF gc = full ? sty->clr.dim : sty->clr.alertText;
             SelectObject(hdc, GetStockObject(DC_PEN));
             SetDCPenColor(hdc, full ? sty->clr.cross : sty->clr.alertLine);
             MoveToEx(hdc, left, y, NULL);

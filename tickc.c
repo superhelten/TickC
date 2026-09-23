@@ -128,6 +128,17 @@ C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_SMA_PERIOD);
 // White because the old fixed color #15191F was neutral: CLR_BG + 8 in all
 // channels, i.e. ~3.3 % towards white.
 #define CLR_WM_INK       RGB(0xFF, 0xFF, 0xFF)
+
+// The app's theme (phase 40): the chart's colors, which the header, the
+// buttons, the toolbar and the overlay borrow through ctx->sty.clr, plus the
+// one color only the app draws with. White ink on a light background would
+// be invisible, so the light theme blends toward its text color instead.
+typedef struct {
+    const ChartTheme* chart;
+    COLORREF wmInk;      // the watermark is blended from clr.bg toward this
+} AppTheme;
+static const AppTheme APP_THEME_DARK  = { &ChartThemeDark,  CLR_WM_INK };
+static const AppTheme APP_THEME_LIGHT = { &ChartThemeLight, RGB(0x1F, 0x23, 0x28) };
 #define WM_ALPHA_BASE    0.08
 #define WM_ALPHA_MIN     0.04
 #define WM_ALPHA_MAX     0.10
@@ -296,9 +307,11 @@ typedef struct {
     BOOL      dropConn;
 
     // --- Cached GDI objects ---
-    // Fixed colors are created once at startup instead of 16 times per
-    // repaint.
+    // Fixed colors are created once instead of 16 times per repaint - by
+    // ApplyPanelStyle, with the chart style, since phase 40: the colors are
+    // the theme's.
     HPEN   penBtn, penBtnHot, penBtnWhite;
+    const AppTheme* theme;   // phase 40: the theme sty and the pens were built from
     // Standard cursors. LoadCursorW returns a SHARED handle for these - they
     // do not count as ours, and must not go through DestroyCursor. Cached
     // anyway: WM_SETCURSOR fires on every mouse move, and a lookup per
@@ -424,7 +437,12 @@ static int Dp(int v) {
     return ChartPx((g_Ctx.sty.dpi > 0) ? g_Ctx.sty.dpi : CHART_DPI_BASE, v);
 }
 static int  PanelDpi(HWND hwnd);
-static void ApplyPanelDpi(AppContext* ctx, int dpi);
+static void ApplyPanelStyle(AppContext* ctx, int dpi);
+// The theme for the mode we are in (phase 40).
+static const AppTheme* ThemeNow(const AppContext* ctx) {
+    (void)ctx;
+    return &APP_THEME_DARK;
+}
 // The overlay choices for the mode we are in (phase 26). Everything that
 // paints, eases, checks items in the menu or answers a probe reads these.
 static BOOL ShowVolNow(const AppContext* ctx) {
@@ -2010,14 +2028,14 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     OverlayRects r;
     OverlayLayout(W, H, &r);
 
-    HBRUSH brBox  = CreateSolidBrush(Blend(CLR_BG, CLR_BOX, a));
-    HBRUSH brEdge = CreateSolidBrush(Blend(CLR_BG, CLR_BOXEDGE, a));
+    HBRUSH brBox  = CreateSolidBrush(Blend(ctx->sty.clr.bg, ctx->sty.clr.box, a));
+    HBRUSH brEdge = CreateSolidBrush(Blend(ctx->sty.clr.bg, ctx->sty.clr.boxEdge, a));
     FillRect(hdc, &r.box, brBox);
     FrameRect(hdc, &r.box, brEdge);
 
     SelectObject(hdc, ctx->sty.fontSmall);
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, Blend(CLR_BG, CLR_DIM, a));
+    SetTextColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.dim, a));
     RECT h1 = r.symHdr, h2 = r.ivHdr;
     h1.left += Dp(6); h2.left += Dp(6);
     DrawTextW(hdc, L"SYMBOL",    -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -2030,12 +2048,12 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
         const wchar_t* lbl = isSym ? SYMBOLS[idx].label : INTERVALS[idx].label;
 
         if (i == ctx->overlayHot) {
-            HBRUSH brHot = CreateSolidBrush(Blend(CLR_BG, CLR_BOXEDGE, a / 2));
+            HBRUSH brHot = CreateSolidBrush(Blend(ctx->sty.clr.bg, ctx->sty.clr.boxEdge, a / 2));
             FillRect(hdc, &r.rows[i], brHot);
             DeleteObject(brHot);
         }
-        COLORREF fg = active ? CLR_UP : CLR_TEXT;
-        SetTextColor(hdc, Blend(CLR_BG, fg, a));
+        COLORREF fg = active ? ctx->sty.clr.up : ctx->sty.clr.text;
+        SetTextColor(hdc, Blend(ctx->sty.clr.bg, fg, a));
         RECT t = r.rows[i]; t.left += Dp(6);
         DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
@@ -2123,7 +2141,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     // color is therefore only computed when the bitmap is built. Everything
     // underneath is opaque CLR_BG, so Blend against the background IS alpha
     // blending.
-    SetTextColor(ctx->wmDC, Blend(CLR_BG, CLR_WM_INK,
+    SetTextColor(ctx->wmDC, Blend(ctx->sty.clr.bg, ctx->theme->wmInk,
                                   (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
 
     ChartRect g = ChartGeometry(W, H, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
@@ -2348,7 +2366,7 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
         if (on)        FrameRect(hdc, r, ctx->sty.brBoxEdge);
 
-        COLORREF fg = (hot || on || i == TBAR_SYM) ? CLR_TEXT : CLR_DIM;
+        COLORREF fg = (hot || on || i == TBAR_SYM) ? ctx->sty.clr.text : ctx->sty.clr.dim;
         SetTextColor(hdc, fg);
         if (i == TBAR_SYM) {
             // Left-aligned text and a down arrow at the right end: the pill
@@ -2363,8 +2381,8 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
             POINT tri[3] = { { ax - t3, ay }, { ax + t3, ay }, { ax, ay + t3 } };
             HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(DC_PEN));
             HGDIOBJ oldBr  = SelectObject(hdc, GetStockObject(DC_BRUSH));
-            SetDCPenColor(hdc, CLR_DIM);
-            SetDCBrushColor(hdc, CLR_DIM);
+            SetDCPenColor(hdc, ctx->sty.clr.dim);
+            SetDCBrushColor(hdc, ctx->sty.clr.dim);
             Polygon(hdc, tri, 3);
             SelectObject(hdc, oldPen);
             SelectObject(hdc, oldBr);
@@ -2386,7 +2404,7 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
     double first = ctx->candles[vs].open;
     double last  = ctx->candles[vs + vc - 1].close;
     double chg   = (first > 0.0) ? ((last - first) / first) * 100.0 : 0.0;
-    COLORREF chgClr = (chg >= 0.0) ? CLR_UP : CLR_DOWN;
+    COLORREF chgClr = (chg >= 0.0) ? ctx->sty.clr.up : ctx->sty.clr.down;
 
     wchar_t span[24];
     FormatSpan(vc, ctx->intervalMs, span, 24);
@@ -2417,7 +2435,7 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
         // Row 1, left: the price. The rectangle ends at the button row, so even
         // a price that does not fit is never drawn under the buttons.
         SelectObject(hdc, ctx->hFontBig);
-        SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
+        SetTextColor(hdc, stale ? ctx->sty.clr.dim : ctx->sty.clr.text);
         swprintf_s(buf, 64, L"$%.2f", last);
         int lenPrice = (int)wcslen(buf);
         SIZE szPrice = { 0, 0 };
@@ -2476,7 +2494,7 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
             SIZE szSub = { 0, 0 };
             GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
             if (subLeft + szSub.cx <= subLimit) {
-                SetTextColor(hdc, CLR_DIM);
+                SetTextColor(hdc, ctx->sty.clr.dim);
                 RECT rcSub = { subLeft, Dp(TBAR_TOP), subLimit, Dp(TBAR_TOP) + Dp(TBAR_H) };
                 DrawTextW(hdc, buf, lenSub, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             }
@@ -2497,7 +2515,7 @@ static void DrawEmptyState(AppContext* ctx, HDC hdc, int W, int H, ULONGLONG now
 
         wchar_t msg[96];
         SelectObject(hdc, ctx->sty.fontSmall);
-        SetTextColor(hdc, CLR_DIM);
+        SetTextColor(hdc, ctx->sty.clr.dim);
 
         // Without a connection it used to say "Loading data from Binance..."
         // forever. The message lied about the state - now it says what is
@@ -3156,7 +3174,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 #ifdef TICKER_PROBE
             if (g_forceDpi > 0) nd = g_forceDpi;
 #endif
-            ApplyPanelDpi(&g_Ctx, (nd > 0) ? nd : PanelDpi(hwnd));
+            ApplyPanelStyle(&g_Ctx, (nd > 0) ? nd : PanelDpi(hwnd));
             SetWindowPos(hwnd, NULL, nr->left, nr->top,
                          nr->right - nr->left, nr->bottom - nr->top,
                          SWP_NOZORDER | SWP_NOACTIVATE);
@@ -4377,18 +4395,30 @@ static int PanelDpi(HWND hwnd) {
     return d ? (int)d : CHART_DPI_BASE;
 }
 
-// Rebuilds everything that is sized for the dpi: the chart's style (fonts,
-// and the dpi Dp and the engine read), and the header's price font. The
-// watermark is keyed on the size alone, so it is invalidated here. A no-op
-// when the dpi is unchanged.
-static void ApplyPanelDpi(AppContext* ctx, int dpi) {
-    if (ctx->sty.fontSmall && ctx->sty.dpi == dpi) return;
+// Rebuilds everything that is sized for the dpi or colored by the theme: the
+// chart's style (fonts, colors, and the dpi Dp and the engine read), the
+// header's price font and the control buttons' pens and brush. The watermark
+// is keyed on the size alone, so it is invalidated here. A no-op when both
+// the dpi and the theme are unchanged - it was ApplyPanelDpi until phase 40,
+// and comparing the dpi alone would leave a theme switch undrawn.
+static void ApplyPanelStyle(AppContext* ctx, int dpi) {
+    const AppTheme* th = ThemeNow(ctx);
+    if (ctx->sty.fontSmall && ctx->sty.dpi == dpi && ctx->theme == th) return;
     ChartStyleDestroy(&ctx->sty);
-    ChartStyleCreate(&ctx->sty, dpi, &ChartThemeDark);
+    ChartStyleCreate(&ctx->sty, dpi, th->chart);
+    ctx->theme = th;
     if (ctx->hFontBig) DeleteObject(ctx->hFontBig);
     ctx->hFontBig = CreateFontW(-ChartPx(dpi, 19), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (ctx->penBtn)      DeleteObject(ctx->penBtn);
+    if (ctx->penBtnHot)   DeleteObject(ctx->penBtnHot);
+    if (ctx->penBtnWhite) DeleteObject(ctx->penBtnWhite);
+    if (ctx->brClose)     DeleteObject(ctx->brClose);
+    ctx->penBtn      = CreatePen(PS_SOLID, 1, ctx->sty.clr.dim);
+    ctx->penBtnHot   = CreatePen(PS_SOLID, 1, ctx->sty.clr.text);
+    ctx->penBtnWhite = CreatePen(PS_SOLID, 1, ctx->sty.clr.onHot);
+    ctx->brClose     = CreateSolidBrush(ctx->sty.clr.hot);
     ctx->wmValid = FALSE;
     ctx->bbValid = FALSE;
 }
@@ -4497,7 +4527,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->axisHotY    = -1;
     ctx->ch.dispValid   = FALSE;   // the panel opens finished, does not glide into place
 
-    ApplyPanelDpi(ctx, PanelDpi(ctx->hPopup));   // phase 37: before the placement reads Dp
+    ApplyPanelStyle(ctx, PanelDpi(ctx->hPopup));   // phase 37: before the placement reads Dp
     UpdatePopupTitle(ctx);
     if (g_desktopMode) {
         // AttachToDesktop set the geometry. No activation and no
@@ -5013,14 +5043,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // wait at exit - and we would close the session under it.
     WinHttpSetTimeouts(g_Ctx.hSession, 5000, 5000, 5000, 5000);
 
-    g_Ctx.hFontBig = CreateFontW(-19, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,   // 96; ApplyPanelDpi rebuilds
-                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     // The chart's fonts, pens and brushes (phase 35: one definition, shared
-    // with the golden tests in tests/).
-    // 96 dpi until a surface exists: ApplyPanelDpi sets the panel's own dpi
-    // when it opens (phase 37).
-    ChartStyleCreate(&g_Ctx.sty, CHART_DPI_BASE, &ChartThemeDark);
+    // with the golden tests in tests/), the header's price font and the
+    // buttons' pens (phase 40: in the theme's colors).
+    // 96 dpi until a surface exists: ApplyPanelStyle sets the panel's own dpi
+    // when it opens (phase 37), and the theme once the config is read.
+    ApplyPanelStyle(&g_Ctx, CHART_DPI_BASE);
     // hFontWm is not created here: the height depends on the panel size, so
     // it is built in EnsureWatermark and only when the height changes.
 
@@ -5054,11 +5082,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
 
-    // Fixed GDI objects: created once, not 16 times per repaint
-    g_Ctx.penBtn      = CreatePen(PS_SOLID, 1, CLR_DIM);
-    g_Ctx.penBtnHot   = CreatePen(PS_SOLID, 1, CLR_TEXT);
-    g_Ctx.penBtnWhite = CreatePen(PS_SOLID, 1, CLR_BTNHOT);
-    g_Ctx.brClose     = CreateSolidBrush(CLR_CLOSEHOT);
+    // Fixed objects: created once, not per repaint (the buttons' pens are
+    // built with the style, above)
     g_Ctx.curArrow    = LoadCursorW(NULL, IDC_ARROW);
     g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
     g_Ctx.curHand     = LoadCursorW(NULL, IDC_HAND);
