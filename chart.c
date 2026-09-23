@@ -524,16 +524,29 @@ void SyncDisp(ChartState* ctx, const Candle* candles, int n) {
     ctx->dispValid = TRUE;
 }
 
-// Unix ms -> local time. On long candles "HH:MM" is not enough - every 1d
-// candle would read "00:00". From 1h upward we include the date.
-void FormatCandleTime(long long unixMs, long long intervalMs,
+// The local offset in force NOW, in ms east of UTC - exactly what
+// FileTimeToLocalFileTime adds, which the labels used until phase 35. It
+// applies today's offset to every date, also one from before a DST change.
+long long ChartUtcOffsetMs(void) {
+    FILETIME fu, fl;
+    GetSystemTimeAsFileTime(&fu);
+    if (!FileTimeToLocalFileTime(&fu, &fl)) return 0;
+    ULONGLONG u = ((ULONGLONG)fu.dwHighDateTime << 32) | fu.dwLowDateTime;
+    ULONGLONG l = ((ULONGLONG)fl.dwHighDateTime << 32) | fl.dwLowDateTime;
+    return ((long long)l - (long long)u) / 10000LL;
+}
+
+// Unix ms -> local time (UTC + utcOffsetMs). On long candles "HH:MM" is not
+// enough - every 1d candle would read "00:00". From 1h upward we include the
+// date.
+void FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs,
                              wchar_t* out, size_t cch) {
-    ULONGLONG t = (ULONGLONG)(unixMs / 1000) * 10000000ULL + 116444736000000000ULL;
-    FILETIME utc, local;
-    utc.dwLowDateTime  = (DWORD)(t & 0xFFFFFFFFULL);
-    utc.dwHighDateTime = (DWORD)(t >> 32);
+    ULONGLONG t = (ULONGLONG)(unixMs / 1000 + utcOffsetMs / 1000) * 10000000ULL + 116444736000000000ULL;
+    FILETIME local;
+    local.dwLowDateTime  = (DWORD)(t & 0xFFFFFFFFULL);
+    local.dwHighDateTime = (DWORD)(t >> 32);
     SYSTEMTIME st;
-    if (FileTimeToLocalFileTime(&utc, &local) && FileTimeToSystemTime(&local, &st)) {
+    if (FileTimeToSystemTime(&local, &st)) {
         if (intervalMs >= 86400000LL) {
             swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
         } else if (intervalMs >= 3600000LL) {
@@ -1342,7 +1355,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     if (i0 < i1 && !in->desktop) {
         wchar_t tl[24];
         FormatCandleTime(in->candles[i0].openTime,
-                         in->intervalMs, tl, 24);
+                         in->intervalMs, in->utcOffsetMs, tl, 24);
         int tlLen = (int)wcslen(tl);
         SIZE tsz = { 0, 0 };
         GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // the axis font is selected
@@ -1352,20 +1365,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
 
         // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
-        // here and not on 02, 08 ... (UTC + 2 in summer). The offset is read
-        // at i0; a DST change in the middle of the view only moves the
-        // labels one hour.
-        long long t0 = in->candles[i0].openTime, tzMs = 0;
-        {
-            ULONGLONG ft = (ULONGLONG)(t0 / 1000) * 10000000ULL + 116444736000000000ULL;
-            FILETIME fu, fl;
-            fu.dwLowDateTime  = (DWORD)(ft & 0xFFFFFFFFULL);
-            fu.dwHighDateTime = (DWORD)(ft >> 32);
-            if (FileTimeToLocalFileTime(&fu, &fl)) {
-                ULONGLONG lt = ((ULONGLONG)fl.dwHighDateTime << 32) | fl.dwLowDateTime;
-                tzMs = ((long long)lt - (long long)ft) / 10000LL;
-            }
-        }
+        // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
+        // whole view, the one the labels are written with.
+        long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
         long long slotNo = (t0 + tzMs) / iv;
         int rem = (int)(slotNo % step);
         int k = i0 + ((rem == 0) ? 0 : (step - rem));
@@ -1374,7 +1376,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         for (; k < i1; k += step) {
             int x = left + (int)(((double)k - dStart + 0.5) * slot);
             if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-            FormatCandleTime(in->candles[k].openTime, in->intervalMs, tl, 24);
+            FormatCandleTime(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, tl, 24);
             ExtTextOutW(hdc, x, bottom + 2, 0, NULL, tl, (int)wcslen(tl), NULL);
         }
         SetTextAlign(hdc, oldAlign);
@@ -1626,7 +1628,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // LINE_H = 13 is measured on it, and the axis font is 15 px tall.
     SelectObject(hdc, sty->fontSmall);
     wchar_t tbuf[24];
-    FormatCandleTime(hc->openTime, in->intervalMs, tbuf, 24);
+    FormatCandleTime(hc->openTime, in->intervalMs, in->utcOffsetMs, tbuf, 24);
 
     // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
     // With the indicators on (phase 27) three more rows are added: SMA, EMA

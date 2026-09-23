@@ -2491,6 +2491,7 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
     in.alertHot = ctx->alertHot; in.axisHotY = ctx->axisHotY;
     in.alertFresh = ctx->alertFresh;
     in.alertFlashLevel = ctx->alertFlashLevel; in.alertFlashF = ctx->alertFlashF;
+    in.utcOffsetMs = ChartUtcOffsetMs();
 
     ChartStyle sty = ctx->sty;
     sty.fontPill = ctx->hFontPill;

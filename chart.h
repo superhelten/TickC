@@ -64,6 +64,10 @@ typedef struct {
     double        alertFresh;   // the level just set with a click, 0 = none
     double        alertFlashLevel;
     double        alertFlashF;  // afterglow of a fired alert, 1..0
+    // Local time = UTC + utcOffsetMs, for every label in the frame (phase 35).
+    // The app passes ChartUtcOffsetMs(); the golden tests pass a constant, so
+    // their hashes do not change with the machine's DST state.
+    long long     utcOffsetMs;
 } ChartData;
 
 // GDI objects the chart draws with (phase 35: built by ChartStyleCreate, so
@@ -257,7 +261,8 @@ BOOL      VwapValueAt(const Candle* c, int n, long long intervalMs, BOOL histDon
 // --- Formatting and colors ---
 int       PriceDecimals(double step);
 void      FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch);
-void      FormatCandleTime(long long unixMs, long long intervalMs, wchar_t* out, size_t cch);
+void      FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs, wchar_t* out, size_t cch);
+long long ChartUtcOffsetMs(void);
 void      FormatVolume(double v, wchar_t* out, size_t cch);
 void      FormatTagPrice(HDC hdc, double p, double range, int avail, wchar_t* out, size_t cch);
 COLORREF  Blend(COLORREF a, COLORREF b, int t);
