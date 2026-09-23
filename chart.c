@@ -260,6 +260,57 @@ BOOL VwapValueAt(const Candle* c, int n, long long intervalMs,
 }
 #endif
 
+// RSI (phase 39), Wilder's definition as TradingView and Binance draw it: the
+// first average gain and loss are the plain means of the first RSI_PERIOD
+// changes, then avg = (avg * (period - 1) + x) / period. RSI = 100 - 100 /
+// (1 + gain / loss); no loss gives 100, and no change at all 50. Like the EMA
+// it has infinite memory, so it is ALWAYS fed from candle 0 - started where
+// the view begins, the line would move during panning. Only + - * /
+// (pitfall 75).
+typedef struct { int fed; double prev, gain, loss, val; } RsiState;
+
+static void RsiInit(RsiState* s) { s->fed = 0; s->prev = s->gain = s->loss = s->val = 0.0; }
+
+static BOOL RsiStep(RsiState* s, const Candle* c) {
+    double x = c->close;
+    if (s->fed++ == 0) { s->prev = x; return FALSE; }
+    double d = x - s->prev;
+    s->prev = x;
+    double up = (d > 0.0) ? d : 0.0, dn = (d < 0.0) ? -d : 0.0;
+    // fed counts candles; the change on candle k is change number k - 1.
+    if (s->fed <= RSI_PERIOD) {                // changes 1 .. period - 1: sum
+        s->gain += up; s->loss += dn;
+        return FALSE;
+    }
+    if (s->fed == RSI_PERIOD + 1) {            // change number period: the seed
+        s->gain = (s->gain + up) / (double)RSI_PERIOD;
+        s->loss = (s->loss + dn) / (double)RSI_PERIOD;
+    } else if (s->fed > RSI_PERIOD + 1) {
+        s->gain = (s->gain * (double)(RSI_PERIOD - 1) + up) / (double)RSI_PERIOD;
+        s->loss = (s->loss * (double)(RSI_PERIOD - 1) + dn) / (double)RSI_PERIOD;
+    } else {
+        return FALSE;
+    }
+    if (s->loss <= 0.0) s->val = (s->gain <= 0.0) ? 50.0 : 100.0;
+    else                s->val = 100.0 - 100.0 / (1.0 + s->gain / s->loss);
+    return TRUE;
+}
+
+#ifdef TICKER_PROBE
+// Test build only: the RSI on one candle, FALSE when it is not defined there
+// (fewer than RSI_PERIOD changes before it). Probe field 63 reads it; the
+// painting gets the view, the legend and the tag from DrawRsi in one pass.
+BOOL RsiValueAt(const Candle* c, int n, int idx, double* out) {
+    if (idx < 0 || idx >= n) return FALSE;
+    RsiState s;
+    RsiInit(&s);
+    BOOL ok = FALSE;
+    for (int i = 0; i <= idx; ++i) ok = RsiStep(&s, &c[i]);
+    if (ok) *out = s.val;
+    return ok;
+}
+#endif
+
 // Yesterday (phase 28): the previous UTC day's high, low and close as
 // reference levels. Pure functions of candles[] like the rest of the session
 // code.
@@ -372,7 +423,7 @@ int ChartAxisW(int dpi) {
     return ChartPx(dpi, AXIS_LBL_GAP) + AXIS_Y_CHARS * cw + ChartPx(dpi, AXIS_PAD_R);
 }
 
-ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi) {
+ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band) {
     ChartRect g;
     if (dpi <= 0) dpi = CHART_DPI_BASE;
     g.dpi    = dpi;
@@ -383,6 +434,19 @@ ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi) {
     g.bottom = desktop ? H : H - ChartPx(dpi, PAD_B);
     g.cw     = g.right - g.left;
     g.ch     = g.bottom - g.top;
+    // The RSI band (phase 39) takes the bottom of the surface; the price pane
+    // ends RSI_GAP above it. Left out when the price pane would get too low.
+    g.bandTop = g.bandBottom = g.bottom;
+    if (band) {
+        int gap = ChartPx(dpi, RSI_GAP);
+        int bh = (int)((double)g.ch * RSI_BAND_FRAC);
+        if (bh < ChartPx(dpi, RSI_BAND_MIN)) bh = ChartPx(dpi, RSI_BAND_MIN);
+        if (g.ch - bh - gap >= ChartPx(dpi, RSI_PANE_MIN)) {
+            g.bandTop = g.bottom - bh;
+            g.bottom  = g.bandTop - gap;
+            g.ch      = g.bottom - g.top;
+        }
+    }
     return g;
 }
 
@@ -393,7 +457,9 @@ ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi) {
 int HitCandle(const ChartState* ctx, int n, const ChartRect* g, int mx, int my) {
     if (ctx->dispCount <= 0.0 || g->cw <= 0) return -1;
     if (n <= 0) return -1;
-    if (mx < g->left || mx >= g->right || my < g->top || my > g->bottom) return -1;
+    // The band (phase 39) belongs to the same candles: the crosshair works there too.
+    int yMax = (g->bandBottom > g->bottom) ? g->bandBottom : g->bottom;
+    if (mx < g->left || mx >= g->right || my < g->top || my > yMax) return -1;
 
     double slot = (double)g->cw / ctx->dispCount;
     if (slot <= 0.0) return -1;
@@ -747,6 +813,36 @@ static BOOL DrawVwap(HDC hdc, const ChartData* in, const ChartRect* g, COLORREF 
     return haveLegend;
 }
 
+// The RSI line in the band (phase 39). Fed from candle 0 over the whole
+// buffer (infinite memory, see RsiStep); points only for [i0 - 1, i1], the
+// same x as the candles and the same batches as DrawIndicator. *legendVal is
+// the value at legendIdx, *lastVal the one at the last candle (the axis tag).
+static void DrawRsi(HDC hdc, const Candle* candles, int n, const ChartRect* g,
+                    double dStart, double slot, int i0, int i1,
+                    int legendIdx, double* legendVal, BOOL* legendOk,
+                    double* lastVal, BOOL* lastOk) {
+    int first = (i0 > 0) ? i0 - 1 : 0;
+    int last  = (i1 < n) ? i1 : n - 1;
+    int bt = g->bandTop, bh = g->bandBottom - g->bandTop;
+    RsiState s;
+    RsiInit(&s);
+    int k = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!RsiStep(&s, &candles[i])) continue;
+        if (i == legendIdx) { *legendVal = s.val; *legendOk = TRUE; }
+        if (i == n - 1)     { *lastVal = s.val;   *lastOk = TRUE; }
+        if (i < first || i > last) continue;
+        s_volPts[k].x = g->left + (int)floor(((double)i - dStart + 0.5) * slot);
+        s_volPts[k].y = bt + (int)(((100.0 - s.val) / 100.0) * (double)bh);
+        if (++k == IND_BATCH) {
+            Polyline(hdc, s_volPts, k);
+            s_volPts[0] = s_volPts[k - 1];
+            k = 1;
+        }
+    }
+    if (k >= 2) Polyline(hdc, s_volPts, k);
+}
+
 // A dashed horizontal line over [x0, x1) on row y (phase 27: today's high and
 // low). Not a PS_DASH pen: the line fades with dispIndF, and a pen cannot
 // change color per frame without being recreated. The dashes go to
@@ -797,6 +893,7 @@ const ChartTheme ChartThemeDark = {
     CLR_PREV,
     CLR_ALERT,
     CLR_ALERT_LINE,
+    CLR_RSI,
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -826,6 +923,7 @@ const ChartTheme ChartThemeLight = {
     RGB(0x8A, 0x93, 0xA8),   // prev
     RGB(0xD9, 0x8A, 0x00),   // alert
     RGB(0xE8, 0xC4, 0x80),   // alertLine
+    RGB(0x00, 0x89, 0x7B),   // rsi
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -909,7 +1007,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     int n = in->count;
     wchar_t buf[64];
     int dpi = (sty->dpi > 0) ? sty->dpi : CHART_DPI_BASE;
-    ChartRect g = ChartGeometry(W, H, in->desktop, dpi);
+    ChartRect g = ChartGeometry(W, H, in->desktop, dpi, in->band);
+    BOOL bandOn = (g.bandBottom > g.bottom);   // phase 39
+    int  axisB  = bandOn ? g.bandBottom : g.bottom;   // the lowest pane: the time axis sits under it
     // The tags on the price axis: [y - tagHalf, y + tagHalf), and two tags
     // closer than tagH collide (16 px at 96 dpi).
     int tagHalf = PX(8), tagH = 2 * tagHalf;
@@ -1241,6 +1341,63 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // margin on the right.
     SelectClipRgn(hdc, NULL);
 
+    // --- RSI band (phase 39) ---
+    // Under the price pane, with its own clip. A grid line on its top edge
+    // separates it from the volume bars above; the 70 and 30 levels are
+    // dashed in the crosshair's gray, like the session levels; the line is
+    // the theme's rsi. The content fades with dispRsiF, the region does not:
+    // it is geometry, which the hit tests read without state.
+    int    rsiT = (int)(st->dispRsiF * 255.0 + 0.5);
+    double rsiLegend = 0.0, rsiLast = 0.0;
+    BOOL   rsiLegendOk = FALSE, rsiLastOk = FALSE;
+    int    rsiLegendIdx = i1 - 1;
+    if (st->hoverIdx >= 0 && st->hoverIdx < n) {
+        double hr = (double)st->hoverIdx - dStart;
+        if (hr >= 0.0 && hr < dCount) rsiLegendIdx = st->hoverIdx;
+    }
+    int bt = g.bandTop, bb = g.bandBottom, bh = bb - bt;
+    int y70 = bt + (int)(((100.0 - RSI_HI) / 100.0) * (double)bh);
+    int y30 = bt + (int)(((100.0 - RSI_LO) / 100.0) * (double)bh);
+    if (bandOn) {
+        HPEN hOldB = (HPEN)SelectObject(hdc, sty->penGrid);
+        MoveToEx(hdc, left, bt, NULL);
+        LineTo(hdc, edge, bt);
+        SelectObject(hdc, hOldB);
+        if (rsiT > 0) {
+            IntersectClipRect(hdc, left, bt, edge, bb + 1);
+            SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, Blend(sty->clr.bg, sty->clr.cross, rsiT));
+            DrawDashLine(hdc, left, edge, y70, left, PX(SESS_DASH_ON), PX(SESS_DASH_PERIOD));
+            DrawDashLine(hdc, left, edge, y30, left, PX(SESS_DASH_ON), PX(SESS_DASH_PERIOD));
+            SetDCPenColor(hdc, Blend(sty->clr.bg, sty->clr.rsi, rsiT));
+            DrawRsi(hdc, in->candles, n, &g, dStart, slot, i0, i1,
+                    rsiLegendIdx, &rsiLegend, &rsiLegendOk, &rsiLast, &rsiLastOk);
+            SelectClipRgn(hdc, NULL);
+        }
+    }
+    // The pointer is in the band (or its gap): the crosshair's horizontal and
+    // its tag belong there, not to the price pane.
+    BOOL hoverInBand = bandOn && st->hoverY > bottom;
+    // The band's column has the price column's rank: the tag with the last
+    // RSI first (like the stamp), then the crosshair's tag - not drawn within
+    // tagH of the value tag, where only a strip of its number would show -
+    // then the 70 and 30 labels, which give way to both.
+    int yRsiV = INT_MIN, yBandCross = INT_MIN;
+    if (bandOn && rsiT > 0 && rsiLastOk) {
+        yRsiV = bt + (int)(((100.0 - rsiLast) / 100.0) * (double)bh);
+        if (yRsiV < bt + tagHalf) yRsiV = bt + tagHalf;
+        if (yRsiV > bb - tagHalf) yRsiV = bb - tagHalf;
+    }
+    if (hoverInBand && st->hoverIdx >= 0 && st->hoverIdx < n) {
+        double hrB = (double)st->hoverIdx - dStart;
+        if (hrB >= 0.0 && hrB < dCount) {
+            int hyB = st->hoverY;
+            if (hyB < bt) hyB = bt;
+            if (hyB > bb) hyB = bb;
+            if (yRsiV == INT_MIN || abs(hyB - yRsiV) >= tagH) yBandCross = hyB;
+        }
+    }
+
     SelectObject(hdc, GetStockObject(BLACK_PEN));
     SelectObject(hdc, GetStockObject(NULL_BRUSH));
 
@@ -1280,7 +1437,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         // 16 px of the stamp the crosshair tag is not drawn (the last price is
         // the number that must never be cut), and then nothing yields to it
         // either.
-        if (st->hoverIdx >= 0 && st->hoverIdx < n) {
+        if (st->hoverIdx >= 0 && st->hoverIdx < n && !hoverInBand) {
             double hrelT = (double)st->hoverIdx - dStart;
             if (hrelT >= 0.0 && hrelT < dCount) {
                 int hyT = st->hoverY;
@@ -1405,6 +1562,51 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         SetTextColor(hdc, sty->clr.axis);   // the time axis below inherits the color
     }
 
+    // --- RSI band: axis labels, value tag and legend (phase 39) ---
+    // Panel only (phase 14: no readings on the desktop). The tag with the
+    // last RSI sits in the band's column like the stamp in the price
+    // column, on the box surface in the line's color; a 70 or 30 label
+    // closer than tagH gives way to it, as the grid labels do to the stamp.
+    if (bandOn && rsiT > 0 && !in->desktop) {
+        int yv = yRsiV;
+        SelectObject(hdc, sty->fontAxis);
+        SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.axis, rsiT));
+        const int lvY[2] = { y70, y30 };
+        const wchar_t* lvT[2] = { L"70", L"30" };
+        for (int q = 0; q < 2; ++q) {
+            if (yv != INT_MIN && abs(lvY[q] - yv) < tagH) continue;
+            if (yBandCross != INT_MIN && abs(lvY[q] - yBandCross) < tagH) continue;
+            RECT rcL = { axL, lvY[q] - tagHalf, axR, lvY[q] + tagHalf };
+            DrawTextW(hdc, lvT[q], -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+        if (yv != INT_MIN) {
+            RECT rcV = { edge + 1, yv - tagHalf, axR + PX(3), yv + tagHalf };
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.box, rsiT));
+            FillRect(hdc, &rcV, (HBRUSH)GetStockObject(DC_BRUSH));
+            swprintf_s(buf, 64, L"%.2f", rsiLast);
+            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.rsi, rsiT));
+            RECT rcVT = { axL, yv - tagHalf, axR, yv + tagHalf };
+            DrawTextW(hdc, buf, -1, &rcVT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+        // The legend in the band's top left corner, whole or not at all.
+        if (rsiLegendOk) swprintf_s(buf, 64, L"RSI %d  %.2f", RSI_PERIOD, rsiLegend);
+        else             swprintf_s(buf, 64, L"RSI %d  -", RSI_PERIOD);
+        SIZE lsz = { 0, 0 };
+        GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &lsz);
+        int lx = left + PX(6), ly = bt + PX(3);
+        if (lx + lsz.cx <= right - PX(6) && ly + lsz.cy <= bb) {
+            // In a low band the 70 line runs through the text: then, and
+            // only then, an opaque background - the rule the price legend
+            // has for the level lines (phase 27).
+            BOOL struckB = (y70 >= ly - 1 && y70 <= ly + lsz.cy);
+            if (struckB) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
+            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.rsi, rsiT));
+            ExtTextOutW(hdc, lx, ly, 0, NULL, buf, (int)wcslen(buf), NULL);
+            if (struckB) SetBkMode(hdc, TRANSPARENT);
+        }
+        SetTextColor(hdc, sty->clr.axis);
+    }
+
     // --- Afterglow (phase 23) ---
     // An alert that has fired is REMOVED; left behind is a line in full amber
     // that fades out over a couple of seconds (alertFlashF, 1..0, eased by the
@@ -1461,7 +1663,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             int x = left + (int)(((double)k - dStart + 0.5) * slot);
             if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
             FormatCandleTime(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, tl, 24);
-            ExtTextOutW(hdc, x, bottom + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
+            ExtTextOutW(hdc, x, axisB + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
         }
         SetTextAlign(hdc, oldAlign);
     }
@@ -1681,15 +1883,32 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     const Candle* hc = &in->candles[st->hoverIdx];
     int hx = left + (int)((hrel + 0.5) * slot);
     int hy = st->hoverY;
-    if (hy < top) hy = top;
-    if (hy > bottom) hy = bottom;
+    if (hoverInBand) {                 // phase 39: the horizontal lives in the band
+        if (hy < bt) hy = bt;
+        if (hy > bb) hy = bb;
+    } else {
+        if (hy < top) hy = top;
+        if (hy > bottom) hy = bottom;
+    }
 
     HPEN hPrev = (HPEN)SelectObject(hdc, sty->penCross);
-    MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, bottom);
+    MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, axisB);   // through the band too
     // Same bridge as the last-price line: the horizontal reaches the axis,
     // otherwise there would be a gap between the cross and its label.
     MoveToEx(hdc, left, hy, NULL);     LineTo(hdc, edge, hy);
     SelectObject(hdc, hPrev);
+
+    // In the band the tag carries the RSI level at the pointer, 0..100.
+    if (yBandCross != INT_MIN && !in->desktop && bh > 0) {
+        double lv = 100.0 - ((double)(hy - bt) / (double)bh) * 100.0;
+        swprintf_s(buf, 64, L"%.1f", lv);
+        RECT rcTagB = { edge + 1, hy - tagHalf, axR + PX(3), hy + tagHalf };
+        FillRect(hdc, &rcTagB, sty->brBoxEdge);
+        SelectObject(hdc, sty->fontAxis);
+        SetTextColor(hdc, sty->clr.text);
+        RECT rcTagBT = { axL, hy - tagHalf, axR, hy + tagHalf };
+        DrawTextW(hdc, buf, -1, &rcTagBT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
 
     // Price label on the right axis where the pointer is. Not when it would
     // partly cover the stamp (phase 29, see yCross above): the line is
@@ -1722,8 +1941,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // and fade with them, in the lines' own colors; an average that is not
     // defined at the candle gets a dash, as in the legend.
     const int indRows = (indT > 0) ? 3 : 0;
+    const int rsiRows = (bandOn && rsiT > 0) ? 1 : 0;   // phase 39
     const int LINE_H = PX(13), BOX_W = PX(104);
-    const int BOX_H = PX(4) + (6 + indRows) * LINE_H + PX(5);
+    const int BOX_H = PX(4) + (6 + indRows + rsiRows) * LINE_H + PX(5);
     int bx = hx + PX(12);
     if (bx + BOX_W > right) bx = hx - PX(12) - BOX_W;   // flip to the left at the edge
     if (bx < left) bx = left;
@@ -1770,6 +1990,19 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             SetTextColor(hdc, Blend(sty->clr.box, sty->clr.text, indT));
             DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
         }
+    }
+
+    // The RSI row (phase 39): the value at the candle under the crosshair -
+    // rsiLegendIdx IS hoverIdx here, same condition as the legend.
+    if (rsiRows > 0) {
+        ty += LINE_H;
+        RECT rcRow = { bx + PX(7), ty, bx + BOX_W - PX(6), ty + LINE_H };
+        SetTextColor(hdc, Blend(sty->clr.box, sty->clr.rsi, rsiT));
+        DrawTextW(hdc, L"RSI", -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        if (rsiLegendOk) swprintf_s(buf, 64, L"%.2f", rsiLegend);
+        else             wcscpy_s(buf, 64, L"-");
+        SetTextColor(hdc, Blend(sty->clr.box, sty->clr.text, rsiT));
+        DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
     }
 }
 #undef PX

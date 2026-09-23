@@ -22,7 +22,11 @@ typedef struct {
 // narrower, because it only holds the stamp and no axis labels.
 // dpi (phase 36) is the one the rectangle was computed for, so the hit tests
 // that take a ChartRect scale their zones the same way the drawing did.
-typedef struct { int left, top, right, bottom, cw, ch, edge, dpi; } ChartRect;
+// bandTop/bandBottom (phase 39) are the RSI band under the price pane; equal
+// (both = bottom) when there is no band. bottom and ch stay the PRICE pane's,
+// so every price <-> y function reads them as before; the time axis sits
+// under the lowest pane.
+typedef struct { int left, top, right, bottom, cw, ch, edge, dpi, bandTop, bandBottom; } ChartRect;
 
 // The chart's own state. viewStart/viewCount/followLive are the TARGET view
 // (in TickC written by the UI and read by the worker thread, under the lock);
@@ -40,6 +44,7 @@ typedef struct {
     long long dispShiftSeen;       // frontShift the display has compensated for
     double dispVolF;               // the VOL toggle's display, 0..1
     double dispIndF;               // the indicator toggle's display, 0..1
+    double dispRsiF;               // phase 39: the RSI band's content, 0..1
     int  hoverIdx;       // index of the candle under the pointer, -1 = none
     int  hoverY;         // mouse Y in client coordinates
 #ifdef TICKER_PROBE
@@ -70,6 +75,9 @@ typedef struct {
     // The app passes ChartUtcOffsetMs(); the golden tests pass a constant, so
     // their hashes do not change with the machine's DST state.
     long long     utcOffsetMs;
+    // The RSI band is on (phase 39). The region follows this at once; its
+    // content fades with ChartState.dispRsiF. ChartGeometry takes the same flag.
+    BOOL          band;
 } ChartData;
 
 // The chart's colors (phase 38). Every color the engine draws with comes from
@@ -82,6 +90,7 @@ typedef struct {
     COLORREF axis, volUp, volDown;
     COLORREF sma, ema, vwap, session, prev;
     COLORREF alert, alertLine;
+    COLORREF rsi;                // phase 39
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
@@ -187,6 +196,20 @@ typedef struct {
 #define CLR_SMA          RGB(0x3D, 0x8F, 0xBF)
 #define CLR_EMA          RGB(0xA0, 0x72, 0xD0)
 #define IND_TAU_FADE     ANIM_TAU_FADE   // the MA toggle fades the lines, like the overlay
+// The RSI band (phase 39): RSI 14 with Wilder's smoothing, in a band under the
+// price pane with its own fixed 0..100 scale and the 70/30 levels dashed. The
+// band is RSI_BAND_FRAC of the chart height, at least RSI_BAND_MIN, and it is
+// left out when the price pane would get less than RSI_PANE_MIN - a 400x250
+// panel keeps 142 px of price. Teal: not green (up), not a blue or violet of
+// the averages, not a gold or amber of VWAP and the alerts.
+#define RSI_PERIOD       14
+#define RSI_HI           70
+#define RSI_LO           30
+#define RSI_BAND_FRAC    0.20
+#define RSI_BAND_MIN     40
+#define RSI_PANE_MIN     120
+#define RSI_GAP          6
+#define CLR_RSI          RGB(0x2E, 0xC4, 0xB6)
 // Today's session (phase 27). VWAP is gold and a CURVE; the alerts are amber
 // and horizontal (CLR_ALERT FFB020, the line 86601B) - yellower and lighter
 // here, so the two are not read as the same thing. Today's high/low is
@@ -255,7 +278,7 @@ typedef struct {
 #define IND_BATCH (VOL_BATCH * 4)
 
 // --- Geometry and hit testing ---
-ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi);
+ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band);
 int       ChartAxisW(int dpi);
 int       DeskPillH(int H);
 int       DeskPillFontH(int H);
@@ -284,6 +307,7 @@ BOOL      SessionsNeedHistory(const Candle* c, int n, long long intervalMs, BOOL
 #ifdef TICKER_PROBE
 BOOL      IndValueAt(const Candle* c, int n, int period, BOOL ema, int idx, double* out);
 BOOL      VwapValueAt(const Candle* c, int n, long long intervalMs, BOOL histDone, int idx, double* out);
+BOOL      RsiValueAt(const Candle* c, int n, int idx, double* out);
 #endif
 
 // --- Formatting and colors ---
