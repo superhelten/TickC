@@ -3300,6 +3300,62 @@ with volume bars in view fail (not "overlays off", not the two desktop
 cases, not the light ones). Green 22/22 twice. `golden.ps1`: all eight
 identical to `main`. **Exe 211 456 bytes, unchanged.**
 
+### Phase 39 — an RSI band under the chart
+
+Branch `phase-39`, merged with `--no-ff`. The fourth engine step and the
+first one the user can see: a second pane. RSI 14 was chosen before MACD
+because one line on a fixed 0..100 scale proves the pane without a second
+free axis.
+
+**Engine.** RSI with Wilder's smoothing (the first averages are plain means
+of 14 changes, then `(avg * 13 + x) / 14`), a step machine next to the
+averages and VWAP, always fed from candle 0: like the EMA it has infinite
+memory, and started at the view it would move during panning. The band
+takes `RSI_BAND_FRAC` (a fifth) of the chart height, at least 40 px, under
+the price pane with a 6 px gap and a grid line on its top edge, and it is
+left out when the price pane would get less than 120 px (a 400x250 panel
+keeps 142). **`ChartRect.bottom` and `ch` stay the price pane's**: every
+price <-> y function, the alert hit test, the level lines, the volume bars
+and the watermark read them unchanged, and the band is two new fields,
+`bandTop`/`bandBottom`. `HitCandle` and the vertical crosshair cover the
+band; the time axis sits under it. In the band: 70 and 30 dashed in the
+crosshair's gray, the line in the theme's new `rsi` role (teal - not up
+green, not an average's blue or violet, not VWAP's gold), the last value as
+a tag in the column, "RSI 14" and the value at the crosshair as a legend,
+and a level tag for the crosshair. The column's rank is the price column's:
+the value tag first, the crosshair's tag not within a tag height of it
+(only a strip of its number would show), the 70/30 labels giving way to
+both. In a low band the 70 line runs through the legend, which then gets an
+opaque background - the price legend's rule. The hover box gets an RSI row.
+The region follows the choice at once (it is geometry, which the app's nine
+hit-test calls read without state); the content fades with `dispRsiF`.
+
+**App.** One choice per mode, `ShowRsi` and `ShowRsiDesktop`, **off in
+both**: the band takes a fifth of the chart, which is a change to the panel
+nobody asked for, and the desktop is meant to be quiet. An RSI pill after
+MA (the first to go on a narrow panel, `ToolbarMinW` still sums through
+VOL), the I key, "RSI band" in the tray menu. Turning it on rebuilds the
+watermark (it is centered in the price pane) and drops the hover. Probe
+fields 61 (the choice), 62 (`dispRsiF` x1000) and 63 (RSI at the candle in
+`lParam` x100, -1 undefined).
+
+**Verified.** `chart_golden`: the 22 earlier cases unchanged with the band
+off; six band cases (crosshair in the price pane and in the band, 400x250,
+150 %, light theme, desktop), looked at before their goldens were written -
+which found the crosshair's tag half over the value tag and the legend
+struck by the 70 line, both fixed. Red run with `RSI_PERIOD` 13: exactly the
+six band cases fail. Green 28/28 twice. `golden.ps1` with the band off: the
+desktop and 400x250 identical to `main`; in the six others every differing
+pixel lies in (347-362, 32-39), the label of the new RSI pill, and nowhere
+else. `shot_rsi.ps1`: off by default, on and off through tray command 1008,
+RSI undefined on candle 13, field 63 equal to an independent RSI 14 (in the
+script, over the closes from field 38) on nine candles, and the capture
+after on/off pixel-identical to the one before. The first run of the script
+failed three checks; one was the script reading `-1` as 4294967295 (a
+32-bit `LRESULT` into a 64-bit caller - it now sign-extends); the other two
+did not come back in two further runs, and their cause was not found.
+**Exe 211 456 → 217 088 bytes (+5 632).**
+
 ---
 
 ## Known limitations
@@ -4101,16 +4157,16 @@ identical to `main`. **Exe 211 456 bytes, unchanged.**
 
 ## Backups
 
-**Only `tickc.c.bak32` and `chart.c.bak32` are left** (2026-09-23). From
+**Only `tickc.c.bak33` and `chart.c.bak33` are left** (2026-09-23). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 38 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 39 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak31` (phases 34–37) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak32` (phases 34–38) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37) and `.bak32` (phase 38). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38) and `.bak33` (phase 39). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
