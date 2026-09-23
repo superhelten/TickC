@@ -3126,6 +3126,57 @@ without a window, DPI awareness (a `dpi` field in `ChartStyle`), the colors
 as data, a time axis that compresses gaps, more panes, and a Direct2D backend
 behind the same header.
 
+### Phase 35 — golden tests for the chart engine in a memory DC
+
+Branch `phase-35`, merged with `--no-ff`. The first of the engine steps listed
+after phase 34: tests that draw `chart.c` with no window, no app, no network
+and no clock. The user chose to keep them in the repository (`tests/`), not in
+the scratchpad like the probes.
+
+**Three engine commits first, each pixel-identical.** The test must draw with
+what TickC draws with, not with a copy that drifts:
+`ChartStyleCreate` / `ChartStyleDestroy` own the chart's fonts, pens and
+brushes (`AppContext` holds one `ChartStyle sty`; the header, buttons and
+overlay borrow `fontSmall`, `brBox` and `brBoxEdge` from it), and
+`ChartPillFontCreate(H)` builds the desktop stamp font, which the app still
+owns and rebuilds only when the height changes. The third commit takes the
+clock out of the drawing: the time labels and the hover box called
+`FileTimeToLocalFileTime`, so the picture depended on the machine's DST
+state and a golden written in September would break on October 25.
+`ChartData.utcOffsetMs` now carries the offset; the app passes
+`ChartUtcOffsetMs()`, which is exactly the offset `FileTimeToLocalFileTime`
+added (the one in force now, applied to every date - unchanged behavior).
+
+**The test.** `tests/chart_golden.c` builds seeded random-walk candles (the
+last one closes at 2026-09-21 14:00 UTC; the 1m buffer reaches past the
+previous day's start), sets the state the way TickC does (`SyncDisp`, the
+toggle fades, a hover through `HitCandle` like probe field 104), draws with
+`ChartDrawBackground` + `ChartDrawBody` into a 32 bpp DIB section and hashes
+the RGB of every pixel (FNV-1a 64). Fourteen cases: 1m, 15m, 1h and 1d at
+1280x720, 560x300 and 400x250, the crosshair, a panned and zoomed view, the
+overlays off and half faded, alerts with a ghost tag and an afterglow, twelve
+candles, and the desktop surface at 1920x1080 and 3840x1600 (two stamp
+fonts). Every case is drawn twice (the hashes must agree) and once more into
+a `CreateCompatibleBitmap` bitmap on the screen DC, the kind TickC's back
+buffer is; the two must be pixel-identical, and are in all fourteen.
+`--update` rewrites `tests/golden/chart.txt`, `--bmp` writes the pictures to
+`tests/out/`, and a failing case is always written there.
+
+**Verified.** Red run: the test built against a scratchpad copy of the engine
+with `SESS_DASH_ON` 6 → 5 fails in 9 of 14 cases - exactly those that draw
+today's dashed lines; the five that pass have none in view (1d, the view
+panned back from today, overlays off, and both desktop cases). Green: two
+runs of the real build, 14/14. `golden.ps1` against the test build after
+each engine commit: all eight hashes identical to `main`. The pictures were
+looked at before the goldens were written: the first draft clamped "show
+all" to eight candles and put one alert outside the view (pitfall 99).
+**Exe 207 360 → 206 848 bytes (−512).**
+
+**Next for the engine:** DPI awareness (a `dpi` field in `ChartStyle`), the
+colors as data, a time axis that compresses gaps, more panes, and a Direct2D
+backend behind the same header. Each can now be proven with a golden case
+before and after.
+
 ---
 
 ## Known limitations
@@ -3870,6 +3921,23 @@ behind the same header.
     printed "changed?" flag per file showed it. Match the
     separator with `.` (`sed -E 's/(Desktop.Ticker.)ticker/...'`) or write
     the script with the Write tool, as in 93.
+99. **`ClampView` turns "show all" into eight candles.** `viewCount == 0`
+    means the whole buffer (`GetView`), but `ClampView` raises anything below
+    `MIN_VIEW`, zero included. TickC never clamps a zero view. A test that
+    builds the state has to copy the order the app uses, not the call that
+    looks right - the first 1d golden showed 8 of 200 candles, and only the
+    picture showed it.
+100. **A black capture from `golden.ps1` is "not drawn", not a difference.**
+    One run after phase 35's third commit gave all-black panel captures (every
+    pixel differed); the rerun of the same exe was identical to `main`. Look at
+    a DIFF picture before reading anything into it, and rerun.
+101. **PowerShell variables are case-insensitive.** `foreach ($n in ...)`
+    overwrote `$N`, the scratchpad path, and the next `Save` wrote to
+    `<case name>\png`. Loop variables get names no outer variable has.
+102. **An image viewer's downscale lies about colors.** In the alert golden the
+    alert lines looked light gray; the pixels were `86601B`
+    (`CLR_ALERT_LINE`), exactly right. Read the pixel values before calling a
+    color wrong.
 
 ---
 
