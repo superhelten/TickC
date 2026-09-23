@@ -275,6 +275,9 @@ int       NiceTimeStep(int step, long long intervalMs);
 // ChartStyleDestroy frees them.
 BOOL      ChartStyleCreate(ChartStyle* sty);
 void      ChartStyleDestroy(ChartStyle* sty);
+// The desktop stamp font for a surface H px high (DeskPillFontH). The caller
+// owns it and sets it as ChartStyle.fontPill.
+HFONT     ChartPillFontCreate(int H);
 
 // --- Drawing ---
 // Background: the cached watermark bitmap when there is one, else brBg.

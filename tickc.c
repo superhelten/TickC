@@ -2148,10 +2148,7 @@ static void EnsurePillFont(AppContext* ctx, int H) {
     int fh = DeskPillFontH(H);
     if (ctx->hFontPill && ctx->pillFontH == fh) return;
     if (ctx->hFontPill) DeleteObject(ctx->hFontPill);
-    ctx->hFontPill = CreateFontW(-fh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
-                                 L"Lucida Console");
+    ctx->hFontPill = ChartPillFontCreate(H);
     ctx->pillFontH = ctx->hFontPill ? fh : 0;
 }
 

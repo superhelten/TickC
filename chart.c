@@ -796,6 +796,13 @@ BOOL ChartStyleCreate(ChartStyle* sty) {
            sty->brBoxEdge && sty->brVolUp && sty->brVolDown;
 }
 
+HFONT ChartPillFontCreate(int H) {
+    return CreateFontW(-DeskPillFontH(H), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                       DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                       L"Lucida Console");
+}
+
 void ChartStyleDestroy(ChartStyle* sty) {
     HGDIOBJ own[] = { sty->fontSmall, sty->fontAxis, sty->penGrid, sty->penCross,
                       sty->penLastUp, sty->penLastDown, sty->brBg, sty->brBox,
