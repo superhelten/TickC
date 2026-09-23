@@ -359,18 +359,28 @@ int DeskPillFontH(int H) { return MulDiv(DeskPillH(H), 15, 16); }
 // that is really 22.2 px would have given eight characters 1.6 px too little,
 // and the price would silently have fallen back to the axis's resolution
 // instead of two decimals.
-int DeskAxisW(int H) {
+int DeskAxisW(int H, int dpi) {
     int cw = (DeskPillFontH(H) * AXIS_CHAR_W + 14) / 15;
-    return AXIS_LBL_GAP + AXIS_Y_CHARS * cw + AXIS_PAD_R;
+    return ChartPx(dpi, AXIS_LBL_GAP) + AXIS_Y_CHARS * cw + ChartPx(dpi, AXIS_PAD_R);
 }
 
-ChartRect ChartGeometry(int W, int H, BOOL desktop) {
+// The panel's price column at dpi (phase 36): PAD_R at 96. The character
+// width follows the axis font the same way as on the desktop - em 15 gives 9
+// px, and the width is rounded up - so eight characters always fit.
+int ChartAxisW(int dpi) {
+    int cw = (ChartPx(dpi, 15) * AXIS_CHAR_W + 14) / 15;
+    return ChartPx(dpi, AXIS_LBL_GAP) + AXIS_Y_CHARS * cw + ChartPx(dpi, AXIS_PAD_R);
+}
+
+ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi) {
     ChartRect g;
-    g.left   = desktop ? 0 : PAD_L;
-    g.top    = desktop ? 0 : HEADER_H;
-    g.edge   = desktop ? W - DeskAxisW(H) : W - PAD_R;
-    g.right  = g.edge - PLOT_PAD_R;
-    g.bottom = desktop ? H : H - PAD_B;
+    if (dpi <= 0) dpi = CHART_DPI_BASE;
+    g.dpi    = dpi;
+    g.left   = desktop ? 0 : ChartPx(dpi, PAD_L);
+    g.top    = desktop ? 0 : ChartPx(dpi, HEADER_H);
+    g.edge   = desktop ? W - DeskAxisW(H, dpi) : W - ChartAxisW(dpi);
+    g.right  = g.edge - ChartPx(dpi, PLOT_PAD_R);
+    g.bottom = desktop ? H : H - ChartPx(dpi, PAD_B);
     g.cw     = g.right - g.left;
     g.ch     = g.bottom - g.top;
     return g;
@@ -424,12 +434,13 @@ double AlertPriceAtY(const ChartState* ctx, const ChartRect* g, int y) {
 // ALERT_HIT_PX - that is, exactly the area the tag is drawn on - and -1
 // otherwise. Tags outside [top, bottom] are not drawn and cannot be hit.
 int AlertAxisHit(const ChartState* ctx, const ChartRect* g, const double* alerts, int alertCount, int my) {
-    int best = -1, bestD = ALERT_HIT_PX + 1;
+    int hitPx = ChartPx(g->dpi, ALERT_HIT_PX);
+    int best = -1, bestD = hitPx + 1;
     for (int i = 0; i < alertCount; ++i) {
         int y = AlertY(ctx, g, fabs(alerts[i]));
         if (y < g->top || y > g->bottom) continue;
         // The tag is [y - 8, y + 8): FillRect is exclusive at the bottom.
-        if (my < y - ALERT_HIT_PX || my >= y + ALERT_HIT_PX) continue;
+        if (my < y - hitPx || my >= y + hitPx) continue;
         int d = abs(my - y);
         if (d < bestD) { bestD = d; best = i; }
     }
@@ -744,11 +755,12 @@ static BOOL DrawVwap(HDC hdc, const ChartData* in, const ChartRect* g, COLORREF 
 // still when the session start slides during panning. GDI does not draw the
 // end point, so [a, b) is exactly dashOn pixels. The period is shared
 // (SESS_DASH_PERIOD); dashOn separates today's lines from yesterday's (phase 28).
-static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn) {
+// Both arrive scaled to the chart's dpi (phase 36).
+static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn, int period) {
     if (x0 < anchor) x0 = anchor;
-    int x = anchor + ((x0 - anchor) / SESS_DASH_PERIOD) * SESS_DASH_PERIOD;
+    int x = anchor + ((x0 - anchor) / period) * period;
     int k = 0;
-    for (; x < x1; x += SESS_DASH_PERIOD) {
+    for (; x < x1; x += period) {
         int a = (x < x0) ? x0 : x;
         int b = x + dashOn;
         if (b > x1) b = x1;
@@ -763,9 +775,11 @@ static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn)
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
 // 34). Created once, not per repaint.
-BOOL ChartStyleCreate(ChartStyle* sty) {
+BOOL ChartStyleCreate(ChartStyle* sty, int dpi) {
     ZeroMemory(sty, sizeof(*sty));
-    sty->fontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    if (dpi <= 0) dpi = CHART_DPI_BASE;
+    sty->dpi = dpi;
+    sty->fontSmall = CreateFontW(-ChartPx(dpi, 11), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     // The price and time axes. Monospace, so the labels stand still when the
@@ -775,8 +789,8 @@ BOOL ChartStyleCreate(ChartStyle* sty) {
     // Console em 15 gives 11 px digit height, 9 px character width and
     // tmHeight 15. Consolas jumps from 10 to 12 px (em 16 -> 17), Cascadia Mono
     // em 16 gives 11 px but tmHeight 21, which does not fit in the time axis's
-    // 18 px.
-    sty->fontAxis = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    // 18 px. At other dpi the em scales with it, and ChartAxisW follows.
+    sty->fontAxis = CreateFontW(-ChartPx(dpi, 15), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                 ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
                                 L"Lucida Console");
@@ -831,11 +845,17 @@ void ChartDrawBackground(HDC hdc, int W, int H, HDC wmDC, HBRUSH brBg) {
 // the GDI objects in sty; writes only st (front shift, display sync, probe
 // fields). W and H are the client size; the geometry follows from them and
 // in->desktop.
+// Every fixed length below is a 96-dpi value through PX (phase 36).
+#define PX(v) ChartPx(dpi, (v))
 void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                    const ChartStyle* sty) {
     int n = in->count;
     wchar_t buf[64];
-    ChartRect g = ChartGeometry(W, H, in->desktop);
+    int dpi = (sty->dpi > 0) ? sty->dpi : CHART_DPI_BASE;
+    ChartRect g = ChartGeometry(W, H, in->desktop, dpi);
+    // The tags on the price axis: [y - tagHalf, y + tagHalf), and two tags
+    // closer than tagH collide (16 px at 96 dpi).
+    int tagHalf = PX(8), tagH = 2 * tagHalf;
 
     // --- Chart geometry ---
     int left = g.left, top = g.top, right = g.right, bottom = g.bottom;
@@ -898,7 +918,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     double slot = (double)cw / dCount;
     int bodyW = (int)(slot * 0.62);
     if (bodyW < 1)  bodyW = 1;
-    if (bodyW > 18) bodyW = 18;   // prevents chunky candles at full zoom-in
+    if (bodyW > PX(18)) bodyW = PX(18);   // prevents chunky candles at full zoom-in
 
     // The loop still runs over VISIBLE candles, not over the whole history:
     // i1 - i0 is dCount + 1 rounded. The performance characteristics from
@@ -1054,7 +1074,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int y = top + (int)yy;
                 if (y < top || y > bottom) continue;
                 SetDCPenColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
-                DrawDashLine(hdc, xs, edge, y, left, LVL_DASH[q]);
+                DrawDashLine(hdc, xs, edge, y, left, PX(LVL_DASH[q]), PX(SESS_DASH_PERIOD));
                 yLvl[q] = y;
                 yLine[q] = y;
             }
@@ -1171,7 +1191,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // A separate loop after the clipping, not in the grid loop: there they
     // would have been clipped away along with everything else outside rcChart.
     // Omega_y-axis: x in [edge + AXIS_LBL_GAP, W - AXIS_PAD_R).
-    int axL = edge + AXIS_LBL_GAP, axR = W - AXIS_PAD_R;
+    int axL = edge + PX(AXIS_LBL_GAP), axR = W - PX(AXIS_PAD_R);
     SelectObject(hdc, sty->fontAxis);
     SetTextColor(hdc, CLR_AXIS);
     // The stamp for the last price lies on top of the label at the same
@@ -1209,7 +1229,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int hyT = st->hoverY;
                 if (hyT < top) hyT = top;
                 if (hyT > bottom) hyT = bottom;
-                if (yPill == INT_MIN || abs(hyT - yPill) >= 16) yCross = hyT;
+                if (yPill == INT_MIN || abs(hyT - yPill) >= tagH) yCross = hyT;
             }
         }
         if (yCross != INT_MIN) yTag[nTag++] = yCross;
@@ -1231,23 +1251,23 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         // ahead of it in rank that was itself kept.
         for (int q = 0; q < LVL_COUNT; ++q) {
             if (yLvl[q] == INT_MIN) continue;
-            BOOL hide = (yPill != INT_MIN && abs(yLvl[q] - yPill) < 16);
-            for (int t = 0; t < nTag && !hide; ++t) if (abs(yLvl[q] - yTag[t]) < 16) hide = TRUE;
+            BOOL hide = (yPill != INT_MIN && abs(yLvl[q] - yPill) < tagH);
+            for (int t = 0; t < nTag && !hide; ++t) if (abs(yLvl[q] - yTag[t]) < tagH) hide = TRUE;
             for (int p = 0; p < q && !hide; ++p)
-                if (yLvl[p] != INT_MIN && abs(yLvl[q] - yLvl[p]) < 16) hide = TRUE;
+                if (yLvl[p] != INT_MIN && abs(yLvl[q] - yLvl[p]) < tagH) hide = TRUE;
             if (hide) yLvl[q] = INT_MIN;
         }
 
         for (int i = 0; i <= 4; ++i) {
             int y = top + (ch * i) / 4;
-            if (yPill != INT_MIN && abs(y - yPill) < 16) continue;
+            if (yPill != INT_MIN && abs(y - yPill) < tagH) continue;
             BOOL hidden = FALSE;
-            for (int t = 0; t < nTag; ++t) if (abs(y - yTag[t]) < 16) hidden = TRUE;
-            for (int q = 0; q < LVL_COUNT; ++q) if (yLvl[q] != INT_MIN && abs(y - yLvl[q]) < 16) hidden = TRUE;
+            for (int t = 0; t < nTag; ++t) if (abs(y - yTag[t]) < tagH) hidden = TRUE;
+            for (int q = 0; q < LVL_COUNT; ++q) if (yLvl[q] != INT_MIN && abs(y - yLvl[q]) < tagH) hidden = TRUE;
             if (hidden) continue;
             double p = maxP - (range * i) / 4.0;
             swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
-            RECT rcLbl = { axL, y - 8, axR, y + 8 };
+            RECT rcLbl = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
@@ -1263,7 +1283,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             int y = AlertY(st, &g, lvl);
             if (y < top || y > bottom) continue;
             BOOL hot = (a == in->alertHot && in->alerts[a] != in->alertFresh);
-            RECT rcA = { edge + 1, y - 8, axR + 3, y + 8 };
+            RECT rcA = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
             SetDCBrushColor(hdc, hot ? CLR_CLOSEHOT : CLR_ALERT);
             FillRect(hdc, &rcA, (HBRUSH)GetStockObject(DC_BRUSH));
             // If the stamp or a tag drawn later lies on top of this one, only
@@ -1271,16 +1291,16 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // lengthwise. Same rule as the labels: a clipped number is worse
             // than no number (seen in PrintWindow: "81034.00" halfway under
             // the stamp). The surface is drawn, the text is not.
-            BOOL covered = (yPill != INT_MIN && abs(y - yPill) < 16) ||
-                           (yCross != INT_MIN && abs(y - yCross) < 16);
+            BOOL covered = (yPill != INT_MIN && abs(y - yPill) < tagH) ||
+                           (yCross != INT_MIN && abs(y - yCross) < tagH);
             for (int b = a + 1; b < nA && !covered; ++b) {
                 int yb = AlertY(st, &g, fabs(in->alerts[b]));
-                if (yb >= top && yb <= bottom && abs(y - yb) < 16) covered = TRUE;
+                if (yb >= top && yb <= bottom && abs(y - yb) < tagH) covered = TRUE;
             }
             if (covered) continue;
             FormatTagPrice(hdc, lvl, range, axR - axL, buf, 64);
             SetTextColor(hdc, hot ? CLR_BTNHOT : CLR_BG);
-            RECT rcAT = { axL, y - 8, axR, y + 8 };
+            RECT rcAT = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
@@ -1294,12 +1314,12 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         for (int q = 0; q < LVL_COUNT; ++q) {
             if (yLvl[q] == INT_MIN) continue;
             int y = yLvl[q];
-            RECT rcS = { edge + 1, y - 8, axR + 3, y + 8 };
+            RECT rcS = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
             SetDCBrushColor(hdc, Blend(CLR_BG, CLR_BOX, indT));
             FillRect(hdc, &rcS, (HBRUSH)GetStockObject(DC_BRUSH));
             FormatTagPrice(hdc, lvlP[q], range, axR - axL, buf, 64);
             SetTextColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
-            RECT rcST = { axL, y - 8, axR, y + 8 };
+            RECT rcST = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcST, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
@@ -1316,13 +1336,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             SetDCPenColor(hdc, full ? CLR_CROSS : CLR_ALERT_LINE);
             MoveToEx(hdc, left, y, NULL);
             LineTo(hdc, edge, y);
-            RECT rcG = { edge + 1, y - 8, axR + 3, y + 8 };
+            RECT rcG = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
             FillRect(hdc, &rcG, sty->brBox);
             SetDCBrushColor(hdc, gc);
             FrameRect(hdc, &rcG, (HBRUSH)GetStockObject(DC_BRUSH));
             FormatTagPrice(hdc, AlertPriceAtY(st, &g, y), range, axR - axL, buf, 64);
             SetTextColor(hdc, gc);
-            RECT rcGT = { axL, y - 8, axR, y + 8 };
+            RECT rcGT = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcGT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
         SetTextColor(hdc, CLR_AXIS);   // the time axis below inherits the color
@@ -1366,8 +1386,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         int tlLen = (int)wcslen(tl);
         SIZE tsz = { 0, 0 };
         GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // the axis font is selected
-        int minDx = tsz.cx + TIME_LBL_GAP;
-        if (minDx < TIME_DX_MIN) minDx = TIME_DX_MIN;
+        int minDx = tsz.cx + PX(TIME_LBL_GAP);
+        if (minDx < PX(TIME_DX_MIN)) minDx = PX(TIME_DX_MIN);
         long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
         int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
 
@@ -1384,7 +1404,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             int x = left + (int)(((double)k - dStart + 0.5) * slot);
             if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
             FormatCandleTime(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, tl, 24);
-            ExtTextOutW(hdc, x, bottom + 2, 0, NULL, tl, (int)wcslen(tl), NULL);
+            ExtTextOutW(hdc, x, bottom + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
         }
         SetTextAlign(hdc, oldAlign);
     }
@@ -1423,8 +1443,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         GetTextExtentPoint32W(hdc, lg, lenAll, &szAll);
         GetTextExtentPoint32W(hdc, lg, len1, &sz1);
         GetTextExtentPoint32W(hdc, lg, len3, &sz3);
-        int lx = left + 6, ly = top + 4;
-        if (lx + szAll.cx <= right - 6 && ly + szAll.cy <= bottom) {
+        int lx = left + PX(6), ly = top + PX(4);
+        if (lx + szAll.cx <= right - PX(6) && ly + szAll.cy <= bottom) {
             // Today's high (phase 27) lies 8 % below the surface's top when
             // today's top is the view's, and on a short panel that is in the
             // middle of this row: the dashes ran right through the digits
@@ -1439,7 +1459,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
             SetTextColor(hdc, Blend(CLR_BG, CLR_EMA, indT));
             ExtTextOutW(hdc, lx + sz1.cx, ly, 0, NULL, lg + len1, lenAll - len1, NULL);
-            if (lx + sz3.cx <= right - 6) {
+            if (lx + sz3.cx <= right - PX(6)) {
                 SetTextColor(hdc, Blend(CLR_BG, CLR_VWAP, indT));
                 ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
             }
@@ -1469,7 +1489,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         QueryPerformanceCounter(&lblQ0);
         st->probeLblMask = 0;
 #endif
-        if (right - left >= 200) {
+        if (right - left >= PX(200)) {
             RECT placed[LVL_COUNT + 1];
             int  nPlaced = 0;
             if (rcLegend.right > rcLegend.left) placed[nPlaced++] = rcLegend;
@@ -1477,8 +1497,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 if (yLine[q] == INT_MIN) continue;
                 SIZE szN = { 0, 0 };
                 GetTextExtentPoint32W(hdc, LVL_NAME[q], 3, &szN);
-                RECT rcN = { lvlXs + 4, yLine[q] - 2 - szN.cy, lvlXs + 4 + szN.cx, yLine[q] - 2 };
-                if (rcN.top < top) { rcN.top = yLine[q] + 3; rcN.bottom = rcN.top + szN.cy; }
+                RECT rcN = { lvlXs + PX(4), yLine[q] - PX(2) - szN.cy, lvlXs + PX(4) + szN.cx, yLine[q] - PX(2) };
+                if (rcN.top < top) { rcN.top = yLine[q] + PX(3); rcN.bottom = rcN.top + szN.cy; }
                 if (rcN.bottom > bottom || rcN.right > right) continue;
                 BOOL hit = FALSE;
                 for (int t = 0; t < nPlaced && !hit; ++t) {
@@ -1559,9 +1579,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // still gone - and the height follows the surface instead of the
             // panel's fixed 16 px.
             {
-                int half = in->desktop ? DeskPillH(H) / 2 : 8;
+                int half = in->desktop ? DeskPillH(H) / 2 : tagHalf;
 
-                RECT rcPill = { edge + 1, yLast - half, axR + 3, yLast + half };
+                RECT rcPill = { edge + 1, yLast - half, axR + PX(3), yLast + half };
                 SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
                 FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
@@ -1620,11 +1640,11 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     if (yCross != INT_MIN) {
         double hp = maxP - ((double)(hy - top) / (double)ch) * range;
         swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
-        RECT rcTag = { edge + 1, hy - 8, axR + 3, hy + 8 };
+        RECT rcTag = { edge + 1, hy - tagHalf, axR + PX(3), hy + tagHalf };
         FillRect(hdc, &rcTag, sty->brBoxEdge);
         SelectObject(hdc, sty->fontAxis);
         SetTextColor(hdc, CLR_TEXT);
-        RECT rcTagTxt = { axL, hy - 8, axR, hy + 8 };
+        RECT rcTagTxt = { axL, hy - tagHalf, axR, hy + tagHalf };
         DrawTextW(hdc, buf, -1, &rcTagTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 #ifdef TICKER_PROBE
@@ -1645,9 +1665,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // and fade with them, in the lines' own colors; an average that is not
     // defined at the candle gets a dash, as in the legend.
     const int indRows = (indT > 0) ? 3 : 0;
-    const int BOX_W = 104, BOX_H = 87 + indRows * 13, LINE_H = 13;
-    int bx = hx + 12;
-    if (bx + BOX_W > right) bx = hx - 12 - BOX_W;   // flip to the left at the edge
+    const int LINE_H = PX(13), BOX_W = PX(104);
+    const int BOX_H = PX(4) + (6 + indRows) * LINE_H + PX(5);
+    int bx = hx + PX(12);
+    if (bx + BOX_W > right) bx = hx - PX(12) - BOX_W;   // flip to the left at the edge
     if (bx < left) bx = left;
     int by = hy - BOX_H / 2;
     if (by < top) by = top;
@@ -1657,8 +1678,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     FillRect(hdc, &rcBox, sty->brBox);
     FrameRect(hdc, &rcBox, sty->brBoxEdge);
 
-    int ty = by + 4;
-    RECT rcL = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
+    int ty = by + PX(4);
+    RECT rcL = { bx + PX(7), ty, bx + BOX_W - PX(6), ty + LINE_H };
     SetTextColor(hdc, CLR_TEXT);
     DrawTextW(hdc, tbuf, -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
@@ -1668,7 +1689,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 
     for (int i = 0; i < 5; ++i) {
         ty += LINE_H;
-        RECT rcRow = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
+        RECT rcRow = { bx + PX(7), ty, bx + BOX_W - PX(6), ty + LINE_H };
         SetTextColor(hdc, CLR_DIM);
         DrawTextW(hdc, lbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         if (i == 4) FormatVolume(val[i], buf, 64);   // phase 21
@@ -1684,7 +1705,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         const COLORREF iclr[3] = { CLR_SMA, CLR_EMA, CLR_VWAP };
         for (int i = 0; i < 3; ++i) {
             ty += LINE_H;
-            RECT rcRow = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
+            RECT rcRow = { bx + PX(7), ty, bx + BOX_W - PX(6), ty + LINE_H };
             SetTextColor(hdc, Blend(CLR_BOX, iclr[i], indT));
             DrawTextW(hdc, ilbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             if (indOk[i]) swprintf_s(buf, 64, L"%.2f", indVal[i]);
@@ -1694,3 +1715,4 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         }
     }
 }
+#undef PX

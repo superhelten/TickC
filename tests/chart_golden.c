@@ -50,25 +50,33 @@ typedef struct {
     double volF, indF;
     int  hoverX, hoverY;   // -1 = no crosshair
     BOOL alerts;      // two alerts, a ghost tag on the axis and an afterglow
+    int  dpi;         // 96 = 100 %, 144 = 150 %, 192 = 200 % (phase 36)
 } Case;
 
 // The desktop stamp is sized from H (DeskPillFontH); 1920x1080 and a 3840x1600
 // surface give two different stamp fonts.
 static const Case CASES[] = {
-    { "panel_1m_1280x720",      1280, 720, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE },
-    { "panel_15m_1280x720",     1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE },
-    { "panel_1h_1280x720",      1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE },
-    { "panel_1d_1280x720",      1280, 720, FALSE, DAY_MS,       200, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE },
-    { "panel_15m_560x300",       560, 300, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE },
-    { "panel_1h_400x250",        400, 250, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE },
-    { "panel_1h_hover",         1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE },
-    { "panel_1h_panned_zoomed", 1280, 720, FALSE, HOUR_MS,      360, FALSE,  60, 90, 1.0, 1.0,  -1,  -1, FALSE },
-    { "panel_1h_overlays_off",  1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE },
-    { "panel_1h_overlays_fade", 1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.5, 0.5,  -1,  -1, FALSE },
-    { "panel_15m_alerts",       1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE  },
-    { "panel_1m_few_candles",    560, 300, FALSE, MIN_MS,        12, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE },
-    { "desktop_1m_1920x1080",   1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE },
-    { "desktop_1m_3840x1600",   3840,1600, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE },
+    { "panel_1m_1280x720",      1280, 720, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "panel_15m_1280x720",     1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "panel_1h_1280x720",      1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "panel_1d_1280x720",      1280, 720, FALSE, DAY_MS,       200, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "panel_15m_560x300",       560, 300, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "panel_1h_400x250",        400, 250, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "panel_1h_hover",         1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96 },
+    { "panel_1h_panned_zoomed", 1280, 720, FALSE, HOUR_MS,      360, FALSE,  60, 90, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "panel_1h_overlays_off",  1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96 },
+    { "panel_1h_overlays_fade", 1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.5, 0.5,  -1,  -1, FALSE,  96 },
+    { "panel_15m_alerts",       1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96 },
+    { "panel_1m_few_candles",    560, 300, FALSE, MIN_MS,        12, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
+    { "desktop_1m_1920x1080",   1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96 },
+    { "desktop_1m_3840x1600",   3840,1600, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96 },
+    // Phase 36: panels at 150 % and 200 %, in device pixels - what a
+    // per-monitor-aware panel gets for 1280x720 and 560x300 logical.
+    { "dpi144_1h_1920x1080",    1920,1080, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144 },
+    { "dpi144_1h_hover",        1920,1080, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,1050, 450, FALSE, 144 },
+    { "dpi144_15m_alerts",      1920,1080, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,  144 },
+    { "dpi144_15m_840x450",      840, 450, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144 },
+    { "dpi192_1m_2560x1440",    2560,1440, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,1400, 600, FALSE, 192 },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -118,7 +126,7 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
     st.hoverIdx = -1;
     if (k->hoverX >= 0) {
         // As TickC's probe field 104 does it: a mouse move at (x, y).
-        ChartRect g = ChartGeometry(k->W, k->H, k->desktop);
+        ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi);
         st.hoverIdx = HitCandle(&st, k->n, &g, k->hoverX, k->hoverY);
         st.hoverY   = k->hoverY;
     }
@@ -136,7 +144,7 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
     in.axisHotY = -1;
     in.utcOffsetMs = UTC_OFFSET_MS;
     if (k->alerts) {
-        ChartRect g = ChartGeometry(k->W, k->H, k->desktop);
+        ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi);
         in.alerts = alerts; in.alertCount = 2;
         in.axisHotY = g.top + (g.bottom - g.top) / 3;   // ghost tag under the pointer
         in.alertFlashLevel = floor(last * 0.975);   // a fired one, gone from the list
@@ -294,8 +302,6 @@ int main(int argc, char** argv) {
     sprintf_s(goldPath, MAX_PATH, "%s\\golden\\chart.txt", dir);
     sprintf_s(outDir, MAX_PATH, "%s\\out", dir);
 
-    ChartStyle sty;
-    if (!ChartStyleCreate(&sty)) { printf("ChartStyleCreate failed\n"); return 2; }
     LoadGoldens(goldPath);
     if (!update && s_goldCount == 0) printf("no goldens in %s - run with --update\n", goldPath);
 
@@ -303,9 +309,17 @@ int main(int argc, char** argv) {
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
+        // One style per case: the fonts are built for the case's dpi.
+        ChartStyle sty;
+        if (!ChartStyleCreate(&sty, k->dpi)) { printf("FAIL %s: ChartStyleCreate\n", k->name); fails++; continue; }
         Surface s;
         ZeroMemory(&s, sizeof(s));
-        if (!SurfaceOpen(&s, k->W, k->H)) { printf("FAIL %s: no DIB section\n", k->name); fails++; continue; }
+        if (!SurfaceOpen(&s, k->W, k->H)) {
+            printf("FAIL %s: no DIB section\n", k->name);
+            fails++;
+            ChartStyleDestroy(&sty);
+            continue;
+        }
 
         DrawCase(s.dc, k, &sty);
         unsigned long long h = Fnv(s.px, k->W * k->H);
@@ -334,8 +348,8 @@ int main(int argc, char** argv) {
             WriteBmp(path, &s);
         }
         SurfaceClose(&s);
+        ChartStyleDestroy(&sty);
     }
-    ChartStyleDestroy(&sty);
 
     if (update) {
         FILE* f;

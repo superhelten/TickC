@@ -2064,7 +2064,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     SetTextColor(ctx->wmDC, Blend(CLR_BG, CLR_WM_INK,
                                   (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
 
-    ChartRect g = ChartGeometry(W, H, g_desktopMode);
+    ChartRect g = ChartGeometry(W, H, g_desktopMode, g_Ctx.sty.dpi);
 
     // The font height follows the height of the chart surface, not a fixed
     // value: a small panel must not get the watermark clipped, and a large
@@ -3199,7 +3199,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
+            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
 
             // Button hover. Must come after the TrackMouseEvent arming above
             // (pitfall 13) and before the overlay and panning branches, which
@@ -3357,7 +3357,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
+            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
             if (g.cw <= 0) return 0;
 
             BOOL ctrl   = (GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0;
@@ -3491,7 +3491,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 104: {
                     RECT rcH;
                     GetClientRect(hwnd, &rcH);
-                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom, g_desktopMode);
+                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom, g_desktopMode, g_Ctx.sty.dpi);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gH, LOWORD(lParam), HIWORD(lParam));
                     g_Ctx.ch.hoverY   = HIWORD(lParam);
                     InvalidateRect(hwnd, NULL, FALSE);
@@ -3634,7 +3634,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 {
                     RECT rcE;
                     GetClientRect(hwnd, &rcE);
-                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom, g_desktopMode);
+                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom, g_desktopMode, g_Ctx.sty.dpi);
 
                     int tvs = 0, tvc = 0, tn = 0;
                     double tMin = 0.0, tMax = 1.0, tVol = 0.0;
@@ -3740,7 +3740,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (!g_Ctx.overlayOpen) {
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
-                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom, g_desktopMode);
+                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom, g_desktopMode, g_Ctx.sty.dpi);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
                 // [g.left, edge]: the chart and the headroom. Up to and
                 // including phase 22 the area went all the way to W, with the
@@ -3804,7 +3804,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
             }
 
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
+            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
             // The price column (phase 23): set or remove an alert. Same
             // area as the hover block in WM_MOUSEMOVE, and same data requirement.
             if (g_Ctx.ch.dispValid && dx > gg.edge && dy >= gg.top && dy <= gg.bottom) {
@@ -3836,7 +3836,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_RBUTTONUP: {
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
+            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi);
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             if (!g_Ctx.overlayOpen &&
                 mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
@@ -3952,7 +3952,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     if (g_Ctx.ch.hoverIdx >= 0 && g_Ctx.ch.dispValid) {
                         RECT rcA;
                         GetClientRect(hwnd, &rcA);
-                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom, g_desktopMode);
+                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom, g_desktopMode, g_Ctx.sty.dpi);
                         int hy = g_Ctx.ch.hoverY;
                         if (hy < ga.top)    hy = ga.top;
                         if (hy > ga.bottom) hy = ga.bottom;
@@ -4817,7 +4817,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     // The chart's fonts, pens and brushes (phase 35: one definition, shared
     // with the golden tests in tests/).
-    ChartStyleCreate(&g_Ctx.sty);
+    // 96 dpi: the panel is DPI-unaware, and Windows scales it as a bitmap.
+    ChartStyleCreate(&g_Ctx.sty, CHART_DPI_BASE);
     // hFontWm is not created here: the height depends on the panel size, so
     // it is built in EnsureWatermark and only when the height changes.
 
