@@ -244,6 +244,17 @@ typedef struct {
     // the fetch and discards the response if the counter has changed when it
     // comes back. Without this, BTC candles get merged into an ETH buffer.
     unsigned configGen;
+    // The range (phase 41): a period on the Bloomberg model (1D ... Max),
+    // independent of the bar size. rangeIdx is the selected one, -1 = none;
+    // UI-owned. It is the panel's HOME view: ResetView (R, double-click,
+    // opening) goes back to it. rangeWant is how many candles the home view
+    // holds at the current interval, 0 while the user has moved the view
+    // away (zoom, pan, keys). Lock-protected: the UI writes it, and the
+    // worker thread reads it where it sets a followed view - without it a
+    // wanted 365 would be clamped to the 360 the first fetch brings, and
+    // stay there after the backfill.
+    int  rangeIdx;
+    int  rangeWant;
 
     Candle candles[MAX_CANDLES];
     int candleCount;
@@ -277,11 +288,16 @@ typedef struct {
     BOOL   overlayOpen;
     double overlayF;      // 0-255
     int    overlayHot;    // index into rows[], -1 = none
+    // Phase 41: 0 = the picker with both columns (the symbol pill, a
+    // right-click), 1 = the intervals alone as a dropdown under the interval
+    // pill. The same rows and indices; only the layout differs. Kept after
+    // closing, so the fade-out draws the box that was open.
+    int    overlayKind;
 
     // --- Worker thread ---
     // The lock covers candles[], candleCount, viewStart, viewCount,
-    // followLive, lastPrice, hPopup, frontShift, histPending and histDone.
-    // Everything else is touched only by the UI thread.
+    // followLive, lastPrice, hPopup, frontShift, histPending, histDone and
+    // rangeWant (phase 41). Everything else is touched only by the UI thread.
     CRITICAL_SECTION lock;
     HANDLE hThread;
     HANDLE hStopEvent;   // manual reset: signals shutdown
@@ -1137,7 +1153,11 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     // first opening showed 8 candles instead of 300, in every build since
     // phase 1 - and every duplicate from [ + ] opens just before it has data.
     if (ctx->ch.followLive) {
-        if (ctx->ch.viewCount <= 0) {
+        if (ctx->rangeWant > 0) {
+            // At home in a range (phase 41): as many as it wants, up to what
+            // the buffer holds - the backfill brings the rest.
+            ctx->ch.viewCount = (ctx->candleCount < ctx->rangeWant) ? ctx->candleCount : ctx->rangeWant;
+        } else if (ctx->ch.viewCount <= 0) {
             ctx->ch.viewCount = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
         }
         ctx->ch.viewStart = ctx->candleCount - ctx->ch.viewCount;
@@ -1179,6 +1199,14 @@ static void PrependCandles(AppContext* ctx, const Candle* in, int count) {
         // places, so the same candles stand under it.
         if (ctx->ch.viewCount > 0) {
             ctx->ch.viewStart += k;
+            ClampView(&ctx->ch, ctx->candleCount);
+        }
+        // At home in a range (phase 41) the view grows with the backfill
+        // until it holds what the range wants.
+        if (ctx->ch.followLive && ctx->rangeWant > 0) {
+            int vc = (ctx->candleCount < ctx->rangeWant) ? ctx->candleCount : ctx->rangeWant;
+            ctx->ch.viewCount = vc;
+            ctx->ch.viewStart = ctx->candleCount - vc;
             ClampView(&ctx->ch, ctx->candleCount);
         }
     }
@@ -1575,7 +1603,7 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     }
 
     if (ctx->ch.followLive) {
-        int vc = ctx->ch.viewCount;
+        int vc = (ctx->rangeWant > 0) ? ctx->rangeWant : ctx->ch.viewCount;   // phase 41
         if (vc <= 0) vc = DEFAULT_VIEW;
         if (vc > ctx->candleCount) vc = ctx->candleCount;
         ctx->ch.viewCount = vc;
@@ -3739,6 +3767,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // the style's, not the choice, so a switch that never reached
                 // ApplyPanelStyle reads as dark.
                 case 64: r = (g_Ctx.theme == &APP_THEME_LIGHT); break;
+                // 65-67 (phase 41): the selected range (-1 none), the candles
+                // its home view wants (0 = the view is away), the overlay's
+                // kind (0 picker, 1 interval dropdown).
+                case 65: r = g_Ctx.rangeIdx; break;
+                case 66: r = g_Ctx.rangeWant; break;
+                case 67: r = g_Ctx.overlayKind; break;
                 case 62: r = (LRESULT)(g_Ctx.ch.dispRsiF * 1000.0); break;
                 case 63: {
                     double v;
@@ -5076,6 +5110,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     memset(&g_Ctx, 0, sizeof(AppContext));
     g_Ctx.ch.hoverIdx = -1;   // 0 from memset would mean "hover on the first candle"
     g_Ctx.overlayHot = -1; // same reason: 0 would mean "first row highlighted"
+    g_Ctx.rangeIdx   = -1; // phase 41: 0 would mean "1D selected"
     g_Ctx.ch.dispValid  = FALSE; // snap on the first frame
 
     g_Ctx.hSession = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
