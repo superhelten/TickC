@@ -241,12 +241,9 @@ typedef struct {
     int  panAnchorX;     // mouse X when the panning started
 
     HFONT hFontBig;
-    HFONT hFontSmall;
-    // The price and time axes. Monospace, so the labels stand still when
-    // the digits change, and AXIS_Y_W can be computed in characters. Grayscale
-    // antialiasing (ANTIALIASED_QUALITY), not ClearType: no color fringing on
-    // numbers.
-    HFONT hFontAxis;
+    // The chart's fonts, pens and brushes (phase 35), from ChartStyleCreate.
+    // The header, buttons and overlay borrow fontSmall, brBox and brBoxEdge.
+    ChartStyle sty;
 
     BOOL trackingMouse;  // whether WM_MOUSELEAVE has been requested
 
@@ -298,7 +295,6 @@ typedef struct {
     // --- Cached GDI objects ---
     // Fixed colors are created once at startup instead of 16 times per
     // repaint.
-    HPEN   penGrid, penCross;
     HPEN   penBtn, penBtnHot, penBtnWhite;
     // Standard cursors. LoadCursorW returns a SHARED handle for these - they
     // do not count as ours, and must not go through DestroyCursor. Cached
@@ -361,9 +357,6 @@ typedef struct {
     int    alertFired;       // number of alerts that have fired since startup
     double alertLastFired;   // the level of the last one
     BOOL   alertNotifyOk;    // the result from Shell_NotifyIconW on the last balloon
-    HPEN   penLastUp, penLastDown;   // dashed last-price line
-    HBRUSH brBg, brBox, brBoxEdge;
-    HBRUSH brVolUp, brVolDown;       // volume bars (phase 21)
 
 
     // --- Persistent double buffer ---
@@ -1960,7 +1953,7 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     FillRect(hdc, &r.box, brBox);
     FrameRect(hdc, &r.box, brEdge);
 
-    SelectObject(hdc, ctx->hFontSmall);
+    SelectObject(hdc, ctx->sty.fontSmall);
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, Blend(CLR_BG, CLR_DIM, a));
     RECT h1 = r.symHdr, h2 = r.ivHdr;
@@ -2061,7 +2054,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     ctx->wmOldBmp = (HBITMAP)SelectObject(ctx->wmDC, ctx->wmBmp);
 
     RECT rc = { 0, 0, W, H };
-    FillRect(ctx->wmDC, &rc, ctx->brBg);
+    FillRect(ctx->wmDC, &rc, ctx->sty.brBg);
 
     SetBkMode(ctx->wmDC, TRANSPARENT);
     // Alpha follows W, and W is already part of the cache key above - the
@@ -2135,7 +2128,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
               DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
     // The interval below the main line, in the usual small font.
-    SelectObject(ctx->wmDC, ctx->hFontSmall);
+    SelectObject(ctx->wmDC, ctx->sty.fontSmall);
     // The distance down to the interval follows the font height, otherwise the
     // text would sit inside the main line on large panels.
     RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + 4, g.right, g.bottom };
@@ -2155,10 +2148,7 @@ static void EnsurePillFont(AppContext* ctx, int H) {
     int fh = DeskPillFontH(H);
     if (ctx->hFontPill && ctx->pillFontH == fh) return;
     if (ctx->hFontPill) DeleteObject(ctx->hFontPill);
-    ctx->hFontPill = CreateFontW(-fh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
-                                 L"Lucida Console");
+    ctx->hFontPill = ChartPillFontCreate(H);
     ctx->pillFontH = ctx->hFontPill ? fh : 0;
 }
 
@@ -2193,8 +2183,8 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         // hover color can be left underneath, whatever the DC held before.
         // Both paths in PaintPopup come here, so the fast path and the slow
         // one still paint identically.
-        FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->brBox)
-                             : ctx->brBg);
+        FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->sty.brBox)
+                             : ctx->sty.brBg);
 
         SelectObject(hdc, hot ? ((i == BTN_CLOSE) ? ctx->penBtnWhite : ctx->penBtnHot)
                               : ctx->penBtn);
@@ -2279,7 +2269,7 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
     int n = ToolbarLayout(W, tb);
     if (n <= 0) return;
 
-    HGDIOBJ oldFont = SelectObject(hdc, ctx->hFontSmall);
+    HGDIOBJ oldFont = SelectObject(hdc, ctx->sty.fontSmall);
     SetBkMode(hdc, TRANSPARENT);
 
     for (int i = 0; i < n; ++i) {
@@ -2292,8 +2282,8 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         else if (i == TBAR_IND) { on = ShowIndNow(ctx);  lbl = L"MA"; }
         else { on = (i - TBAR_IV_FIRST == ctx->ivIdx);   lbl = INTERVALS[i - TBAR_IV_FIRST].label; }
 
-        if (hot || on) FillRect(hdc, r, ctx->brBox);
-        if (on)        FrameRect(hdc, r, ctx->brBoxEdge);
+        if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
+        if (on)        FrameRect(hdc, r, ctx->sty.brBoxEdge);
 
         COLORREF fg = (hot || on || i == TBAR_SYM) ? CLR_TEXT : CLR_DIM;
         SetTextColor(hdc, fg);
@@ -2375,7 +2365,7 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
         // Row 1, right: the percentage in three steps. Full with span, then
         // without span, then hidden. Never clipped in the middle of a number -
         // "+0.5" where it says "+0.50%" is a wrong value, not a shorter one.
-        SelectObject(hdc, ctx->hFontSmall);
+        SelectObject(hdc, ctx->sty.fontSmall);
         int pctRight = btnLeft - HDR_GAP;
         wchar_t pctFull[48], pctShort[24];
         swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
@@ -2442,7 +2432,7 @@ static void DrawEmptyState(AppContext* ctx, HDC hdc, int W, int H, ULONGLONG now
         if (g_desktopMode) return;
 
         wchar_t msg[96];
-        SelectObject(hdc, ctx->hFontSmall);
+        SelectObject(hdc, ctx->sty.fontSmall);
         SetTextColor(hdc, CLR_DIM);
 
         // Without a connection it used to say "Loading data from Binance..."
@@ -2469,7 +2459,7 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
     // the chart floats cleanly over the text. BitBlt REPLACES FillRect, it
     // does not come in addition.
     EnsureWatermark(ctx, hdc, W, H);
-    ChartDrawBackground(hdc, W, H, ctx->wmValid ? ctx->wmDC : NULL, ctx->brBg);
+    ChartDrawBackground(hdc, W, H, ctx->wmValid ? ctx->wmDC : NULL, ctx->sty.brBg);
 
     ULONGLONG nowTick = GetTickCount64();
     BOOL stale = (ctx->lastOkTick != 0) &&
@@ -2498,13 +2488,10 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
     in.alertHot = ctx->alertHot; in.axisHotY = ctx->axisHotY;
     in.alertFresh = ctx->alertFresh;
     in.alertFlashLevel = ctx->alertFlashLevel; in.alertFlashF = ctx->alertFlashF;
+    in.utcOffsetMs = ChartUtcOffsetMs();
 
-    ChartStyle sty;
-    sty.fontSmall = ctx->hFontSmall; sty.fontAxis = ctx->hFontAxis; sty.fontPill = ctx->hFontPill;
-    sty.penGrid = ctx->penGrid;      sty.penCross = ctx->penCross;
-    sty.penLastUp = ctx->penLastUp;  sty.penLastDown = ctx->penLastDown;
-    sty.brBg = ctx->brBg; sty.brBox = ctx->brBox; sty.brBoxEdge = ctx->brBoxEdge;
-    sty.brVolUp = ctx->brVolUp; sty.brVolDown = ctx->brVolDown;
+    ChartStyle sty = ctx->sty;
+    sty.fontPill = ctx->hFontPill;
 
     ChartDrawBody(hdc, W, H, &ctx->ch, &in, &sty);
 }
@@ -4828,17 +4815,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.hFontBig = CreateFontW(-19, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_Ctx.hFontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    // Measured with GetGlyphOutlineW(GGO_METRICS) on '0': Lucida Console em 15
-    // gives 11 px digit height, 9 px character width and tmHeight 15. Consolas
-    // jumps from 10 to 12 px (em 16 -> 17), Cascadia Mono em 16 gives 11 px
-    // but tmHeight 21, which does not fit in the time axis's 18 px.
-    g_Ctx.hFontAxis = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                  DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                  ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
-                                  L"Lucida Console");
+    // The chart's fonts, pens and brushes (phase 35: one definition, shared
+    // with the golden tests in tests/).
+    ChartStyleCreate(&g_Ctx.sty);
     // hFontWm is not created here: the height depends on the panel size, so
     // it is built in EnsureWatermark and only when the height changes.
 
@@ -4873,8 +4852,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
 
     // Fixed GDI objects: created once, not 16 times per repaint
-    g_Ctx.penGrid   = CreatePen(PS_SOLID, 1, CLR_GRID);
-    g_Ctx.penCross  = CreatePen(PS_DOT,   1, CLR_CROSS);
     g_Ctx.penBtn      = CreatePen(PS_SOLID, 1, CLR_DIM);
     g_Ctx.penBtnHot   = CreatePen(PS_SOLID, 1, CLR_TEXT);
     g_Ctx.penBtnWhite = CreatePen(PS_SOLID, 1, CLR_BTNHOT);
@@ -4890,15 +4867,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.ch.dispVolF    = 1.0;
     g_Ctx.showInd     = TRUE;   // phase 25; LoadConfig can turn it off
     g_Ctx.ch.dispIndF    = 1.0;
-    // Dashed, not dotted: keeps the last-price line visually distinct from
-    // both the grid (solid, muted) and the crosshair (dotted).
-    g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
-    g_Ctx.penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
-    g_Ctx.brBg      = CreateSolidBrush(CLR_BG);
-    g_Ctx.brBox     = CreateSolidBrush(CLR_BOX);
-    g_Ctx.brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
-    g_Ctx.brVolUp   = CreateSolidBrush(CLR_VOL_UP);     // phase 21
-    g_Ctx.brVolDown = CreateSolidBrush(CLR_VOL_DOWN);
 
     // The worker thread is started only when the window and the icon exist,
     // since it posts messages to hWnd right away.
@@ -4998,14 +4966,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (g_Ctx.nid.hIcon) DestroyIcon(g_Ctx.nid.hIcon);
     if (g_Ctx.hFontPill) DeleteObject(g_Ctx.hFontPill);
     if (g_Ctx.hFontBig) DeleteObject(g_Ctx.hFontBig);
-    if (g_Ctx.hFontSmall) DeleteObject(g_Ctx.hFontSmall);
-    if (g_Ctx.hFontAxis) DeleteObject(g_Ctx.hFontAxis);
+    ChartStyleDestroy(&g_Ctx.sty);
 
-    DeleteObject(g_Ctx.penGrid);  DeleteObject(g_Ctx.penCross);
-    DeleteObject(g_Ctx.brBg);     DeleteObject(g_Ctx.brBox);
-    DeleteObject(g_Ctx.brBoxEdge);
-    DeleteObject(g_Ctx.brVolUp);     DeleteObject(g_Ctx.brVolDown);
-    DeleteObject(g_Ctx.penLastUp);   DeleteObject(g_Ctx.penLastDown);
     DeleteObject(g_Ctx.penBtn);      DeleteObject(g_Ctx.penBtnHot);
     DeleteObject(g_Ctx.penBtnWhite); DeleteObject(g_Ctx.brClose);
 

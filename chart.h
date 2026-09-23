@@ -64,9 +64,16 @@ typedef struct {
     double        alertFresh;   // the level just set with a click, 0 = none
     double        alertFlashLevel;
     double        alertFlashF;  // afterglow of a fired alert, 1..0
+    // Local time = UTC + utcOffsetMs, for every label in the frame (phase 35).
+    // The app passes ChartUtcOffsetMs(); the golden tests pass a constant, so
+    // their hashes do not change with the machine's DST state.
+    long long     utcOffsetMs;
 } ChartData;
 
-// GDI objects the chart draws with. Created and freed by the app.
+// GDI objects the chart draws with (phase 35: built by ChartStyleCreate, so
+// the app and the golden tests draw with the very same objects). fontPill
+// is NOT part of it: its height follows the surface, and the app builds it
+// and sets it per frame. ChartStyleDestroy leaves it alone.
 typedef struct {
     HFONT  fontSmall, fontAxis;
     HFONT  fontPill;            // desktop stamp font, NULL = use fontAxis
@@ -254,12 +261,23 @@ BOOL      VwapValueAt(const Candle* c, int n, long long intervalMs, BOOL histDon
 // --- Formatting and colors ---
 int       PriceDecimals(double step);
 void      FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch);
-void      FormatCandleTime(long long unixMs, long long intervalMs, wchar_t* out, size_t cch);
+void      FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs, wchar_t* out, size_t cch);
+long long ChartUtcOffsetMs(void);
 void      FormatVolume(double v, wchar_t* out, size_t cch);
 void      FormatTagPrice(HDC hdc, double p, double range, int avail, wchar_t* out, size_t cch);
 COLORREF  Blend(COLORREF a, COLORREF b, int t);
 int       TimeTickStep(double dispCount, int chartW, int minDx);
 int       NiceTimeStep(int step, long long intervalMs);
+
+// --- Style ---
+// Creates every object in ChartStyle except fontPill (set to NULL). FALSE
+// when any creation failed; the rest are then still valid or NULL, and
+// ChartStyleDestroy frees them.
+BOOL      ChartStyleCreate(ChartStyle* sty);
+void      ChartStyleDestroy(ChartStyle* sty);
+// The desktop stamp font for a surface H px high (DeskPillFontH). The caller
+// owns it and sets it as ChartStyle.fontPill.
+HFONT     ChartPillFontCreate(int H);
 
 // --- Drawing ---
 // Background: the cached watermark bitmap when there is one, else brBg.

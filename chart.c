@@ -524,16 +524,29 @@ void SyncDisp(ChartState* ctx, const Candle* candles, int n) {
     ctx->dispValid = TRUE;
 }
 
-// Unix ms -> local time. On long candles "HH:MM" is not enough - every 1d
-// candle would read "00:00". From 1h upward we include the date.
-void FormatCandleTime(long long unixMs, long long intervalMs,
+// The local offset in force NOW, in ms east of UTC - exactly what
+// FileTimeToLocalFileTime adds, which the labels used until phase 35. It
+// applies today's offset to every date, also one from before a DST change.
+long long ChartUtcOffsetMs(void) {
+    FILETIME fu, fl;
+    GetSystemTimeAsFileTime(&fu);
+    if (!FileTimeToLocalFileTime(&fu, &fl)) return 0;
+    ULONGLONG u = ((ULONGLONG)fu.dwHighDateTime << 32) | fu.dwLowDateTime;
+    ULONGLONG l = ((ULONGLONG)fl.dwHighDateTime << 32) | fl.dwLowDateTime;
+    return ((long long)l - (long long)u) / 10000LL;
+}
+
+// Unix ms -> local time (UTC + utcOffsetMs). On long candles "HH:MM" is not
+// enough - every 1d candle would read "00:00". From 1h upward we include the
+// date.
+void FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs,
                              wchar_t* out, size_t cch) {
-    ULONGLONG t = (ULONGLONG)(unixMs / 1000) * 10000000ULL + 116444736000000000ULL;
-    FILETIME utc, local;
-    utc.dwLowDateTime  = (DWORD)(t & 0xFFFFFFFFULL);
-    utc.dwHighDateTime = (DWORD)(t >> 32);
+    ULONGLONG t = (ULONGLONG)(unixMs / 1000 + utcOffsetMs / 1000) * 10000000ULL + 116444736000000000ULL;
+    FILETIME local;
+    local.dwLowDateTime  = (DWORD)(t & 0xFFFFFFFFULL);
+    local.dwHighDateTime = (DWORD)(t >> 32);
     SYSTEMTIME st;
-    if (FileTimeToLocalFileTime(&utc, &local) && FileTimeToSystemTime(&local, &st)) {
+    if (FileTimeToSystemTime(&local, &st)) {
         if (intervalMs >= 86400000LL) {
             swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
         } else if (intervalMs >= 3600000LL) {
@@ -746,6 +759,59 @@ static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn)
         if (k == VOL_BATCH) { PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k); k = 0; }
     }
     if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
+}
+
+// The chart's fixed GDI objects (phase 35; created in wWinMain until phase
+// 34). Created once, not per repaint.
+BOOL ChartStyleCreate(ChartStyle* sty) {
+    ZeroMemory(sty, sizeof(*sty));
+    sty->fontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    // The price and time axes. Monospace, so the labels stand still when the
+    // digits change, and AXIS_Y_W can be computed in characters. Grayscale
+    // antialiasing (ANTIALIASED_QUALITY), not ClearType: no color fringing on
+    // numbers. Measured with GetGlyphOutlineW(GGO_METRICS) on '0': Lucida
+    // Console em 15 gives 11 px digit height, 9 px character width and
+    // tmHeight 15. Consolas jumps from 10 to 12 px (em 16 -> 17), Cascadia Mono
+    // em 16 gives 11 px but tmHeight 21, which does not fit in the time axis's
+    // 18 px.
+    sty->fontAxis = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                                L"Lucida Console");
+    sty->penGrid  = CreatePen(PS_SOLID, 1, CLR_GRID);
+    sty->penCross = CreatePen(PS_DOT,   1, CLR_CROSS);
+    // Dashed, not dotted: keeps the last-price line visually distinct from
+    // both the grid (solid, muted) and the crosshair (dotted).
+    sty->penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
+    sty->penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
+    sty->brBg      = CreateSolidBrush(CLR_BG);
+    sty->brBox     = CreateSolidBrush(CLR_BOX);
+    sty->brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
+    sty->brVolUp   = CreateSolidBrush(CLR_VOL_UP);     // phase 21
+    sty->brVolDown = CreateSolidBrush(CLR_VOL_DOWN);
+    return sty->fontSmall && sty->fontAxis && sty->penGrid && sty->penCross &&
+           sty->penLastUp && sty->penLastDown && sty->brBg && sty->brBox &&
+           sty->brBoxEdge && sty->brVolUp && sty->brVolDown;
+}
+
+HFONT ChartPillFontCreate(int H) {
+    return CreateFontW(-DeskPillFontH(H), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                       DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                       L"Lucida Console");
+}
+
+void ChartStyleDestroy(ChartStyle* sty) {
+    HGDIOBJ own[] = { sty->fontSmall, sty->fontAxis, sty->penGrid, sty->penCross,
+                      sty->penLastUp, sty->penLastDown, sty->brBg, sty->brBox,
+                      sty->brBoxEdge, sty->brVolUp, sty->brVolDown };
+    for (int i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++)
+        if (own[i]) DeleteObject(own[i]);
+    HFONT pill = sty->fontPill;   // the app's, see chart.h
+    ZeroMemory(sty, sizeof(*sty));
+    sty->fontPill = pill;
 }
 
 // The background under everything: the app's cached watermark bitmap when it
@@ -1296,7 +1362,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     if (i0 < i1 && !in->desktop) {
         wchar_t tl[24];
         FormatCandleTime(in->candles[i0].openTime,
-                         in->intervalMs, tl, 24);
+                         in->intervalMs, in->utcOffsetMs, tl, 24);
         int tlLen = (int)wcslen(tl);
         SIZE tsz = { 0, 0 };
         GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // the axis font is selected
@@ -1306,20 +1372,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
 
         // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
-        // here and not on 02, 08 ... (UTC + 2 in summer). The offset is read
-        // at i0; a DST change in the middle of the view only moves the
-        // labels one hour.
-        long long t0 = in->candles[i0].openTime, tzMs = 0;
-        {
-            ULONGLONG ft = (ULONGLONG)(t0 / 1000) * 10000000ULL + 116444736000000000ULL;
-            FILETIME fu, fl;
-            fu.dwLowDateTime  = (DWORD)(ft & 0xFFFFFFFFULL);
-            fu.dwHighDateTime = (DWORD)(ft >> 32);
-            if (FileTimeToLocalFileTime(&fu, &fl)) {
-                ULONGLONG lt = ((ULONGLONG)fl.dwHighDateTime << 32) | fl.dwLowDateTime;
-                tzMs = ((long long)lt - (long long)ft) / 10000LL;
-            }
-        }
+        // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
+        // whole view, the one the labels are written with.
+        long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
         long long slotNo = (t0 + tzMs) / iv;
         int rem = (int)(slotNo % step);
         int k = i0 + ((rem == 0) ? 0 : (step - rem));
@@ -1328,7 +1383,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         for (; k < i1; k += step) {
             int x = left + (int)(((double)k - dStart + 0.5) * slot);
             if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-            FormatCandleTime(in->candles[k].openTime, in->intervalMs, tl, 24);
+            FormatCandleTime(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, tl, 24);
             ExtTextOutW(hdc, x, bottom + 2, 0, NULL, tl, (int)wcslen(tl), NULL);
         }
         SetTextAlign(hdc, oldAlign);
@@ -1580,7 +1635,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // LINE_H = 13 is measured on it, and the axis font is 15 px tall.
     SelectObject(hdc, sty->fontSmall);
     wchar_t tbuf[24];
-    FormatCandleTime(hc->openTime, in->intervalMs, tbuf, 24);
+    FormatCandleTime(hc->openTime, in->intervalMs, in->utcOffsetMs, tbuf, 24);
 
     // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
     // With the indicators on (phase 27) three more rows are added: SMA, EMA
