@@ -3111,9 +3111,13 @@ undone by `WM_MOUSELEAVE` within a tick.
 15m, 1h, 1d; 560x300 at 15m; 400x250 at 1h; 1h with the crosshair; the
 desktop surface at 3840x1600), each hashed on its raw pixels. Two runs of the
 same exe are identical, and **the split build is identical to the build
-before it in all eight**. `probe_migrate` 24/24; the five regression probes
-(`lbl`, `prev`, `sess`, `ind`, `desk`) against the split build. The
-production `/EP` output was checked unchanged by the fixture commit.
+before it in all eight**. `probe_migrate` 24/24. The five regression probes against the split build:
+`sess` 51/51, `ind` 54/54, `desk` 49/49, `prev` 47/52 and `lbl` 25/27 - the
+last two ran at 00:11 UTC, eleven minutes into today's session, when the
+level lines are 14 px wide and carry neither a dash pattern nor a label;
+control runs against the build before the split fail on exactly the same
+checks. The production `/EP` output was checked unchanged by the fixture
+commit.
 **Exe 206 336 → 207 360 bytes (+1 024)**, one alignment step from the second
 translation unit; `/TP` builds the same size.
 
