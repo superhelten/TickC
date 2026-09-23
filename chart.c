@@ -894,6 +894,8 @@ const ChartTheme ChartThemeDark = {
     CLR_ALERT,
     CLR_ALERT_LINE,
     CLR_RSI,
+    CLR_BG,        // onAlert: dark text on the amber tag
+    CLR_ALERT,     // alertText
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -901,29 +903,41 @@ const ChartTheme ChartThemeDark = {
 // The overlays keep their hues but darker; VWAP turns from yellow to dark
 // gold, which yellow cannot be on white. The volume bars are the candle
 // colors blended about 25 % toward the background, as in the dark theme.
+//
+// Phase 40: every role drawn as text reaches WCAG AA, 4.5:1, on the
+// background and on the box (tests/chart_golden.c checks the pairs). The
+// first table missed on 20 pairs; the alert tag's number was 2.65:1. Each
+// color was darkened with its hue kept, so it also carries the light text
+// of the stamp at 4.5:1 (up, down). A color cannot do both that and carry
+// dark text, so the amber alert tag keeps its surface and gets dark text
+// (onAlert, 5.7:1), and the ghost tag draws in a darker amber (alertText).
+// Up moved from teal to green and RSI to teal-cyan: at 089981 and 00897B
+// the two were almost the same color.
 const ChartTheme ChartThemeLight = {
     RGB(0xFA, 0xFA, 0xFB),   // bg
     RGB(0xE8, 0xEA, 0xEE),   // grid
-    RGB(0x08, 0x99, 0x81),   // up
-    RGB(0xF2, 0x36, 0x45),   // down
+    RGB(0x08, 0x80, 0x5A),   // up         4.74:1 on bg
+    RGB(0xD5, 0x2A, 0x3A),   // down       4.77
     RGB(0x1F, 0x23, 0x28),   // text
-    RGB(0x6A, 0x73, 0x7D),   // dim
+    RGB(0x6A, 0x73, 0x7D),   // dim        4.62
     RGB(0x9A, 0xA0, 0xA6),   // cross
     RGB(0xFF, 0xFF, 0xFF),   // box
     RGB(0xD0, 0xD7, 0xDE),   // boxEdge
-    RGB(0xC0, 0x2A, 0x3E),   // hot
+    RGB(0xA3, 0x1D, 0x33),   // hot        darker than down, white text 7.6
     RGB(0xFF, 0xFF, 0xFF),   // onHot
     RGB(0x4A, 0x53, 0x60),   // axis
-    RGB(0xC3, 0xE4, 0xDF),   // volUp
-    RGB(0xFB, 0xCF, 0xD2),   // volDown
-    RGB(0x2F, 0x7F, 0xB5),   // sma
-    RGB(0x8E, 0x5C, 0xC7),   // ema
-    RGB(0xB0, 0x80, 0x00),   // vwap
-    RGB(0x6E, 0x74, 0x81),   // session
-    RGB(0x8A, 0x93, 0xA8),   // prev
-    RGB(0xD9, 0x8A, 0x00),   // alert
+    RGB(0xC3, 0xDE, 0xD6),   // volUp
+    RGB(0xF2, 0xCB, 0xCF),   // volDown
+    RGB(0x2C, 0x78, 0xAA),   // sma        4.60
+    RGB(0x8C, 0x59, 0xC6),   // ema        4.62
+    RGB(0x8A, 0x6C, 0x00),   // vwap       4.76
+    RGB(0x6C, 0x72, 0x7F),   // session    4.63
+    RGB(0x5B, 0x6A, 0x8E),   // prev       5.17, cooler than session
+    RGB(0xD9, 0x8A, 0x00),   // alert      the tag's surface
     RGB(0xE8, 0xC4, 0x80),   // alertLine
-    RGB(0x00, 0x89, 0x7B),   // rsi
+    RGB(0x00, 0x7E, 0x83),   // rsi        4.67
+    RGB(0x1F, 0x23, 0x28),   // onAlert    5.71 on the amber
+    RGB(0xA8, 0x54, 0x00),   // alertText  5.12
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -1513,7 +1527,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             }
             if (covered) continue;
             FormatTagPrice(hdc, lvl, range, axR - axL, buf, 64);
-            SetTextColor(hdc, hot ? sty->clr.onHot : sty->clr.bg);
+            SetTextColor(hdc, hot ? sty->clr.onHot : sty->clr.onAlert);
             RECT rcAT = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
@@ -1545,7 +1559,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         if (ghost) {
             int y = in->axisHotY;
             BOOL full = (nA >= ALERT_MAX);
-            COLORREF gc = full ? sty->clr.dim : sty->clr.alert;
+            COLORREF gc = full ? sty->clr.dim : sty->clr.alertText;
             SelectObject(hdc, GetStockObject(DC_PEN));
             SetDCPenColor(hdc, full ? sty->clr.cross : sty->clr.alertLine);
             MoveToEx(hdc, left, y, NULL);
