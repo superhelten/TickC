@@ -35,6 +35,7 @@
 #define ID_TRAY_ALERTS_CLEAR 1006   // remove the price alerts for the symbol (phase 23)
 #define ID_TRAY_INDICATORS 1007   // moving averages on/off (phase 25)
 #define ID_TRAY_RSI      1008   // the RSI band on/off (phase 39)
+#define ID_TRAY_THEME    1009   // the light theme on/off (phase 40)
 // Symbol and interval from the tray menu (phase 17). Item i gets FIRST + i.
 // The ranges are 100 wide; #error below the tables ensures they never overlap.
 #define ID_TRAY_SYMBOL_FIRST   1100
@@ -351,6 +352,11 @@ typedef struct {
     // the content.
     BOOL   showRsi;
     BOOL   showRsiDesk;
+    // The light theme (phase 40), one choice per mode like the overlays, and
+    // off in both: dark is the look TickC has had, and the desktop surface is
+    // the wallpaper - a white one is a change nobody asked for there.
+    BOOL   lightTheme;
+    BOOL   lightThemeDesk;
     // Price alerts (phase 23). Everything is UI-owned: the alerts are set
     // from the mouse and tested in WM_APP_DATA, both on the UI thread, so the
     // thread contract is untouched. Per symbol - a level in dollars is
@@ -440,8 +446,8 @@ static int  PanelDpi(HWND hwnd);
 static void ApplyPanelStyle(AppContext* ctx, int dpi);
 // The theme for the mode we are in (phase 40).
 static const AppTheme* ThemeNow(const AppContext* ctx) {
-    (void)ctx;
-    return &APP_THEME_DARK;
+    BOOL light = g_desktopMode ? ctx->lightThemeDesk : ctx->lightTheme;
+    return light ? &APP_THEME_LIGHT : &APP_THEME_DARK;
 }
 // The overlay choices for the mode we are in (phase 26). Everything that
 // paints, eases, checks items in the menu or answers a probe reads these.
@@ -637,6 +643,8 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->showIndDesk = FALSE;
     ctx->showRsi     = FALSE;   // phase 39: off in both modes
     ctx->showRsiDesk = FALSE;
+    ctx->lightTheme     = FALSE;   // phase 40: dark in both modes
+    ctx->lightThemeDesk = FALSE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0;
 
@@ -658,6 +666,8 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD sid = RegReadDword(k, L"ShowIndicatorsDesktop", 0);
     DWORD sr  = RegReadDword(k, L"ShowRsi", 0);          // phase 39, off by default
     DWORD srd = RegReadDword(k, L"ShowRsiDesktop", 0);
+    DWORD lt  = RegReadDword(k, L"LightTheme", 0);       // phase 40, dark by default
+    DWORD ltd = RegReadDword(k, L"LightThemeDesktop", 0);
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
     ctx->showInd = (si != 0);
@@ -665,6 +675,8 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->showIndDesk = (sid != 0);
     ctx->showRsi     = (sr != 0);
     ctx->showRsiDesk = (srd != 0);
+    ctx->lightTheme     = (lt != 0);
+    ctx->lightThemeDesk = (ltd != 0);
 
     // Bounds check. A registry edited by hand, or left behind by a newer
     // version with more symbols, must not be able to index outside the
@@ -875,6 +887,9 @@ static void SaveConfig(const AppContext* ctx) {
     DWORD sr = ctx->showRsi ? 1 : 0, srd = ctx->showRsiDesk ? 1 : 0;
     RegSetValueExW(k, L"ShowRsi",        0, REG_DWORD, (const BYTE*)&sr, sizeof(sr));
     RegSetValueExW(k, L"ShowRsiDesktop", 0, REG_DWORD, (const BYTE*)&srd, sizeof(srd));
+    DWORD lt = ctx->lightTheme ? 1 : 0, ltd = ctx->lightThemeDesk ? 1 : 0;
+    RegSetValueExW(k, L"LightTheme",        0, REG_DWORD, (const BYTE*)&lt, sizeof(lt));
+    RegSetValueExW(k, L"LightThemeDesktop", 0, REG_DWORD, (const BYTE*)&ltd, sizeof(ltd));
     RegCloseKey(k);
 }
 
@@ -2795,6 +2810,19 @@ static void SetShowRsi(AppContext* ctx, BOOL on) {
     }
 }
 
+// The light theme (phase 40), for the mode we are in. The style is rebuilt
+// at the dpi it has, so only the colors change; ApplyPanelStyle also drops
+// the watermark and the back buffer, which hold the old background. No
+// fade: every color in the panel would have to be blended per frame.
+static void SetLightTheme(AppContext* ctx, BOOL on) {
+    if ((ThemeNow(ctx) == &APP_THEME_LIGHT) == on) return;
+    if (g_desktopMode) ctx->lightThemeDesk = on;
+    else               ctx->lightTheme     = on;
+    SaveConfig(ctx);
+    ApplyPanelStyle(ctx, ctx->sty.dpi);
+    if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
+}
+
 // ---------------------------------------------------------------------------
 // Price alerts (phase 23). Everything here runs on the UI thread and touches
 // only UI-owned fields; the lock is taken only to read the reference price.
@@ -3707,6 +3735,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // display x1000, and the RSI at the candle in lParam x100
                 // (-1 = not defined there).
                 case 61: r = ShowRsiNow(&g_Ctx); break;
+                // 64 (phase 40): the theme the panel is DRAWN with, 1 = light -
+                // the style's, not the choice, so a switch that never reached
+                // ApplyPanelStyle reads as dark.
+                case 64: r = (g_Ctx.theme == &APP_THEME_LIGHT); break;
                 case 62: r = (LRESULT)(g_Ctx.ch.dispRsiF * 1000.0); break;
                 case 63: {
                     double v;
@@ -4108,6 +4140,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // I (phase 39): the RSI band. Works when the pill is hidden.
                 if (!ctrl && wParam == 'I') {
                     OnToolbarClick(hwnd, TBAR_RSI);
+                    return 0;
+                }
+                // T (phase 40): the light theme, as the tray menu's item.
+                if (!ctrl && wParam == 'T') {
+                    SetLightTheme(&g_Ctx, ThemeNow(&g_Ctx) != &APP_THEME_LIGHT);
                     return 0;
                 }
                 if (!ctrl && wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
@@ -4682,6 +4719,10 @@ static HMENU BuildTrayMenu(void) {
         // The RSI band (phase 39): for the mode we are in, like the two above.
         AppendMenuW(hMenu, MF_STRING | (ShowRsiNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_RSI, L"RSI band	I");
+        // The light theme (phase 40): for the mode we are in, like the three
+        // above - the desktop surface has its own choice.
+        AppendMenuW(hMenu, MF_STRING | ((ThemeNow(&g_Ctx) == &APP_THEME_LIGHT) ? MF_CHECKED : MF_UNCHECKED),
+                    ID_TRAY_THEME, L"Light theme	T");
         // The price alerts (phase 23) are set in the panel's price column,
         // but must be clearable from here: desktop mode draws the lines and
         // has no input. The count applies to the symbol shown. Grayed, not
@@ -4754,6 +4795,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (LOWORD(wParam) == ID_TRAY_RSI) {
                 SetShowRsi(&g_Ctx, !ShowRsiNow(&g_Ctx));
+                return 0;
+            }
+            if (LOWORD(wParam) == ID_TRAY_THEME) {
+                SetLightTheme(&g_Ctx, ThemeNow(&g_Ctx) != &APP_THEME_LIGHT);
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_ALERTS_CLEAR) {
