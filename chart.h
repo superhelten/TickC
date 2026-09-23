@@ -98,6 +98,11 @@ typedef struct {
     // theme keeps its amber surface and needs both; the dark theme uses
     // CLR_BG and CLR_ALERT, as before.
     COLORREF onAlert, alertText;
+    // Phase 42: the header's quote line and range field, drawn by the app,
+    // kept here so the one palette - and its contrast check - covers them.
+    // quote is the values' amber (Bloomberg's data color), accent the
+    // selected cell, onAccent its text.
+    COLORREF quote, accent, onAccent;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
@@ -279,6 +284,13 @@ typedef struct {
 // the saturated color.
 #define CLR_ALERT          RGB(0xFF, 0xB0, 0x20)
 #define CLR_ALERT_LINE     RGB(0x86, 0x60, 0x1B)
+
+// The header (phase 42), on the Bloomberg terminal's model: values in amber,
+// the selected range in blue with white text. The amber is Bloomberg's
+// orange-amber, deeper than the alert tag's FFB020, and it stays in the
+// header while the alert tags stay in the price column.
+#define CLR_QUOTE          RGB(0xFB, 0x8B, 0x1E)
+#define CLR_ACCENT         RGB(0x2F, 0x5D, 0xA8)
 
 // Batches for PolyPolygon / Polyline; see chart.c.
 #define VOL_BATCH 256

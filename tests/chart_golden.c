@@ -351,6 +351,10 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     CP("toolbar pill hot/on",     text,      box),
     CP("overlay headings",        dim,       box),
     CP("overlay active row",      up,        box),
+    // Phase 42: the quote line and the range field.
+    CP("quote line values",       quote,     bg),
+    CP("range cells",             text,      boxEdge),
+    CP("range cell selected",     onAccent,  accent),
 };
 
 static double RelLum(COLORREF c) {

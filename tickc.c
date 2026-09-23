@@ -217,27 +217,31 @@ C_ASSERT(ID_TRAY_INTERVAL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_PERIOD_FIRST);
 // and VOL. Fixed
 // widths, not measured text: WM_NCHITTEST must be able to compute the pills
 // without a DC, and painting and hit testing must read the same numbers
-// (pitfall 14). 15 px high, from y = 28: the price digits in row 1 end at
-// the baseline at y ~ 27, so a highlighted pill never covers them, and
-// y = 43 is the last row above the chart area.
+// (pitfall 14).
+//
+// Phase 42 rebuilt the header on the Bloomberg terminal's model. Row 1 is the
+// quote line: the symbol, then Last, Chg, %Chg, Op, Hi, Lo, Vol and At, in the
+// band of the control buttons (QL_TOP..QL_TOP + QL_H). Row 2 is the range
+// field: 1D ... Max and the interval as cells side by side, one pixel apart,
+// with the settings cell (a gear) at the right end, before the price axis's
+// top label. 15 px high from y = 28, so y = 43 is the last row above the
+// chart area. VOL, MA and RSI left the row for the settings menu.
 #define TBAR_TOP           28
 #define TBAR_H             15
+#define QL_TOP             6     // row 1: the quote line (phase 42)
+#define QL_H               18
 #define TBAR_SYM_W         74    // "BNB/USDT" + arrow
 #define TBAR_IVDD_W        44    // "15m" + arrow (phase 41)
 #define TBAR_RANGE_W       22    // "1D" (phase 41)
 #define TBAR_RANGE_WIDE_W  28    // "YTD", "Max"
-#define TBAR_VOL_W         32
-#define TBAR_IND_W         26    // "MA" (phase 25)
-#define TBAR_RSI_W         30    // "RSI" (phase 39)
-#define TBAR_GAP           2     // between the pills of one group
-#define TBAR_GROUP_GAP     8     // between symbol, interval, ranges and VOL
-#define TBAR_SYM           0
-#define TBAR_IV            1     // the interval dropdown (phase 41)
-#define TBAR_RANGE_FIRST   (TBAR_IV + 1)   // one pill per range (phase 41)
-#define TBAR_VOL           (TBAR_RANGE_FIRST + RANGE_COUNT)
-#define TBAR_IND           (TBAR_VOL + 1)   // same group as VOL: overlays
-#define TBAR_RSI           (TBAR_IND + 1)   // phase 39, same group; the first to go on a narrow panel
-#define TBAR_COUNT         (TBAR_RSI + 1)
+#define TBAR_GEAR_W        22    // the settings cell (phase 42)
+#define TBAR_CELL_GAP      1     // between the cells of the range field (phase 42)
+#define TBAR_GROUP_GAP     8     // before the settings cell
+#define TBAR_SYM           0     // row 1 from phase 42: where the quote line starts
+#define TBAR_RANGE_FIRST   1     // one cell per range (phase 41)
+#define TBAR_IV            (TBAR_RANGE_FIRST + RANGE_COUNT)   // the interval dropdown, after Max
+#define TBAR_GEAR          (TBAR_IV + 1)                      // the settings menu (phase 42)
+#define TBAR_COUNT         (TBAR_GEAR + 1)
 
 // 4x9 pixel font. One row per byte, bit 3 = left column, bit 0 = right.
 // One line of 9px high digits is almost twice as readable as two lines of
@@ -291,6 +295,16 @@ typedef struct {
     // stay there after the backfill.
     int  rangeIdx;
     int  rangeWant;
+    // The trading day (phase 42): Binance's statistics for the UTC day, as
+    // Bloomberg's quote line shows the day's open, high, low and volume.
+    // UTC, so it is the day HOD/LOD/PDC draw. Lock-protected: the worker
+    // thread writes, the UI reads. dayValid is FALSE until a fetch has
+    // succeeded for the symbol shown; a symbol change clears it.
+    // lastUpdMs is the wall-clock time of the last candle fetch that
+    // succeeded, the quote line's "At".
+    BOOL      dayValid;
+    double    dayOpen, dayHigh, dayLow, dayVol;
+    long long lastUpdMs;
 
     Candle candles[MAX_CANDLES];
     int candleCount;
@@ -302,7 +316,7 @@ typedef struct {
     BOOL panning;        // dragging the chart sideways right now
     int  panAnchorX;     // mouse X when the panning started
 
-    HFONT hFontBig;
+    HFONT hFontQuote;
     // The chart's fonts, pens and brushes (phase 35), from ChartStyleCreate.
     // The header, buttons and overlay borrow fontSmall, brBox and brBoxEdge.
     ChartStyle sty;
@@ -522,6 +536,9 @@ static Candle s_incoming[SEED_COUNT];
 // WM_APP_PROBE 15, so a probe can measure the median over many frames
 // without taking screenshots at the same time (pitfall 37).
 static LONGLONG g_probePaintUs = 0;
+// Phase 42: the quote line's fields drawn in the last frame, bit f for QF_*
+// (0 Last ... 7 At), 0x100 when the line is offline. Field 68.
+static int g_probeQuoteMask = 0;
 // Test build only (phase 23): mutes balloon and sound when an alert fires, so
 // a probe can fire many alerts without bothering whoever sits at the machine.
 // Set with WM_APP_PROBE 101 to the main window. One run fires one alert
@@ -540,6 +557,7 @@ static int g_forceDpi = 0;
 //                                                   when the file is missing
 //                                                   (the history has ended)
 //   /api/v3/ticker/price?symbol=S                -> price_S.json
+//   /api/v3/ticker/tradingDay?symbol=S           -> day_S.json (phase 42)
 // A missing klines or price file is a failed request, like a network error.
 static wchar_t g_fixtureDir[MAX_PATH] = L"";
 // Test build only (phase 24): counters read from the main window with
@@ -1397,6 +1415,7 @@ static BOOL FixtureGet(const wchar_t* path, char* buf, DWORD bufSize) {
     if (p) { p += 9; int k = 0; while (*p && *p != L'&' && k < 15) iv[k++] = *p++; iv[k] = 0; }
     BOOL hist = wcsstr(path, L"endTime=") != NULL;
     if (wcsstr(path, L"/klines"))      swprintf_s(file, MAX_PATH, L"%s\\%s_%s_%s.json", g_fixtureDir, hist ? L"hist" : L"klines", sym, iv);
+    else if (wcsstr(path, L"/tradingDay")) swprintf_s(file, MAX_PATH, L"%s\\day_%s.json", g_fixtureDir, sym);
     else if (wcsstr(path, L"/price")) swprintf_s(file, MAX_PATH, L"%s\\price_%s.json", g_fixtureDir, sym);
     else return FALSE;
 
@@ -1503,6 +1522,15 @@ static const char* ParseQuotedNumber(const char* p, double* out) {
     if (end == p + 1 || *end != '"') return NULL;
     *out = v;
     return end + 1;
+}
+
+// The quoted number after "key": in a flat JSON object (phase 42). FALSE when
+// the key is missing or the value is not a number.
+static BOOL ParseKeyNumber(const char* json, const char* key, double* out) {
+    const char* pos = strstr(json, key);
+    if (!pos) return FALSE;
+    pos += strlen(key);
+    return *pos == '"' && ParseQuotedNumber(pos, out) != NULL;
 }
 
 // outPrice is touched only when the response held a sane price.
@@ -1645,6 +1673,7 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     if (ctx->candleCount > 0) {
         ctx->lastPrice = ctx->candles[ctx->candleCount - 1].close;
     }
+    ctx->lastUpdMs = NowUnixMs();   // phase 42: the quote line's "At"
 
     if (ctx->ch.followLive) {
         int vc = (ctx->rangeWant > 0) ? ctx->rangeWant : ctx->ch.viewCount;   // phase 41
@@ -1711,6 +1740,40 @@ static BOOL WorkerFetchHistory(AppContext* ctx) {
     return got;
 }
 
+// The trading day (phase 42): one small request for the UTC day's open,
+// high, low and volume. Same configGen guard as the candles. Not a network
+// health signal: a failure here leaves the old values (or none) and does
+// not count toward the backoff - the candles decide that.
+static void WorkerFetchDay(AppContext* ctx) {
+    unsigned gen;
+    int si;
+    EnterCriticalSection(&ctx->lock);
+    gen = ctx->configGen;
+    si  = ctx->symIdx;
+    LeaveCriticalSection(&ctx->lock);
+
+    wchar_t path[96];
+    swprintf_s(path, 96, L"/api/v3/ticker/tradingDay?symbol=%s", SYMBOLS[si].api);
+    char buf[1024];
+    if (!HttpGet(ctx, path, buf, (DWORD)sizeof(buf))) return;
+
+    double o, h, l, v;
+    if (!ParseKeyNumber(buf, "\"openPrice\":", &o) || !ParseKeyNumber(buf, "\"highPrice\":", &h) ||
+        !ParseKeyNumber(buf, "\"lowPrice\":", &l)  || !ParseKeyNumber(buf, "\"volume\":", &v) ||
+        !PriceSane(o) || !PriceSane(h) || !PriceSane(l) || l > h || !(v >= 0.0 && v < 1.0e15)) {
+#ifdef TICKER_PROBE
+        InterlockedIncrement(&g_probeRejects);
+#endif
+        return;
+    }
+    EnterCriticalSection(&ctx->lock);
+    if (ctx->configGen == gen) {
+        ctx->dayOpen = o; ctx->dayHigh = h; ctx->dayLow = l; ctx->dayVol = v;
+        ctx->dayValid = TRUE;
+    }
+    LeaveCriticalSection(&ctx->lock);
+}
+
 static BOOL WorkerFetchPrice(AppContext* ctx) {
     unsigned gen;
     int si;
@@ -1740,12 +1803,14 @@ static BOOL WorkerFetchPrice(AppContext* ctx) {
 
 static DWORD WINAPI NetworkThread(LPVOID param) {
     AppContext* ctx = (AppContext*)param;
+    int dayCycle = 0;   // phase 42: cycles since the last trading-day fetch
     HANDLE waits[2] = { ctx->hStopEvent, ctx->hWakeEvent };
 
     for (;;) {
         EnterCriticalSection(&ctx->lock);
         HWND hp   = ctx->hPopup;
         BOOL hist = ctx->histPending;
+        BOOL dayOk = ctx->dayValid;   // phase 42
         BOOL drop = ctx->dropConn;
         ctx->dropConn = FALSE;
         LeaveCriticalSection(&ctx->lock);
@@ -1771,6 +1836,14 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
         if (hp && IsWindowVisible(hp)) {
             ok = hist ? WorkerFetchHistory(ctx) : TRUE;
             if (ok) ok = WorkerFetchKlines(ctx);
+            // The day's statistics (phase 42): every fifth cycle (15 s) - the
+            // day's open does not move, and its high, low and volume are
+            // followed live from the last price in between - and at once
+            // when there are none for the symbol shown.
+            if (ok && (!dayOk || ++dayCycle >= 5)) {
+                dayCycle = 0;
+                WorkerFetchDay(ctx);
+            }
         } else {
             ok = WorkerFetchPrice(ctx);
         }
@@ -1913,71 +1986,72 @@ static BOOL HeaderFits(int rightBound, int leftBound) {
 
 // Right limit for the header's row 2: the price axis's top label sits at
 // y = top +- 8 from x = edge + AXIS_LBL_GAP, and the row must keep HDR_GAP
-// of space to it. The toolbar and the offline text both read this.
+// of space to it. The range field and the settings cell read this.
 static int HeaderRow2Limit(int W) {
     return W - ChartAxisW(g_Ctx.sty.dpi) + Dp(AXIS_LBL_GAP) - Dp(HDR_GAP);
 }
 
-// The toolbar up to and including the 1Y pill must fit at the minimum width
-// (phase 41; through VOL before). If a table or a pill width grows past that,
-// the build stops here - and the rule in ToolbarLayout, which hides pills
-// from the right, never becomes what the user sees on a panel of legal size.
-// POPUP_MIN_W is not raised for a pill - it also guards which geometry the
-// registry is allowed to give back. At 400 px the row ends at x = 292 of 312;
-// 5Y, Max and the overlay pills (VOL, MA, RSI) are hidden there, and the
-// tray menu and the keys (Shift+7/8, V, M, I) carry them. At 1280 px every
-// pill shows.
-C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + TBAR_IVDD_W + TBAR_GROUP_GAP +
-         RANGE_1Y * TBAR_RANGE_W + TBAR_RANGE_WIDE_W + RANGE_1Y * TBAR_GAP   /* 1D 3D 1M 6M 1Y, YTD */
+// Row 2 must hold every range cell, the interval cell and the settings cell
+// at the minimum width (phase 42; through the 1Y pill in phase 41, through
+// VOL before). If a table or a width grows past that, the build stops here -
+// and the rule in ToolbarLayout, which hides cells from the right, never
+// becomes what the user sees on a panel of legal size. POPUP_MIN_W is not
+// raised for a cell: it also guards which geometry the registry may give
+// back. At 400 px the row ends at x = 280 of 312.
+C_ASSERT(RANGE_COUNT == 8);   // six narrow cells and two wide ones below
+C_ASSERT(PAD_L + 6 * TBAR_RANGE_W + 2 * TBAR_RANGE_WIDE_W + RANGE_COUNT * TBAR_CELL_GAP +
+         TBAR_IVDD_W + TBAR_GROUP_GAP + TBAR_GEAR_W
          <= POPUP_MIN_W - PAD_R + AXIS_LBL_GAP - HDR_GAP);
 
-// One pill's width and the gap in front of it, at 96 dpi. ToolbarLayout and
-// ToolbarMinW both read these, so the sums cannot drift apart.
-static int ToolbarPillW(int i) {
-    if (i == TBAR_SYM) return TBAR_SYM_W;
-    if (i == TBAR_IV)  return TBAR_IVDD_W;
-    if (i >= TBAR_RANGE_FIRST && i < TBAR_VOL)
-        return (wcslen(RANGES[i - TBAR_RANGE_FIRST].label) >= 3) ? TBAR_RANGE_WIDE_W : TBAR_RANGE_W;
-    if (i == TBAR_VOL) return TBAR_VOL_W;
-    if (i == TBAR_IND) return TBAR_IND_W;
-    return TBAR_RSI_W;
-}
-static int ToolbarGapBefore(int i) {
-    if (i == 0) return 0;
-    return (i == TBAR_IV || i == TBAR_RANGE_FIRST || i == TBAR_VOL) ? TBAR_GROUP_GAP : TBAR_GAP;
+// One cell's width at 96 dpi. ToolbarLayout and ToolbarMinW both read it, so
+// the sums cannot drift apart.
+static int ToolbarCellW(int i) {
+    if (i == TBAR_SYM)  return TBAR_SYM_W;
+    if (i == TBAR_IV)   return TBAR_IVDD_W;
+    if (i == TBAR_GEAR) return TBAR_GEAR_W;
+    return (wcslen(RANGES[i - TBAR_RANGE_FIRST].label) >= 3) ? TBAR_RANGE_WIDE_W : TBAR_RANGE_W;
 }
 
-// The toolbar's pills. A pure function of the width, like ButtonLayout, and
-// for the same reason: painting, WM_NCHITTEST, hover and click all read this.
-// Returns the number of visible pills; the rest are empty rectangles that
-// nothing hits. A pill that does not fit before HeaderRow2Limit is hidden
-// entirely, and all after it - never half a pill, and never VOL without the
-// intervals in front. The registry accepts a saved width down to 240 px, so
-// the branch can be reached even though the C_ASSERT above keeps it away
+// The header's clickable cells. A pure function of the width, like
+// ButtonLayout, and for the same reason: painting, WM_NCHITTEST, hover and
+// click all read this. The symbol sits in row 1. In row 2 the settings cell
+// takes the right end and the range field fills from the left; a cell that
+// would reach the settings cell is hidden, and every cell after it - never
+// half a cell. Hidden cells are empty rectangles that nothing hits. Returns
+// the number of visible cells. The registry accepts a saved width down to
+// 240 px, so the hiding can happen even though the C_ASSERT keeps it away
 // from 400.
 static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
+    ZeroMemory(out, sizeof(RECT) * TBAR_COUNT);
+    int n = 1;
+    out[TBAR_SYM].left   = Dp(PAD_L);
+    out[TBAR_SYM].right  = Dp(PAD_L) + Dp(TBAR_SYM_W);
+    out[TBAR_SYM].top    = Dp(QL_TOP);
+    out[TBAR_SYM].bottom = Dp(QL_TOP) + Dp(QL_H);
+
     int limit = HeaderRow2Limit(W);
-    int x = Dp(PAD_L), n = 0;
-    BOOL cut = FALSE;
-    for (int i = 0; i < TBAR_COUNT; ++i) {
-        int w = Dp(ToolbarPillW(i));
-        x += Dp(ToolbarGapBefore(i));
-        if (!cut && x + w > limit) cut = TRUE;
-        if (cut) {
-            out[i].left = out[i].top = out[i].right = out[i].bottom = 0;
-            continue;
-        }
-        out[i].left   = x;
-        out[i].right  = x + w;
-        out[i].top    = Dp(TBAR_TOP);
-        out[i].bottom = Dp(TBAR_TOP) + Dp(TBAR_H);
-        x += w;
-        n = i + 1;
+    int top = Dp(TBAR_TOP), bot = Dp(TBAR_TOP) + Dp(TBAR_H);
+    int gl = limit - Dp(TBAR_GEAR_W);
+    int stop = limit;
+    if (gl >= Dp(PAD_L)) {
+        out[TBAR_GEAR].left = gl;  out[TBAR_GEAR].right  = limit;
+        out[TBAR_GEAR].top  = top; out[TBAR_GEAR].bottom = bot;
+        stop = gl - Dp(TBAR_GROUP_GAP);
+        n++;
+    }
+    int x = Dp(PAD_L);
+    for (int i = TBAR_RANGE_FIRST; i <= TBAR_IV; ++i) {
+        int w = Dp(ToolbarCellW(i));
+        if (x + w > stop) break;
+        out[i].left = x;   out[i].right  = x + w;
+        out[i].top  = top; out[i].bottom = bot;
+        x += w + Dp(TBAR_CELL_GAP);
+        n++;
     }
     return n;
 }
 
-// Which pill is the mouse pointing at? -1 outside all of them.
+// Which cell is the mouse pointing at? -1 outside all of them.
 static int ToolbarHit(const RECT* tb, int x, int y) {
     for (int i = 0; i < TBAR_COUNT; ++i) {
         if (PtInRect2(&tb[i], x, y)) return i;
@@ -1985,42 +2059,69 @@ static int ToolbarHit(const RECT* tb, int x, int y) {
     return -1;
 }
 
-// The narrowest panel whose toolbar still holds every pill up to and
-// including the 1Y pill (VOL until phase 41) at the current dpi (phase 37). At 96 it is 398, inside
-// POPUP_MIN_W as the C_ASSERT above demands; at 150 % the lengths round
-// separately, the column alone grows 4 px more than 1.5 x 84, and 1.5 x 400
-// would have hidden VOL on a panel of minimum size. Same sums as
-// ToolbarLayout and HeaderRow2Limit.
+// The narrowest panel whose row 2 holds every cell at the current dpi (phase
+// 37; the whole range field and the settings cell from phase 42). At 96 it
+// is 368, inside POPUP_MIN_W as the C_ASSERT above demands; at 150 % the
+// lengths round separately, and the larger of this and 1.5 x 400 decides.
+// Same sums as ToolbarLayout and HeaderRow2Limit.
 static int ToolbarMinW(void) {
     int need = Dp(PAD_L);
-    for (int i = 0; i <= TBAR_RANGE_FIRST + RANGE_1Y; ++i) need += Dp(ToolbarGapBefore(i)) + Dp(ToolbarPillW(i));
+    for (int i = TBAR_RANGE_FIRST; i <= TBAR_IV; ++i) need += Dp(ToolbarCellW(i)) + Dp(TBAR_CELL_GAP);
+    need += Dp(TBAR_GROUP_GAP) - Dp(TBAR_CELL_GAP) + Dp(TBAR_GEAR_W);
     return need + ChartAxisW(g_Ctx.sty.dpi) - Dp(AXIS_LBL_GAP) + Dp(HDR_GAP);
 }
 
-// The toolbar's combined rectangle, derived from ToolbarLayout (see
-// ButtonStrip). Empty when no pill fits.
+// The union of the visible cells (see ButtonStrip), both rows. Empty when
+// none is visible.
 static void ToolbarStrip(int W, RECT* out) {
     RECT tb[TBAR_COUNT];
-    int n = ToolbarLayout(W, tb);
+    ToolbarLayout(W, tb);
     out->left = out->top = out->right = out->bottom = 0;
-    if (n <= 0) return;
-    out->left   = tb[0].left;
-    out->top    = tb[0].top;
-    out->right  = tb[n - 1].right;
-    out->bottom = tb[0].bottom;
+    BOOL any = FALSE;
+    for (int i = 0; i < TBAR_COUNT; ++i) {
+        if (tb[i].right <= tb[i].left) continue;
+        if (!any) { *out = tb[i]; any = TRUE; continue; }
+        if (tb[i].left   < out->left)   out->left   = tb[i].left;
+        if (tb[i].top    < out->top)    out->top    = tb[i].top;
+        if (tb[i].right  > out->right)  out->right  = tb[i].right;
+        if (tb[i].bottom > out->bottom) out->bottom = tb[i].bottom;
+    }
 }
 
+// The settings menu (phase 42), behind the gear. Bloomberg's "Chart Content"
+// holds the studies; this holds TickC's drawing choices for the panel, and
+// the theme. Each row toggles and the menu stays open, so several can be
+// changed in one visit. The rows sit in the overlay's row table after the
+// symbols and intervals, so hover and hit testing are the overlay's.
+enum { SET_VOL, SET_IND, SET_RSI, SET_THEME, SET_COUNT };
+static const wchar_t* const SET_LABEL[SET_COUNT] = {
+    L"Volume", L"Averages, VWAP and levels", L"RSI 14", L"Light theme",
+};
+#define SET_CHART_ROWS   3   // SET_VOL..SET_RSI under CHART, the rest under APPEARANCE
 
+static BOOL SettingOn(const AppContext* ctx, int k) {
+    switch (k) {
+        case SET_VOL:   return ShowVolNow(ctx);
+        case SET_IND:   return ShowIndNow(ctx);
+        case SET_RSI:   return ShowRsiNow(ctx);
+        case SET_THEME: return ThemeNow(ctx) == &APP_THEME_LIGHT;
+    }
+    return FALSE;
+}
 
-
-
-
-
-
-
-
-
-
+static void SetShowVolume(AppContext* ctx, BOOL on);
+static void SetShowIndicators(AppContext* ctx, BOOL on);
+static void SetShowRsi(AppContext* ctx, BOOL on);
+static void SetLightTheme(AppContext* ctx, BOOL on);
+static void SettingToggle(AppContext* ctx, int k) {
+    BOOL on = !SettingOn(ctx, k);
+    switch (k) {
+        case SET_VOL:   SetShowVolume(ctx, on);     break;
+        case SET_IND:   SetShowIndicators(ctx, on); break;
+        case SET_RSI:   SetShowRsi(ctx, on);        break;
+        case SET_THEME: SetLightTheme(ctx, on);     break;
+    }
+}
 
 // Does the UI want older candles right now? Today's and yesterday's
 // sessions (phase 27/28, with the indicators on) or a range whose home view
@@ -2061,12 +2162,15 @@ static void RequestHistory(AppContext* ctx) {
 #define OVL_HDR_H     18
 #define OVL_DD_W      64    // the interval dropdown (phase 41)
 #define OVL_DD_PAD    4
+#define OVL_SET_W     208   // the settings menu (phase 42)
+#define OVL_SET_FIRST (SYMBOL_COUNT + INTERVAL_COUNT)   // its rows follow the choices
+C_ASSERT(OVL_SET_FIRST + SET_COUNT <= OVL_ROWS_MAX);
 
 typedef struct {
     RECT box;                    // the whole overlay
     RECT rows[OVL_ROWS_MAX];     // one per choice
-    int  count;                  // SYMBOL_COUNT first, then INTERVAL_COUNT
-    RECT symHdr, ivHdr;          // the headings
+    int  count;                  // SYMBOL_COUNT, INTERVAL_COUNT, then SET_COUNT (phase 42)
+    RECT symHdr, ivHdr;          // the headings (the settings menu: CHART, APPEARANCE)
 } OverlayRects;
 
 static void OverlayLayout(int W, int H, OverlayRects* r) {
@@ -2081,6 +2185,40 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
     // pill. The symbol rows stay empty rectangles, so the indices - and the
     // click, hover and highlight code - are the picker's. If the pill is not
     // shown (a panel narrower than the minimum), the picker is laid out.
+    // The settings menu (phase 42): right-aligned under the gear, two
+    // headed sections. Same fallback as the dropdown.
+    if (g_Ctx.overlayKind == 2) {
+        RECT tb[TBAR_COUNT];
+        ToolbarLayout(W, tb);
+        const RECT* a = &tb[TBAR_GEAR];
+        if (a->right > a->left) {
+            const int pad = Dp(OVL_DD_PAD), rowH = Dp(OVL_ROW_H), hdrH = Dp(OVL_HDR_H), bw = Dp(OVL_SET_W);
+            int bx = a->right - bw, by = a->bottom + Dp(2);
+            if (bx < 0) bx = 0;
+            int bh = pad * 2 + hdrH * 2 + SET_COUNT * rowH;
+            if (by + bh > H) bh = H - by;
+            r->box.left = bx; r->box.top = by;
+            r->box.right = bx + bw; r->box.bottom = by + bh;
+            r->count = OVL_SET_FIRST + SET_COUNT;
+            int y = by + pad;
+            for (int k = 0; k < SET_COUNT; ++k) {
+                if (k == 0 || k == SET_CHART_ROWS) {
+                    RECT* h = (k == 0) ? &r->symHdr : &r->ivHdr;
+                    h->left = bx + pad; h->right = bx + bw - pad;
+                    h->top = y; h->bottom = y + hdrH;
+                    y += hdrH;
+                }
+                RECT* q = &r->rows[OVL_SET_FIRST + k];
+                q->left = bx + pad; q->right = bx + bw - pad;
+                q->top = y; q->bottom = y + rowH;
+                if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
+                if (q->top >= q->bottom) { q->left = q->right = q->top = q->bottom = 0; }
+                y += rowH;
+            }
+            return;
+        }
+    }
+
     if (g_Ctx.overlayKind == 1) {
         RECT tb[TBAR_COUNT];
         ToolbarLayout(W, tb);
@@ -2178,14 +2316,49 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.dim, a));
     if (r.symHdr.right > r.symHdr.left) {   // the dropdown (phase 41) has no headings
+        BOOL set = (ctx->overlayKind == 2);  // phase 42: the settings menu's sections
         RECT h1 = r.symHdr, h2 = r.ivHdr;
         h1.left += Dp(6); h2.left += Dp(6);
-        DrawTextW(hdc, L"SYMBOL",    -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        DrawTextW(hdc, L"INTERVAL",  -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        DrawTextW(hdc, set ? L"CHART" : L"SYMBOL",        -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        DrawTextW(hdc, set ? L"APPEARANCE" : L"INTERVAL", -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
     for (int i = 0; i < r.count; ++i) {
         if (r.rows[i].right <= r.rows[i].left) continue;   // not in this layout
+        if (i >= OVL_SET_FIRST) {
+            // A setting (phase 42): a check box and its label. Checked is
+            // the accent with a white tick, as the selected range cell.
+            int k = i - OVL_SET_FIRST;
+            if (i == ctx->overlayHot) {
+                HBRUSH brHot = CreateSolidBrush(Blend(ctx->sty.clr.bg, ctx->sty.clr.boxEdge, a / 2));
+                FillRect(hdc, &r.rows[i], brHot);
+                DeleteObject(brHot);
+            }
+            int cb = Dp(11), cx0 = r.rows[i].left + Dp(6);
+            int cy0 = (r.rows[i].top + r.rows[i].bottom - cb) / 2;
+            RECT box = { cx0, cy0, cx0 + cb, cy0 + cb };
+            HGDIOBJ oldP = SelectObject(hdc, GetStockObject(DC_PEN));
+            HGDIOBJ oldB = SelectObject(hdc, GetStockObject(DC_BRUSH));
+            if (SettingOn(ctx, k)) {
+                SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.accent, a));
+                FillRect(hdc, &box, (HBRUSH)GetStockObject(DC_BRUSH));
+                SetDCPenColor(hdc, Blend(ctx->sty.clr.accent, ctx->sty.clr.onAccent, a));
+                for (int t = 0; t < 2; ++t) {   // two pixels thick
+                    MoveToEx(hdc, cx0 + Dp(2), cy0 + Dp(5) + t, NULL);
+                    LineTo(hdc, cx0 + Dp(4), cy0 + Dp(7) + t);
+                    LineTo(hdc, cx0 + Dp(9), cy0 + Dp(2) + t);
+                }
+            } else {
+                SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.text, a));
+                FrameRect(hdc, &box, (HBRUSH)GetStockObject(DC_BRUSH));
+            }
+            SelectObject(hdc, oldP);
+            SelectObject(hdc, oldB);
+            SetTextColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.text, a));
+            RECT t = r.rows[i]; t.left += Dp(6) + cb + Dp(8);
+            DrawTextW(hdc, SET_LABEL[k], -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            continue;
+        }
         BOOL isSym  = (i < SYMBOL_COUNT);
         int  idx    = isSym ? i : (i - SYMBOL_COUNT);
         BOOL active = isSym ? (idx == ctx->symIdx) : (idx == ctx->ivIdx);
@@ -2476,186 +2649,267 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
     SelectObject(hdc, oldBr);
 }
 
-// The toolbar. Flat like the control buttons: no fade, the color changes
-// instantly, and the hit hangs on tbHot. Three states: rest (muted text, no
-// surface), hover (CLR_BOX surface) and active (CLR_BOX surface with a
-// CLR_BOXEDGE frame) - active is the current interval, VOL when the bars
-// are shown, and the symbol pill while the overlay it opens is open. The
-// palette is the hover box's and the overlay's. No new GDI objects: the
-// brushes exist, and the arrow is drawn with DC_PEN/DC_BRUSH.
+// The header's cells (phase 22; phase 42 made row 2 Bloomberg's range field).
+// Flat like the control buttons: no fade, the color changes instantly, and
+// the hit hangs on tbHot. The symbol in row 1 is a dropdown with no surface
+// at rest. In row 2 every cell has the boxEdge surface - the box color was
+// too close to the background to read as a cell - and the pointer's cell
+// gets a frame in the text color. The selected range, or the cell whose list
+// is open, is the accent with white text. The contrast check holds both
+// text pairs to 4.5:1.
 //
 // Called from PaintPopup, not from DrawChartFrame, for the same reason as the
 // buttons: right after an interval switch the buffer is empty, and that is
-// exactly when the user looks for which pill became active. Everything it
-// reads is UI-owned or written only by the UI thread (symIdx, ivIdx).
+// exactly when the user looks for which cell became active. Everything it
+// reads is UI-owned or written only by the UI thread.
+
+// A dropdown's arrow: a filled triangle, 7 px wide and 4 tall, at the right
+// end of the cell - vector, like the button glyphs.
+static void DrawDropArrow(HDC hdc, const RECT* r, COLORREF c) {
+    int ax = r->right - Dp(9), ay = (r->top + r->bottom) / 2 - Dp(1);
+    int t3 = Dp(3);
+    POINT tri[3] = { { ax - t3, ay }, { ax + t3, ay }, { ax, ay + t3 } };
+    SetDCPenColor(hdc, c);
+    SetDCBrushColor(hdc, c);
+    Polygon(hdc, tri, 3);
+}
+
+// The settings gear (phase 42): eight teeth around a hole, from a table of
+// unit vectors (x1000) - no sin/cos, whose CRT tables once cost 21 KB
+// (pitfall 75). 0 = the root circle, 1 = a tooth's tip.
+static const short GEAR_PTS[32][3] = {
+    {956,-292,0}, {988,-156,1}, {988,156,1}, {956,292,0}, {883,469,0}, {809,588,1}, {588,809,1}, {469,883,0},
+    {292,956,0}, {156,988,1}, {-156,988,1}, {-292,956,0}, {-469,883,0}, {-588,809,1}, {-809,588,1}, {-883,469,0},
+    {-956,292,0}, {-988,156,1}, {-988,-156,1}, {-956,-292,0}, {-883,-469,0}, {-809,-588,1}, {-588,-809,1}, {-469,-883,0},
+    {-292,-956,0}, {-156,-988,1}, {156,-988,1}, {292,-956,0}, {469,-883,0}, {588,-809,1}, {809,-588,1}, {883,-469,0},
+};
+static void DrawGear(HDC hdc, const RECT* r, COLORREF ink, COLORREF face) {
+    int cx = (r->left + r->right) / 2, cy = (r->top + r->bottom) / 2;
+    int ro = Dp(6), ri = Dp(4), rh = Dp(2);
+    POINT p[32];
+    for (int k = 0; k < 32; ++k) {
+        int rr = GEAR_PTS[k][2] ? ro : ri;
+        p[k].x = cx + MulDiv(GEAR_PTS[k][0], rr, 1000);
+        p[k].y = cy + MulDiv(GEAR_PTS[k][1], rr, 1000);
+    }
+    SetDCPenColor(hdc, ink);
+    SetDCBrushColor(hdc, ink);
+    Polygon(hdc, p, 32);
+    SetDCPenColor(hdc, face);
+    SetDCBrushColor(hdc, face);
+    Ellipse(hdc, cx - rh, cy - rh, cx + rh + 1, cy + rh + 1);
+}
+
 static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
     RECT tb[TBAR_COUNT];
-    int n = ToolbarLayout(W, tb);
-    if (n <= 0) return;
+    if (ToolbarLayout(W, tb) <= 0) return;
 
     HGDIOBJ oldFont = SelectObject(hdc, ctx->sty.fontSmall);
+    HGDIOBJ oldPen  = SelectObject(hdc, GetStockObject(DC_PEN));
+    HGDIOBJ oldBr   = SelectObject(hdc, GetStockObject(DC_BRUSH));
     SetBkMode(hdc, TRANSPARENT);
 
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < TBAR_COUNT; ++i) {
         RECT* r = &tb[i];
+        if (r->right <= r->left) continue;
         BOOL hot = (ctx->tbHot == i);
-        BOOL on;
-        const wchar_t* lbl;
-        BOOL dd = (i == TBAR_SYM || i == TBAR_IV);   // opens a list (phase 41: two of them)
-        if (i == TBAR_SYM)      { on = ctx->overlayOpen && ctx->overlayKind == 0; lbl = SYMBOLS[ctx->symIdx].label; }
-        else if (i == TBAR_IV)  { on = ctx->overlayOpen && ctx->overlayKind == 1; lbl = INTERVALS[ctx->ivIdx].label; }
-        else if (i == TBAR_VOL) { on = ShowVolNow(ctx);  lbl = L"VOL"; }
-        else if (i == TBAR_IND) { on = ShowIndNow(ctx);  lbl = L"MA"; }
-        else if (i == TBAR_RSI) { on = ShowRsiNow(ctx);  lbl = L"RSI"; }
+        if (i == TBAR_SYM) {
+            BOOL on = ctx->overlayOpen && ctx->overlayKind == 0;
+            if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
+            if (on)        FrameRect(hdc, r, ctx->sty.brBoxEdge);
+            SetTextColor(hdc, ctx->sty.clr.text);
+            RECT t = *r;
+            t.left += Dp(6); t.right -= Dp(14);
+            DrawTextW(hdc, SYMBOLS[ctx->symIdx].label, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            DrawDropArrow(hdc, r, ctx->sty.clr.dim);
+            continue;
+        }
+        BOOL sel;
+        const wchar_t* lbl = NULL;
+        if (i == TBAR_IV)        { sel = ctx->overlayOpen && ctx->overlayKind == 1; lbl = INTERVALS[ctx->ivIdx].label; }
+        else if (i == TBAR_GEAR) { sel = ctx->overlayOpen && ctx->overlayKind == 2; }
         else {
-            // A range (phase 41) is lit while the view is at its home: the
-            // moment the user zooms or pans away, it goes out.
+            // A range is selected while the view is at its home (phase 41):
+            // the moment the user zooms or pans away, it goes out.
             int rg = i - TBAR_RANGE_FIRST;
-            on  = (ctx->rangeIdx == rg && ctx->rangeWant > 0);
+            sel = (ctx->rangeIdx == rg && ctx->rangeWant > 0);
             lbl = RANGES[rg].label;
         }
-
-        if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
-        if (on)        FrameRect(hdc, r, ctx->sty.brBoxEdge);
-
-        // A dropdown shows a current value, so it is never dimmed.
-        COLORREF fg = (hot || on || dd) ? ctx->sty.clr.text : ctx->sty.clr.dim;
-        SetTextColor(hdc, fg);
-        if (dd) {
-            // Left-aligned text and a down arrow at the right end: the pill
-            // opens a list, it does not switch by itself. The arrow is a
-            // filled triangle, 7 px wide and 4 tall - vector, like the
-            // button glyphs.
+        COLORREF face = sel ? ctx->sty.clr.accent : ctx->sty.clr.boxEdge;
+        COLORREF ink  = sel ? ctx->sty.clr.onAccent : ctx->sty.clr.text;
+        SetDCBrushColor(hdc, face);
+        FillRect(hdc, r, (HBRUSH)GetStockObject(DC_BRUSH));
+        if (hot && !sel) {
+            SetDCBrushColor(hdc, ctx->sty.clr.text);
+            FrameRect(hdc, r, (HBRUSH)GetStockObject(DC_BRUSH));
+        }
+        SetTextColor(hdc, ink);
+        if (i == TBAR_GEAR) {
+            DrawGear(hdc, r, ink, face);
+        } else if (i == TBAR_IV) {
             RECT t = *r;
             t.left += Dp(6); t.right -= Dp(14);
             DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            int ax = r->right - Dp(9), ay = (r->top + r->bottom) / 2 - Dp(1);
-            int t3 = Dp(3);
-            POINT tri[3] = { { ax - t3, ay }, { ax + t3, ay }, { ax, ay + t3 } };
-            HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(DC_PEN));
-            HGDIOBJ oldBr  = SelectObject(hdc, GetStockObject(DC_BRUSH));
-            SetDCPenColor(hdc, ctx->sty.clr.dim);
-            SetDCBrushColor(hdc, ctx->sty.clr.dim);
-            Polygon(hdc, tri, 3);
-            SelectObject(hdc, oldPen);
-            SelectObject(hdc, oldBr);
+            DrawDropArrow(hdc, r, ink);
         } else {
             DrawTextW(hdc, lbl, -1, r, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
         }
     }
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBr);
     SelectObject(hdc, oldFont);
 }
 
-// The header over the chart (was the top of DrawChart before phase 34): the
-// price, the change over the visible view and the offline text. App-level,
-// not chart-level: it reads the network health and the toolbar layout.
-// Called under the lock, like the chart body.
+// The quote line (phase 42), on Bloomberg's model: label, value, label,
+// value, in one row after the symbol. The fields in display order; the
+// priority decides which stay when the row is narrow - Last and %Chg at the
+// minimum width, then Chg, Hi, Lo, Op, Vol and At. The ones that stay keep
+// the display order. A value is drawn whole or not at all: a truncated
+// price is a wrong number.
+enum { QF_LAST, QF_CHG, QF_PCT, QF_OP, QF_HI, QF_LO, QF_VOL, QF_AT, QF_COUNT };
+static const wchar_t* const QF_LABEL[QF_COUNT] = {
+    L"Last", L"Chg", L"%Chg", L"Op", L"Hi", L"Lo", L"Vol", L"At",
+};
+static const int QF_PRIORITY[QF_COUNT] = {
+    QF_LAST, QF_PCT, QF_CHG, QF_HI, QF_LO, QF_OP, QF_VOL, QF_AT,
+};
+
+// The header over the chart (was the top of DrawChart before phase 34).
+// Phase 42: row 1 is the quote line (was a large price and the change over
+// the view), row 2 carries the change over the range at its right end,
+// before the settings cell. App-level, not chart-level: it reads the network
+// health, the trading day and the cell layout. Called under the lock, like
+// the chart body.
 static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSecs,
                        int vs, int vc) {
-    wchar_t buf[64];
-    // --- Header: price + change over the VISIBLE view ---
-    double first = ctx->candles[vs].open;
-    double last  = ctx->candles[vs + vc - 1].close;
-    double chg   = (first > 0.0) ? ((last - first) / first) * 100.0 : 0.0;
-    COLORREF chgClr = (chg >= 0.0) ? ctx->sty.clr.up : ctx->sty.clr.down;
+    if (g_desktopMode) return;   // phase 14: no readings on the desktop
+    int n = ctx->candleCount;
+    double last = ctx->candles[n - 1].close;
+    RECT tb[TBAR_COUNT];
+    ToolbarLayout(W, tb);
+    RECT strip;
+    ButtonStrip(W, &strip);
 
-    wchar_t span[24];
+    // --- Row 1: the quote line ---
+    wchar_t val[QF_COUNT][32];
+    const wchar_t* lbl[QF_COUNT];
+    COLORREF clr[QF_COUNT];
+    BOOL have[QF_COUNT];
+    for (int f = 0; f < QF_COUNT; ++f) { lbl[f] = QF_LABEL[f]; have[f] = FALSE; val[f][0] = 0; clr[f] = ctx->sty.clr.quote; }
+
+    have[QF_LAST] = TRUE;
+    swprintf_s(val[QF_LAST], 32, L"%.2f", last);
+    clr[QF_LAST] = ctx->sty.clr.text;
+    if (ctx->dayValid && ctx->dayOpen > 0.0) {
+        // The day's open is the reference, as Bloomberg's change is the
+        // day's; high and low follow the live price between two fetches.
+        double chg = last - ctx->dayOpen;
+        double hi  = (last > ctx->dayHigh) ? last : ctx->dayHigh;
+        double lo  = (last < ctx->dayLow)  ? last : ctx->dayLow;
+        COLORREF dir = (chg >= 0.0) ? ctx->sty.clr.up : ctx->sty.clr.down;
+        clr[QF_LAST] = clr[QF_CHG] = clr[QF_PCT] = dir;
+        swprintf_s(val[QF_CHG], 32, L"%+.2f", chg);
+        swprintf_s(val[QF_PCT], 32, L"%+.2f%%", chg / ctx->dayOpen * 100.0);
+        swprintf_s(val[QF_OP],  32, L"%.2f", ctx->dayOpen);
+        swprintf_s(val[QF_HI],  32, L"%.2f", hi);
+        swprintf_s(val[QF_LO],  32, L"%.2f", lo);
+        FormatVolume(ctx->dayVol, val[QF_VOL], 32);
+        have[QF_CHG] = have[QF_PCT] = have[QF_OP] = have[QF_HI] = have[QF_LO] = have[QF_VOL] = TRUE;
+    }
+    // At: the last update, local time. Offline, the same place says how long
+    // the line has been down - and takes the priority right after Last.
+    int prio[QF_COUNT];
+    for (int k = 0; k < QF_COUNT; ++k) prio[k] = QF_PRIORITY[k];
+    if (stale) {
+        lbl[QF_AT] = L"Offline";
+        swprintf_s(val[QF_AT], 32, L"%ds", staleSecs);
+        clr[QF_AT] = ctx->sty.clr.down;
+        have[QF_AT] = TRUE;
+        for (int f = 0; f < QF_COUNT; ++f) if (f != QF_AT) clr[f] = ctx->sty.clr.dim;
+        for (int k = QF_COUNT - 1; k > 1; --k) prio[k] = prio[k - 1];
+        prio[1] = QF_AT;
+    } else if (ctx->lastUpdMs > 0) {
+        long long atMs = ctx->lastUpdMs;
+#ifdef TICKER_PROBE
+        // Recorded data: the capture must not follow the clock (phase 42).
+        if (g_fixtureDir[0]) atMs = ctx->candles[n - 1].openTime;
+#endif
+        FormatCandleTime(atMs, 60000LL, ChartUtcOffsetMs(), val[QF_AT], 32);
+        have[QF_AT] = TRUE;
+    }
+
+    // Widths, then the fields that fit, by priority.
+    int lw[QF_COUNT], vw[QF_COUNT];
+    for (int f = 0; f < QF_COUNT; ++f) {
+        lw[f] = vw[f] = 0;
+        if (!have[f]) continue;
+        SIZE sz = { 0, 0 };
+        SelectObject(hdc, ctx->sty.fontSmall);
+        GetTextExtentPoint32W(hdc, lbl[f], (int)wcslen(lbl[f]), &sz);
+        lw[f] = sz.cx;
+        SelectObject(hdc, ctx->hFontQuote);
+        GetTextExtentPoint32W(hdc, val[f], (int)wcslen(val[f]), &sz);
+        vw[f] = sz.cx;
+    }
+    const int lblGap = Dp(4), fieldGap = Dp(14);
+    int x0 = tb[TBAR_SYM].right + Dp(10);
+    int avail = strip.left - Dp(HDR_GAP) - x0;
+    BOOL take[QF_COUNT] = { 0 };
+    int used = 0, count = 0;
+    for (int k = 0; k < QF_COUNT; ++k) {
+        int f = prio[k];
+        if (!have[f]) continue;
+        int w = lw[f] + lblGap + vw[f] + (count ? fieldGap : 0);
+        if (used + w > avail) break;   // strictly by priority: no short field jumps the queue
+        take[f] = TRUE; used += w; count++;
+    }
+    // One baseline for both fonts, in the button row's band.
+    int base = Dp(QL_TOP) + Dp(QL_H) - Dp(5);
+    UINT oldAlign = SetTextAlign(hdc, TA_LEFT | TA_BASELINE);
+    int x = x0, mask = 0;
+    for (int f = 0; f < QF_COUNT; ++f) {
+        if (!take[f]) continue;
+        SelectObject(hdc, ctx->sty.fontSmall);
+        SetTextColor(hdc, ctx->sty.clr.text);
+        ExtTextOutW(hdc, x, base, 0, NULL, lbl[f], (UINT)wcslen(lbl[f]), NULL);
+        x += lw[f] + lblGap;
+        SelectObject(hdc, ctx->hFontQuote);
+        SetTextColor(hdc, clr[f]);
+        ExtTextOutW(hdc, x, base, 0, NULL, val[f], (UINT)wcslen(val[f]), NULL);
+        x += vw[f] + fieldGap;
+        mask |= 1 << f;
+    }
+    SetTextAlign(hdc, oldAlign);
+#ifdef TICKER_PROBE
+    g_probeQuoteMask = mask | (stale ? 0x100 : 0);
+#else
+    (void)mask;
+#endif
+
+    // --- Row 2: the change over the view, at the right end ---
+    // Over the range when one is at home and whole (phase 41), otherwise
+    // over the span the view covers. Between the last visible cell and the
+    // settings cell, whole or not at all.
+    double first = ctx->candles[vs].open;
+    double lastV = ctx->candles[vs + vc - 1].close;
+    double pct   = (first > 0.0) ? ((lastV - first) / first) * 100.0 : 0.0;
+    wchar_t span[24], buf[64];
     FormatSpan(vc, ctx->intervalMs, span, 24);
-    // At a range's home, and once the view holds all of it (or all there
-    // is), the change is over the range, and says so (phase 41).
     if (ctx->rangeIdx >= 0 && ctx->rangeWant > 0 && (vc >= ctx->rangeWant || ctx->histDone))
         wcscpy_s(span, 24, RANGES[ctx->rangeIdx].label);
-
-
-    // --- Header layout, measured ---
-    // Previously the price and the percentage shared ONE rectangle, left- and
-    // right-aligned. On a narrow panel they then meet in the middle and are
-    // drawn on top of each other - DrawTextW clips to the rectangle, not to
-    // the neighboring text. Now each text is measured on the fully formatted
-    // string in its own font (bug #5), and row by row the right bound of the
-    // left-aligned text is compared with the left bound of the right-aligned.
-    //
-    // Row 1 (y 10-30): price on the left, percentage and button row on the
-    // right. Row 2 (y 28-42): the symbol line on the left. On the right there
-    // are not the buttons (they end at y = 24), but the price axis's top
-    // label, which sits at y = top +- 8 from x = right + AXIS_LBL_GAP.
-    // The metadata overlay (phase 14). Price, percentage and symbol line are
-    // the layer that is read foveally: the user has to stop and decode
-    // numbers. On the desktop they compete with icons and folders, and the
-    // surface is meant to be read peripherally. The whole block is therefore
-    // idle in desktop mode.
-    if (!g_desktopMode) {
-        RECT strip;
-        ButtonStrip(W, &strip);
-        int btnLeft = strip.left;          // X_left_bound for the button row
-
-        // Row 1, left: the price. The rectangle ends at the button row, so even
-        // a price that does not fit is never drawn under the buttons.
-        SelectObject(hdc, ctx->hFontBig);
-        SetTextColor(hdc, stale ? ctx->sty.clr.dim : ctx->sty.clr.text);
-        swprintf_s(buf, 64, L"$%.2f", last);
-        int lenPrice = (int)wcslen(buf);
-        SIZE szPrice = { 0, 0 };
-        GetTextExtentPoint32W(hdc, buf, lenPrice, &szPrice);
-        int priceRight = Dp(PAD_L) + szPrice.cx;   // X_right_bound
-        RECT rcPrice = { Dp(PAD_L), Dp(10), btnLeft - Dp(HDR_GAP), Dp(30) };
-        DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-        // Row 1, right: the percentage in three steps. Full with span, then
-        // without span, then hidden. Never clipped in the middle of a number -
-        // "+0.5" where it says "+0.50%" is a wrong value, not a shorter one.
-        SelectObject(hdc, ctx->sty.fontSmall);
-        int pctRight = btnLeft - Dp(HDR_GAP);
-        wchar_t pctFull[48], pctShort[24];
-        swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
-        swprintf_s(pctShort, 24, L"%+.2f%%", chg);
-        int lenFull = (int)wcslen(pctFull), lenShort = (int)wcslen(pctShort);
-        SIZE szFull = { 0, 0 }, szShort = { 0, 0 };
-        GetTextExtentPoint32W(hdc, pctFull, lenFull, &szFull);
-
-        // The short form is measured only when the full one did not fit. Each
-        // GetTextExtentPoint32W is ~20 us, and above the minimum width the full
-        // one fits with a good margin - measured at 400 px: ~115 px of air to
-        // the price.
-        const wchar_t* pct = NULL;
-        int lenPct = 0;
-        if (HeaderFits(priceRight, pctRight - szFull.cx)) {
-            pct = pctFull;  lenPct = lenFull;
-        } else {
-            GetTextExtentPoint32W(hdc, pctShort, lenShort, &szShort);
-            if (HeaderFits(priceRight, pctRight - szShort.cx)) {
-                pct = pctShort; lenPct = lenShort;
-            }
-        }
-        if (pct) {
-            SetTextColor(hdc, chgClr);
-            RECT rcPct = { priceRight + Dp(HDR_GAP), Dp(10), pctRight, Dp(30) };
-            DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-        }
-
-        // Row 2: the toolbar (phase 22) sits where the symbol line used to,
-        // and carries symbol and interval itself. It is drawn from PaintPopup
-        // - also when the buffer is empty. All that is left here is the
-        // offline text, which reads the health fields under the lock: to the
-        // right of the last pill, and only when the WHOLE text fits before the
-        // price axis's label. Same rule as the percentage: a truncated seconds
-        // count is a wrong number. Dimmed price, the tray tip and the icon
-        // carry the state at any width.
-        if (stale) {
-            RECT tb[TBAR_COUNT];
-            int tbN = ToolbarLayout(W, tb);
-            int subLeft  = (tbN > 0) ? tb[tbN - 1].right + Dp(HDR_GAP) : Dp(PAD_L);
-            int subLimit = HeaderRow2Limit(W);
-            swprintf_s(buf, 64, L"offline %ds", staleSecs);
-            int lenSub = (int)wcslen(buf);
-            SIZE szSub = { 0, 0 };
-            GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
-            if (subLeft + szSub.cx <= subLimit) {
-                SetTextColor(hdc, ctx->sty.clr.dim);
-                RECT rcSub = { subLeft, Dp(TBAR_TOP), subLimit, Dp(TBAR_TOP) + Dp(TBAR_H) };
-                DrawTextW(hdc, buf, lenSub, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            }
-        }
+    swprintf_s(buf, 64, L"%+.2f%%  %s", pct, span);
+    int cellsRight = Dp(PAD_L);
+    for (int i = TBAR_RANGE_FIRST; i <= TBAR_IV; ++i)
+        if (tb[i].right > tb[i].left) cellsRight = tb[i].right;
+    int right = (tb[TBAR_GEAR].right > tb[TBAR_GEAR].left) ? tb[TBAR_GEAR].left - Dp(HDR_GAP)
+                                                           : HeaderRow2Limit(W);
+    SelectObject(hdc, ctx->sty.fontSmall);
+    SIZE sz = { 0, 0 };
+    GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &sz);
+    if (HeaderFits(cellsRight, right - sz.cx)) {
+        SetTextColor(hdc, stale ? ctx->sty.clr.dim : (pct >= 0.0) ? ctx->sty.clr.up : ctx->sty.clr.down);
+        RECT rc = { right - sz.cx, Dp(TBAR_TOP), right, Dp(TBAR_TOP) + Dp(TBAR_H) };
+        DrawTextW(hdc, buf, -1, &rc, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
     }
 }
 
@@ -2888,7 +3142,7 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     if (!isSym && idx == ctx->ivIdx)  return;
 
     EnterCriticalSection(&ctx->lock);
-    if (isSym) ctx->symIdx = idx;
+    if (isSym) { ctx->symIdx = idx; ctx->dayValid = FALSE; }   // phase 42: another symbol's day
     else       { ctx->ivIdx = idx; ctx->intervalMs = INTERVALS[idx].ms; }
     ctx->configGen++;
     ctx->candleCount = 0;
@@ -3129,21 +3383,17 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
 // tray menu; a click on the active interval is a no-op there. The symbol pill
 // opens the existing overlay - no new menu, no new hit-test code.
 static void OnToolbarClick(HWND hwnd, int th) {
-    if (th == TBAR_SYM || th == TBAR_IV) {
-        g_Ctx.overlayKind = (th == TBAR_IV) ? 1 : 0;   // phase 41
+    if (th == TBAR_SYM || th == TBAR_IV || th == TBAR_GEAR) {
+        // The symbol picker, the interval dropdown (phase 41) or the
+        // settings menu (phase 42).
+        g_Ctx.overlayKind = (th == TBAR_IV) ? 1 : (th == TBAR_GEAR) ? 2 : 0;
         g_Ctx.overlayOpen = TRUE;
         g_Ctx.overlayHot  = -1;
         g_Ctx.ch.hoverIdx    = -1;
-        g_Ctx.tbHot       = -1;   // no pill lights up while the overlay owns the mouse
+        g_Ctx.tbHot       = -1;   // no cell lights up while the overlay owns the mouse
         StartAnim(hwnd);
         InvalidateRect(hwnd, NULL, FALSE);
-    } else if (th == TBAR_VOL) {
-        SetShowVolume(&g_Ctx, !ShowVolNow(&g_Ctx));
-    } else if (th == TBAR_IND) {
-        SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
-    } else if (th == TBAR_RSI) {
-        SetShowRsi(&g_Ctx, !ShowRsiNow(&g_Ctx));
-    } else if (th >= TBAR_RANGE_FIRST && th < TBAR_VOL) {
+    } else if (th >= TBAR_RANGE_FIRST && th < TBAR_IV) {
         SelectRange(&g_Ctx, th - TBAR_RANGE_FIRST);
     }
 }
@@ -3960,6 +4210,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 65: r = g_Ctx.rangeIdx; break;
                 case 66: r = g_Ctx.rangeWant; break;
                 case 67: r = g_Ctx.overlayKind; break;
+                // 69-73 (phase 42): the trading day - valid, then open, high,
+                // low and volume x100 (-1 while not valid).
+                case 68: r = g_probeQuoteMask; break;
+                case 69: r = g_Ctx.dayValid; break;
+                case 70: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayOpen * 100.0 + 0.5) : -1; break;
+                case 71: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayHigh * 100.0 + 0.5) : -1; break;
+                case 72: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayLow  * 100.0 + 0.5) : -1; break;
+                case 73: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayVol  * 100.0 + 0.5) : -1; break;
                 case 62: r = (LRESULT)(g_Ctx.ch.dispRsiF * 1000.0); break;
                 case 63: {
                     double v;
@@ -4191,6 +4449,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 OverlayRects orr;
                 OverlayLayout(rcO.right, rcO.bottom, &orr);
                 int hit = OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+                if (hit >= OVL_SET_FIRST) {
+                    // A setting (phase 42): toggled, and the menu stays open.
+                    SettingToggle(&g_Ctx, hit - OVL_SET_FIRST);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                }
                 if (hit >= 0) ApplyConfigChoice(&g_Ctx, hit);
                 g_Ctx.overlayOpen = FALSE;   // a click outside closes without change
                 g_Ctx.overlayHot  = -1;
@@ -4351,18 +4615,18 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // Without Ctrl - Ctrl+0 is the default view, and Ctrl+digit
                 // stays free.
                 if (!ctrl && wParam == 'V') {
-                    OnToolbarClick(hwnd, TBAR_VOL);
+                    SetShowVolume(&g_Ctx, !ShowVolNow(&g_Ctx));
                     return 0;
                 }
                 // M (phase 25): the MA pill. Without Ctrl - Ctrl+M minimizes.
                 // Also works when the pill is hidden on a narrow panel.
                 if (!ctrl && wParam == 'M') {
-                    OnToolbarClick(hwnd, TBAR_IND);
+                    SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
                     return 0;
                 }
                 // I (phase 39): the RSI band. Works when the pill is hidden.
                 if (!ctrl && wParam == 'I') {
-                    OnToolbarClick(hwnd, TBAR_RSI);
+                    SetShowRsi(&g_Ctx, !ShowRsiNow(&g_Ctx));
                     return 0;
                 }
                 // T (phase 40): the light theme, as the tray menu's item.
@@ -4679,8 +4943,8 @@ static void ApplyPanelStyle(AppContext* ctx, int dpi) {
     ChartStyleDestroy(&ctx->sty);
     ChartStyleCreate(&ctx->sty, dpi, th->chart);
     ctx->theme = th;
-    if (ctx->hFontBig) DeleteObject(ctx->hFontBig);
-    ctx->hFontBig = CreateFontW(-ChartPx(dpi, 19), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    if (ctx->hFontQuote) DeleteObject(ctx->hFontQuote);
+    ctx->hFontQuote = CreateFontW(-ChartPx(dpi, 13), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,   // phase 42: the quote line's values
                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (ctx->penBtn)      DeleteObject(ctx->penBtn);
@@ -5505,7 +5769,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     if (g_Ctx.nid.hIcon) DestroyIcon(g_Ctx.nid.hIcon);
     if (g_Ctx.hFontPill) DeleteObject(g_Ctx.hFontPill);
-    if (g_Ctx.hFontBig) DeleteObject(g_Ctx.hFontBig);
+    if (g_Ctx.hFontQuote) DeleteObject(g_Ctx.hFontQuote);
     ChartStyleDestroy(&g_Ctx.sty);
 
     DeleteObject(g_Ctx.penBtn);      DeleteObject(g_Ctx.penBtnHot);
