@@ -169,6 +169,7 @@ static const IntervalDef INTERVALS[] = {
     { L"1h",  L"1h",  3600000LL },
     { L"4h",  L"4h",  14400000LL },
     { L"1d",  L"1d",  86400000LL },
+    { L"1w",  L"1w",  604800000LL },   // phase 41: five years and more
 };
 #define SYMBOL_COUNT   ((int)(sizeof(SYMBOLS) / sizeof(SYMBOLS[0])))
 #define INTERVAL_COUNT ((int)(sizeof(INTERVALS) / sizeof(INTERVALS[0])))
@@ -180,8 +181,10 @@ C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 
 #define ALERT_TAU_FLASH    900.0  // the afterglow when an alert fires (ms)
 
-// The toolbar (phase 22): symbol pill, one pill per interval and VOL, in
-// the header's row 2 - where the symbol line stood as plain text. Fixed
+// The toolbar (phase 22): symbol pill, interval pill and VOL, in the
+// header's row 2 - where the symbol line stood as plain text. Up to phase 40
+// every interval had a pill of its own; phase 41 made the interval (the bar
+// size) a dropdown like the symbol, to free the row for the ranges. Fixed
 // widths, not measured text: WM_NCHITTEST must be able to compute the pills
 // without a DC, and painting and hit testing must read the same numbers
 // (pitfall 14). 15 px high, from y = 28: the price digits in row 1 end at
@@ -190,15 +193,15 @@ C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 #define TBAR_TOP           28
 #define TBAR_H             15
 #define TBAR_SYM_W         74    // "BNB/USDT" + arrow
-#define TBAR_IV_W          28    // "15m"
+#define TBAR_IVDD_W        44    // "15m" + arrow (phase 41)
 #define TBAR_VOL_W         32
 #define TBAR_IND_W         26    // "MA" (phase 25)
 #define TBAR_RSI_W         30    // "RSI" (phase 39)
-#define TBAR_GAP           2     // between the interval pills
-#define TBAR_GROUP_GAP     8     // between symbol, intervals and VOL
+#define TBAR_GAP           2     // between the pills of one group
+#define TBAR_GROUP_GAP     8     // between symbol, interval and VOL
 #define TBAR_SYM           0
-#define TBAR_IV_FIRST      1
-#define TBAR_VOL           (TBAR_IV_FIRST + INTERVAL_COUNT)
+#define TBAR_IV            1     // the interval dropdown (phase 41)
+#define TBAR_VOL           (TBAR_IV + 1)
 #define TBAR_IND           (TBAR_VOL + 1)   // same group as VOL: overlays
 #define TBAR_RSI           (TBAR_IND + 1)   // phase 39, same group; the first to go on a narrow panel
 #define TBAR_COUNT         (TBAR_RSI + 1)
@@ -1877,17 +1880,24 @@ static int HeaderRow2Limit(int W) {
 // The toolbar up to and including VOL must fit at the minimum width. If a
 // table or a pill width grows past that, the build stops here - and the rule
 // in ToolbarLayout, which hides pills from the right, never becomes what the
-// user sees on a panel of legal size.
-//
-// The MA pill (phase 25) is the one deliberate exception: the row ends at
-// x = 310 of 312 at the minimum width, and 28 px more does not exist. The pill
-// sits at the far right, so the hiding rule takes it and only it: below 426 px
-// width it is gone, and the M key and the tray menu carry the toggle alone.
-// POPUP_MIN_W is not raised for this - it also guards which geometry the
-// registry is allowed to give back.
-C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + INTERVAL_COUNT * TBAR_IV_W +
-         (INTERVAL_COUNT - 1) * TBAR_GAP + TBAR_GROUP_GAP + TBAR_VOL_W
+// user sees on a panel of legal size. POPUP_MIN_W is not raised for a pill -
+// it also guards which geometry the registry is allowed to give back.
+C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + TBAR_IVDD_W + TBAR_GROUP_GAP + TBAR_VOL_W
          <= POPUP_MIN_W - PAD_R + AXIS_LBL_GAP - HDR_GAP);
+
+// One pill's width and the gap in front of it, at 96 dpi. ToolbarLayout and
+// ToolbarMinW both read these, so the sums cannot drift apart.
+static int ToolbarPillW(int i) {
+    if (i == TBAR_SYM) return TBAR_SYM_W;
+    if (i == TBAR_IV)  return TBAR_IVDD_W;
+    if (i == TBAR_VOL) return TBAR_VOL_W;
+    if (i == TBAR_IND) return TBAR_IND_W;
+    return TBAR_RSI_W;
+}
+static int ToolbarGapBefore(int i) {
+    if (i == 0) return 0;
+    return (i == TBAR_IV || i == TBAR_VOL) ? TBAR_GROUP_GAP : TBAR_GAP;
+}
 
 // The toolbar's pills. A pure function of the width, like ButtonLayout, and
 // for the same reason: painting, WM_NCHITTEST, hover and click all read this.
@@ -1902,10 +1912,8 @@ static int ToolbarLayout(int W, RECT out[TBAR_COUNT]) {
     int x = Dp(PAD_L), n = 0;
     BOOL cut = FALSE;
     for (int i = 0; i < TBAR_COUNT; ++i) {
-        int w = Dp((i == TBAR_SYM) ? TBAR_SYM_W : (i == TBAR_VOL) ? TBAR_VOL_W
-                 : (i == TBAR_IND) ? TBAR_IND_W : (i == TBAR_RSI) ? TBAR_RSI_W : TBAR_IV_W);
-        if (i == TBAR_IV_FIRST || i == TBAR_VOL) x += Dp(TBAR_GROUP_GAP);
-        else if (i > 0)                          x += Dp(TBAR_GAP);
+        int w = Dp(ToolbarPillW(i));
+        x += Dp(ToolbarGapBefore(i));
         if (!cut && x + w > limit) cut = TRUE;
         if (cut) {
             out[i].left = out[i].top = out[i].right = out[i].bottom = 0;
@@ -1936,8 +1944,8 @@ static int ToolbarHit(const RECT* tb, int x, int y) {
 // would have hidden VOL on a panel of minimum size. Same sums as
 // ToolbarLayout and HeaderRow2Limit.
 static int ToolbarMinW(void) {
-    int need = Dp(PAD_L) + Dp(TBAR_SYM_W) + Dp(TBAR_GROUP_GAP) + INTERVAL_COUNT * Dp(TBAR_IV_W) +
-               (INTERVAL_COUNT - 1) * Dp(TBAR_GAP) + Dp(TBAR_GROUP_GAP) + Dp(TBAR_VOL_W);
+    int need = Dp(PAD_L);
+    for (int i = 0; i <= TBAR_VOL; ++i) need += Dp(ToolbarGapBefore(i)) + Dp(ToolbarPillW(i));
     return need + ChartAxisW(g_Ctx.sty.dpi) - Dp(AXIS_LBL_GAP) + Dp(HDR_GAP);
 }
 
@@ -1992,6 +2000,8 @@ static void RequestHistory(AppContext* ctx) {
 #define OVL_COL_W     104
 #define OVL_PAD       10
 #define OVL_HDR_H     18
+#define OVL_DD_W      64    // the interval dropdown (phase 41)
+#define OVL_DD_PAD    4
 
 typedef struct {
     RECT box;                    // the whole overlay
@@ -2007,6 +2017,35 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
     // OverlayHit only goes up to count, so the garbage was harmless today;
     // this closes the class.
     memset(r, 0, sizeof(*r));
+
+    // The interval dropdown (phase 41): one column right under the interval
+    // pill. The symbol rows stay empty rectangles, so the indices - and the
+    // click, hover and highlight code - are the picker's. If the pill is not
+    // shown (a panel narrower than the minimum), the picker is laid out.
+    if (g_Ctx.overlayKind == 1) {
+        RECT tb[TBAR_COUNT];
+        ToolbarLayout(W, tb);
+        const RECT* a = &tb[TBAR_IV];
+        if (a->right > a->left) {
+            const int pad = Dp(OVL_DD_PAD), rowH = Dp(OVL_ROW_H), bw = Dp(OVL_DD_W);
+            int bx = a->left, by = a->bottom + Dp(2);
+            int bh = pad * 2 + INTERVAL_COUNT * rowH;
+            if (bx + bw > W) bx = W - bw;
+            if (bx < 0) bx = 0;
+            if (by + bh > H) bh = H - by;
+            r->box.left = bx; r->box.top = by;
+            r->box.right = bx + bw; r->box.bottom = by + bh;
+            r->count = SYMBOL_COUNT + INTERVAL_COUNT;
+            for (int i = 0; i < INTERVAL_COUNT; ++i) {
+                RECT* q = &r->rows[SYMBOL_COUNT + i];
+                q->left = bx + pad; q->right = bx + bw - pad;
+                q->top = by + pad + i * rowH; q->bottom = q->top + rowH;
+                if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
+                if (q->top >= q->bottom) { q->left = q->right = q->top = q->bottom = 0; }
+            }
+            return;
+        }
+    }
 
     int rowsMax = (SYMBOL_COUNT > INTERVAL_COUNT) ? SYMBOL_COUNT : INTERVAL_COUNT;
     const int pad = Dp(OVL_PAD), colW0 = Dp(OVL_COL_W), hdrH = Dp(OVL_HDR_H), rowH = Dp(OVL_ROW_H);
@@ -2079,12 +2118,15 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
     SelectObject(hdc, ctx->sty.fontSmall);
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.dim, a));
-    RECT h1 = r.symHdr, h2 = r.ivHdr;
-    h1.left += Dp(6); h2.left += Dp(6);
-    DrawTextW(hdc, L"SYMBOL",    -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    DrawTextW(hdc, L"INTERVAL",  -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    if (r.symHdr.right > r.symHdr.left) {   // the dropdown (phase 41) has no headings
+        RECT h1 = r.symHdr, h2 = r.ivHdr;
+        h1.left += Dp(6); h2.left += Dp(6);
+        DrawTextW(hdc, L"SYMBOL",    -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        DrawTextW(hdc, L"INTERVAL",  -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
 
     for (int i = 0; i < r.count; ++i) {
+        if (r.rows[i].right <= r.rows[i].left) continue;   // not in this layout
         BOOL isSym  = (i < SYMBOL_COUNT);
         int  idx    = isSym ? i : (i - SYMBOL_COUNT);
         BOOL active = isSym ? (idx == ctx->symIdx) : (idx == ctx->ivIdx);
@@ -2400,18 +2442,20 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         BOOL hot = (ctx->tbHot == i);
         BOOL on;
         const wchar_t* lbl;
-        if (i == TBAR_SYM)      { on = ctx->overlayOpen; lbl = SYMBOLS[ctx->symIdx].label; }
+        BOOL dd = (i == TBAR_SYM || i == TBAR_IV);   // opens a list (phase 41: two of them)
+        if (i == TBAR_SYM)      { on = ctx->overlayOpen && ctx->overlayKind == 0; lbl = SYMBOLS[ctx->symIdx].label; }
+        else if (i == TBAR_IV)  { on = ctx->overlayOpen && ctx->overlayKind == 1; lbl = INTERVALS[ctx->ivIdx].label; }
         else if (i == TBAR_VOL) { on = ShowVolNow(ctx);  lbl = L"VOL"; }
         else if (i == TBAR_IND) { on = ShowIndNow(ctx);  lbl = L"MA"; }
-        else if (i == TBAR_RSI) { on = ShowRsiNow(ctx);  lbl = L"RSI"; }
-        else { on = (i - TBAR_IV_FIRST == ctx->ivIdx);   lbl = INTERVALS[i - TBAR_IV_FIRST].label; }
+        else                    { on = ShowRsiNow(ctx);  lbl = L"RSI"; }
 
         if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
         if (on)        FrameRect(hdc, r, ctx->sty.brBoxEdge);
 
-        COLORREF fg = (hot || on || i == TBAR_SYM) ? ctx->sty.clr.text : ctx->sty.clr.dim;
+        // A dropdown shows a current value, so it is never dimmed.
+        COLORREF fg = (hot || on || dd) ? ctx->sty.clr.text : ctx->sty.clr.dim;
         SetTextColor(hdc, fg);
-        if (i == TBAR_SYM) {
+        if (dd) {
             // Left-aligned text and a down arrow at the right end: the pill
             // opens a list, it does not switch by itself. The arrow is a
             // filled triangle, 7 px wide and 4 tall - vector, like the
@@ -2985,7 +3029,8 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
 // tray menu; a click on the active interval is a no-op there. The symbol pill
 // opens the existing overlay - no new menu, no new hit-test code.
 static void OnToolbarClick(HWND hwnd, int th) {
-    if (th == TBAR_SYM) {
+    if (th == TBAR_SYM || th == TBAR_IV) {
+        g_Ctx.overlayKind = (th == TBAR_IV) ? 1 : 0;   // phase 41
         g_Ctx.overlayOpen = TRUE;
         g_Ctx.overlayHot  = -1;
         g_Ctx.ch.hoverIdx    = -1;
@@ -2998,8 +3043,6 @@ static void OnToolbarClick(HWND hwnd, int th) {
         SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
     } else if (th == TBAR_RSI) {
         SetShowRsi(&g_Ctx, !ShowRsiNow(&g_Ctx));
-    } else if (th >= TBAR_IV_FIRST && th < TBAR_VOL) {
-        ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (th - TBAR_IV_FIRST));
     }
 }
 
@@ -4073,6 +4116,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             if (!g_Ctx.overlayOpen &&
                 mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
+                g_Ctx.overlayKind = 0;   // phase 41: the picker, not the dropdown
                 g_Ctx.overlayOpen = TRUE;
                 g_Ctx.overlayHot  = -1;
                 g_Ctx.ch.hoverIdx    = -1;   // the crosshair must not remain underneath
@@ -4111,7 +4155,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
 
         case WM_KEYDOWN: {
-            BOOL ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            BOOL ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            BOOL shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;   // phase 41
             // Ctrl+0: back to factory geometry, centered on the monitor the
             // window is on. Window geometry, not zoom - see R below.
             if (wParam == '0' && ctrl) {
@@ -4181,8 +4226,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     SetLightTheme(&g_Ctx, ThemeNow(&g_Ctx) != &APP_THEME_LIGHT);
                     return 0;
                 }
-                if (!ctrl && wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
-                    OnToolbarClick(hwnd, TBAR_IV_FIRST + (int)(wParam - '1'));
+                // 1..7: the intervals in the dropdown's order (were the pills
+                // up to phase 40). Not with Shift, which phase 41 gives the
+                // ranges.
+                if (!ctrl && !shift && wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
+                    ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (int)(wParam - '1'));
                     return 0;
                 }
                 // A (phase 23): set an alert at the crosshair's price - the
