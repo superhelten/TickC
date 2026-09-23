@@ -3210,9 +3210,75 @@ the five dpi cases fail. Green 19/19 twice. `golden.ps1` against the test
 build: all eight identical to `main` - after the capture script got a guard
 (pitfall 100). **Exe 206 848 → 208 384 bytes (+1 536).**
 
+### Phase 37 — the panel is per-monitor DPI aware
+
+Branch `phase-37`, merged with `--no-ff`. The app half of the DPI work: the
+process calls `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` first in
+`WinMain`, so on a 150 % monitor the panel is drawn in device pixels at 144
+dpi instead of being drawn at 96 and stretched by Windows.
+
+**What changed.** `Dp(v)` is the app's `ChartPx` at the panel's dpi
+(`g_Ctx.sty.dpi`), and every fixed length in the header (the rows at 10 and
+30, `PAD_L`, `HDR_GAP`), the button row and its glyphs, the toolbar (and its
+arrow), the overlay, the watermark (clamp limits, insets, and the alpha,
+which is defined on the logical width), the resize border, the caption
+test (`HEADER_H`), the spawn offset, the factory size and the minimum size
+goes through it. `PanelDpi` is the monitor's dpi for the panel and 96 for
+the desktop surface (unchanged look; its one text, the stamp, already
+follows the height). `ApplyPanelDpi` rebuilds the chart style and the price
+font when the panel opens and on `WM_DPICHANGED`, which also takes the
+rectangle Windows suggests. The watermark reads the panel's dpi instead of
+`GetDeviceCaps(LOGPIXELSY)` - in an aware process that is the system dpi,
+and the desktop surface would have got larger watermark limits. Lines and
+glyph strokes stay one device pixel.
+
+**The minimum width follows the toolbar.** At 96 the `C_ASSERT` keeps every
+pill through VOL inside 400 px with 2 px to spare. At 150 % the lengths
+round separately (the price column alone is 130, not 126), and 1.5 x 400 =
+600 would have hidden VOL. `ToolbarMinW` is the same sum at the current dpi;
+the minimum is the larger of the two (601 at 144, 400 at 96).
+
+**Geometry.** The unaware process saved position and size in Windows'
+virtualized coordinates. From now on they are device pixels, marked by
+`PanelGeomDevice = 1`; values without the mark are scaled once by
+`GetDpiForSystem()`. That path cannot run on this machine, which is at
+100 % (see below).
+
+**Test build.** `TICKER_FORCE_DPI` draws the panel at a fixed dpi, probe
+field 60 reads the dpi, and writing field 105 sends the panel a real
+`WM_DPICHANGED` to the dpi in `lParam`, with the rectangle scaled by
+new/old (a `RECT` pointer cannot cross from the probe's process).
+`shot_dpi.ps1` goes 96 → 144 → 96. While testing, the fixture lookup turned
+out to depend on a stale `GetLastError` (pitfall 103); it is cleared first
+now.
+
+**Verified.** This machine is at **100 %** now, not 150 % as noted in phase
+26 - `GetDpiForSystem` gives 96 - so no capture ran at a real 150 %, and
+the scaling was checked with the forced dpi and the synthetic
+`WM_DPICHANGED`. `golden.ps1` with the test build forced to 96 and
+unforced (the real aware path at 96): all eight identical to `main` in
+both. `shot_dpi.ps1`: dpi 144 and 1920x1080 after field 105, the overlay
+opened by a click on the symbol pill at its 144 position, minimum
+601x375 with VOL still shown, back to 96 and 1280x720, and the 96 capture
+after the round trip pixel-identical to the one before; the geometry is
+saved with `PanelGeomDevice = 1`. Red run with `ApplyPanelDpi` left out
+of `WM_DPICHANGED`: four checks fail (dpi stays 96, the overlay click
+misses, the size does not come back, the round trip differs). The 144
+captures were looked at: header, buttons, toolbar, overlay, axes, hover
+box and watermark all scaled. `chart_golden` 19/19 (the engine is
+unchanged). **Exe 208 384 → 211 456 bytes (+3 072).**
+
 ---
 
 ## Known limitations
+
+- **DPI awareness is untested on a real 150 % monitor** (phase 37). This
+  machine is at 100 %; the 144-dpi layout was checked with
+  `TICKER_FORCE_DPI` and with a `WM_DPICHANGED` sent through probe field
+  105. The one-time scaling of geometry saved by earlier builds only runs
+  when the system scale is not 100 %.
+- **The tray icon is 16x16 at every scale** (phase 37). The micro font
+  draws into a fixed 16 px bitmap, and the shell scales it at 150 %.
 
 - **`probe_prev` cannot check a dash pattern when two levels share a row.**
   When today's high and yesterday's close lie one row apart (86 625.82 and
@@ -3979,21 +4045,41 @@ build: all eight identical to `main` - after the capture script got a guard
     alert lines looked light gray; the pixels were `86601B`
     (`CLR_ALERT_LINE`), exactly right. Read the pixel values before calling a
     color wrong.
+103. **A successful Win32 call does not clear `GetLastError`.** The fixture
+    lookup was `GetEnvironmentVariableW(...) == 0 || GetLastError() ==
+    ERROR_ENVVAR_NOT_FOUND`. Phase 37 put a lookup of `TICKER_FORCE_DPI` in
+    front of it; unset, that left `ERROR_ENVVAR_NOT_FOUND` behind, the
+    fixture call succeeded without touching it, and the test build silently
+    fetched live data - but only when the forced dpi was NOT set. The runs
+    with a forced dpi were clean, the others showed prices that "flickered".
+    Call `SetLastError(ERROR_SUCCESS)` before a call whose error you read on
+    success, and suspect the data before the layout when a capture differs
+    only in numbers.
+104. **Check what the machine is before a DPI test.** The notes said the
+    user's screen was at 150 %; `GetDpiForSystem` said 96. A capture that
+    "did not scale" was a correct capture at 100 %. Read the dpi from the
+    process (probe field 60) before judging a picture.
+105. **Keys typed into a focused test panel change the capture.** A
+    `golden.ps1` run in phase 37 had VOL switched off in every panel
+    capture and two hidden panels; the likely cause is the user typing
+    while the test panel had focus (not proven - the run was not
+    instrumented). `golden.ps1` now reports `USER INPUT DURING RUN`; such a
+    run is not evidence until it is repeated.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak30` and `chart.c.bak30` are left** (2026-09-23). From
+**Only `tickc.c.bak31` and `chart.c.bak31` are left** (2026-09-23). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 36 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 37 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the `.bak28` and `.bak29` pairs (phases 34, 35) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak30` (phases 34–36) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35) and `.bak30` (phase 36). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36) and `.bak31` (phase 37). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
