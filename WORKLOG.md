@@ -3139,8 +3139,8 @@ what TickC draws with, not with a copy that drifts:
 brushes (`AppContext` holds one `ChartStyle sty`; the header, buttons and
 overlay borrow `fontSmall`, `brBox` and `brBoxEdge` from it), and
 `ChartPillFontCreate(H)` builds the desktop stamp font, which the app still
-owns and rebuilds only when the height changes. The third commit takes the
-clock out of the drawing: the time labels and the hover box called
+owns and rebuilds only when the height changes. The second commit (before
+the stamp font) takes the clock out of the drawing: the time labels and the hover box called
 `FileTimeToLocalFileTime`, so the picture depended on the machine's DST
 state and a golden written in September would break on October 25.
 `ChartData.utcOffsetMs` now carries the offset; the app passes
@@ -3943,15 +3943,16 @@ before and after.
 
 ## Backups
 
-**Only `tickc.c.bak27` is left** (2026-09-22). It is identical to `tickc.c`
-as it stands after phase 32 (phase 33 changed no code), and is the rollback
-reference for the build that is running. `ticker.c.bak` … `.bak24` and `tickc.c.bak25`/`.bak26` are deleted: they covered phases 1 to
-31, and that history is in git.
+**Only `tickc.c.bak29` and `chart.c.bak29` are left** (2026-09-23). From
+phase 34 the code is two files, so the backup is a pair. They are identical
+to `tickc.c` and `chart.c` after phase 35 and are the rollback reference for
+the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
+`.bak27` and the `.bak28` pair (phase 34) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31) and `.bak27` (phase 32). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34) and `.bak29` (phase 35). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
