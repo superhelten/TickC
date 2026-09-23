@@ -12,3 +12,6 @@
 # The trailing * matters: `*.bak[0-9]` alone let `.bak10` and `.bak11` through.
 *.bak
 *.bak[0-9]*
+
+# Golden test pictures (tests/chart_golden.exe writes them on failure or --bmp).
+tests/out/

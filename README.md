@@ -50,6 +50,21 @@ That's it. The libraries are pulled in with `#pragma comment(lib, ...)` in the s
 so there's no build script to keep in sync. Don't skip the manifest: without it
 Windows refuses the layered child window, and desktop mode shows up blank.
 
+### Tests
+
+The chart engine (`chart.c`) has golden tests that draw it into a memory DC, with
+no window and no network, from seeded synthetic candles:
+
+```
+cl /nologo /W4 /O2 /I. /Fo:tests\ /Fe:tests\chart_golden.exe tests\chart_golden.c chart.c user32.lib gdi32.lib
+tests\chart_golden.exe
+```
+
+Each case is hashed and compared with `tests/golden/chart.txt`; a failing case
+is written to `tests/out/` as a BMP. Text goes through the installed fonts and
+the ClearType setting, so the hashes hold for the machine that wrote them. On
+another machine, look at the pictures (`--bmp`) and rewrite them with `--update`.
+
 ## Usage
 
 Run `TickC.exe`. An icon appears in the tray.

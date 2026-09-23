@@ -1,0 +1,16 @@
+# chart_golden.c: FNV-1a 64 over the RGB of every pixel.
+# Written with --update. Valid for the machine that wrote it (fonts, ClearType).
+panel_1m_1280x720 1280x720 d2ffdd9752805816
+panel_15m_1280x720 1280x720 be153fbda651dd78
+panel_1h_1280x720 1280x720 179413ac549e3d1f
+panel_1d_1280x720 1280x720 67db4fdc1677d245
+panel_15m_560x300 560x300 f5c3609915acf492
+panel_1h_400x250 400x250 5f58b343f704ed8c
+panel_1h_hover 1280x720 f2e6f64c60cf0365
+panel_1h_panned_zoomed 1280x720 1ec86356fad2469c
+panel_1h_overlays_off 1280x720 028c787f4bf7395f
+panel_1h_overlays_fade 1280x720 e1b1e7df277affd8
+panel_15m_alerts 1280x720 7ad18a8cd7eccced
+panel_1m_few_candles 560x300 d91efaa1c4a97438
+desktop_1m_1920x1080 1920x1080 5988dfab71dd3936
+desktop_1m_3840x1600 3840x1600 e93c2edca5ea905d
