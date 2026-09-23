@@ -3177,6 +3177,39 @@ colors as data, a time axis that compresses gaps, more panes, and a Direct2D
 backend behind the same header. Each can now be proven with a golden case
 before and after.
 
+### Phase 36 — the chart engine scales with dpi
+
+Branch `phase-36`, merged with `--no-ff`. The second engine step. The panel
+is DPI-unaware, so at 150 % Windows stretches it as a bitmap and the text
+is soft; the engine drew every length at 96 dpi. This phase is the engine
+half: it can now draw at any dpi. TickC still passes 96, and making the
+panel per-monitor aware (header, buttons, toolbar, overlay, minimum size
+and saved geometry in device pixels) is the app's own phase.
+
+**What changed.** `ChartStyle.dpi` is the dpi the fonts were built for
+(`ChartStyleCreate(sty, dpi)`: em 11 and 15 scaled). `ChartGeometry` takes
+the dpi and records it in `ChartRect.dpi`, so `AlertAxisHit` scales its
+zone the way the drawing scales the tag. Every fixed length in `chart.c`
+goes through `ChartPx` (`MulDiv`, rounding to nearest, the identity at 96):
+the margins, the price column (`ChartAxisW`: the character width follows
+the axis font the way `DeskAxisW` already did, rounded up, so eight
+characters always fit), the tag height and every collision distance of 16,
+the dash patterns, the legend and label offsets, the time axis gaps, the
+hover box and the panel's stamp. The desktop stamp still follows the
+surface height. **Lines stay one device pixel wide at every dpi**: a
+styled GDI pen (`PS_DOT` for the crosshair, `PS_DASH` for the last price)
+keeps its pattern only at width 1, and a scaled width is a decision of its
+own.
+
+**Verified.** `chart_golden`: the 14 cases at 96 dpi are unchanged (the
+proof that nothing moved at 100 %), and five new cases at 144 and 192 dpi
+were looked at before their goldens were written: 840x450 at 144 is the
+560x300 panel at 96, 1.5 times larger, with the same labels in the same
+places. Red run with the tag height left unscaled (`tagHalf = 8`): exactly
+the five dpi cases fail. Green 19/19 twice. `golden.ps1` against the test
+build: all eight identical to `main` - after the capture script got a guard
+(pitfall 100). **Exe 206 848 → 208 384 bytes (+1 536).**
+
 ---
 
 ## Known limitations
@@ -3927,10 +3960,18 @@ before and after.
     builds the state has to copy the order the app uses, not the call that
     looks right - the first 1d golden showed 8 of 200 candles, and only the
     picture showed it.
-100. **A black capture from `golden.ps1` is "not drawn", not a difference.**
+100. **A black capture from `golden.ps1` is a hidden panel, not a difference.**
     One run after phase 35's third commit gave all-black panel captures (every
-    pixel differed); the rerun of the same exe was identical to `main`. Look at
-    a DIFF picture before reading anything into it, and rerun.
+    pixel differed); the rerun of the same exe was identical to `main`. In
+    phase 36 it came back three runs in a row for the new build, and a control
+    run of the old build was clean - which looked like a bug in the build.
+    Logging `IsWindowVisible` in the capture turned it around: the next pair
+    gave the new build right and the OLD build black, with `visible=False`.
+    `PrintWindow` on a hidden panel gives black, and the panel is sometimes
+    hidden by the time of the capture, whatever the build (the cause of the
+    hiding was not found). `golden.ps1` now reopens a hidden panel and refuses
+    to hash it (`HIDDEN`). Three black runs in a row are not evidence against
+    a build: check the window state, and run the control more than once.
 101. **PowerShell variables are case-insensitive.** `foreach ($n in ...)`
     overwrote `$N`, the scratchpad path, and the next `Save` wrote to
     `<case name>\png`. Loop variables get names no outer variable has.
@@ -3943,16 +3984,16 @@ before and after.
 
 ## Backups
 
-**Only `tickc.c.bak29` and `chart.c.bak29` are left** (2026-09-23). From
+**Only `tickc.c.bak30` and `chart.c.bak30` are left** (2026-09-23). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 35 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 36 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the `.bak28` pair (phase 34) are deleted: that history is in git.
+`.bak27` and the `.bak28` and `.bak29` pairs (phases 34, 35) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34) and `.bak29` (phase 35). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35) and `.bak30` (phase 36). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
