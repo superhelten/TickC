@@ -20,7 +20,9 @@ typedef struct {
 // edge + 1 and the labels at edge + AXIS_LBL_GAP. Both modes have space
 // between them (PLOT_PAD_R); in desktop mode the margin outside edge is
 // narrower, because it only holds the stamp and no axis labels.
-typedef struct { int left, top, right, bottom, cw, ch, edge; } ChartRect;
+// dpi (phase 36) is the one the rectangle was computed for, so the hit tests
+// that take a ChartRect scale their zones the same way the drawing did.
+typedef struct { int left, top, right, bottom, cw, ch, edge, dpi; } ChartRect;
 
 // The chart's own state. viewStart/viewCount/followLive are the TARGET view
 // (in TickC written by the UI and read by the worker thread, under the lock);
@@ -79,7 +81,16 @@ typedef struct {
     HFONT  fontPill;            // desktop stamp font, NULL = use fontAxis
     HPEN   penGrid, penCross, penLastUp, penLastDown;
     HBRUSH brBg, brBox, brBoxEdge, brVolUp, brVolDown;
+    int    dpi;                 // phase 36: the fonts are built for it; 96 = 100 %
 } ChartStyle;
+
+// DPI (phase 36). Every length in this header is given at 96 dpi and is
+// scaled with ChartPx when drawn: MulDiv rounds to nearest, and at 96 it is
+// the identity, so a 100 % surface keeps exactly its old pixels. Lines stay
+// 1 device pixel wide at every dpi - a styled GDI pen (PS_DOT, PS_DASH) only
+// keeps its pattern at width 1.
+#define CHART_DPI_BASE   96
+#define ChartPx(dpi, v)  MulDiv((v), (dpi), CHART_DPI_BASE)
 
 #define MIN_VIEW         8     // minimum number of visible candles at full zoom
 #define ZOOM_STEP        1.2   // per mouse wheel notch
@@ -228,10 +239,11 @@ typedef struct {
 #define IND_BATCH (VOL_BATCH * 4)
 
 // --- Geometry and hit testing ---
-ChartRect ChartGeometry(int W, int H, BOOL desktop);
+ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi);
+int       ChartAxisW(int dpi);
 int       DeskPillH(int H);
 int       DeskPillFontH(int H);
-int       DeskAxisW(int H);
+int       DeskAxisW(int H, int dpi);
 int       HitCandle(const ChartState* st, int n, const ChartRect* g, int mx, int my);
 int       AlertY(const ChartState* st, const ChartRect* g, double level);
 double    AlertPriceAtY(const ChartState* st, const ChartRect* g, int y);
@@ -270,10 +282,10 @@ int       TimeTickStep(double dispCount, int chartW, int minDx);
 int       NiceTimeStep(int step, long long intervalMs);
 
 // --- Style ---
-// Creates every object in ChartStyle except fontPill (set to NULL). FALSE
-// when any creation failed; the rest are then still valid or NULL, and
-// ChartStyleDestroy frees them.
-BOOL      ChartStyleCreate(ChartStyle* sty);
+// Creates every object in ChartStyle except fontPill (set to NULL), with the
+// fonts sized for dpi (0 = 96). FALSE when any creation failed; the rest are
+// then still valid or NULL, and ChartStyleDestroy frees them.
+BOOL      ChartStyleCreate(ChartStyle* sty, int dpi);
 void      ChartStyleDestroy(ChartStyle* sty);
 // The desktop stamp font for a surface H px high (DeskPillFontH). The caller
 // owns it and sets it as ChartStyle.fontPill.
