@@ -304,6 +304,82 @@ static const Golden* FindGolden(const char* name) {
     return NULL;
 }
 
+// --- Contrast (phase 40) ---
+// Every text/surface pair the chart and the app draw, as theme roles. The
+// light theme must give WCAG AA (4.5:1) on each; the check runs before the
+// pictures, and a table edit that breaks it fails the run. The dark theme is
+// not held to it: its muted grays (dim on box 3.7:1, yesterday's levels 4.0)
+// are older, deliberate choices, recorded in the work log.
+typedef struct { const char* where; size_t text, surface; } ContrastPair;
+#define CP(w, t, s) { w, offsetof(ChartTheme, t), offsetof(ChartTheme, s) }
+static const ContrastPair CONTRAST_PAIRS[] = {
+    CP("alert tag",               onAlert,   alert),
+    CP("alert tag under pointer", onHot,     hot),
+    CP("ghost tag",               alertText, box),
+    CP("ghost tag, slots full",   dim,       box),
+    CP("price stamp, up",         bg,        up),
+    CP("price stamp, down",       bg,        down),
+    CP("today's level tags",      session,   box),
+    CP("yesterday's level tags",  prev,      box),
+    CP("crosshair tags",          text,      boxEdge),
+    CP("axis labels",             axis,      bg),
+    CP("RSI value tag",           rsi,       box),
+    CP("RSI legend",              rsi,       bg),
+    CP("SMA legend",              sma,       bg),
+    CP("EMA legend",              ema,       bg),
+    CP("VWAP legend",             vwap,      bg),
+    CP("today's level labels",    session,   bg),
+    CP("yesterday's level labels",prev,      bg),
+    CP("hover box text",          text,      box),
+    CP("hover box labels",        dim,       box),
+    CP("hover box close, up",     up,        box),
+    CP("hover box close, down",   down,      box),
+    CP("hover box SMA",           sma,       box),
+    CP("hover box EMA",           ema,       box),
+    CP("hover box VWAP",          vwap,      box),
+    CP("hover box RSI",           rsi,       box),
+    CP("header price",            text,      bg),
+    CP("header stale/offline",    dim,       bg),
+    CP("header change, up",       up,        bg),
+    CP("header change, down",     down,      bg),
+    CP("toolbar pill at rest",    dim,       bg),
+    CP("toolbar pill hot/on",     text,      box),
+    CP("overlay headings",        dim,       box),
+    CP("overlay active row",      up,        box),
+};
+
+static double RelLum(COLORREF c) {
+    double ch[3] = { GetRValue(c) / 255.0, GetGValue(c) / 255.0, GetBValue(c) / 255.0 };
+    for (int i = 0; i < 3; i++)
+        ch[i] = (ch[i] <= 0.03928) ? ch[i] / 12.92 : pow((ch[i] + 0.055) / 1.055, 2.4);
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+static double ContrastRatio(COLORREF a, COLORREF b) {
+    double la = RelLum(a), lb = RelLum(b);
+    return (la > lb) ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+}
+
+static int CheckContrast(const ChartTheme* t, const char* name) {
+    int n = (int)(sizeof(CONTRAST_PAIRS) / sizeof(CONTRAST_PAIRS[0])), bad = 0;
+    double worst = 99.0;
+    for (int i = 0; i < n; i++) {
+        const ContrastPair* p = &CONTRAST_PAIRS[i];
+        COLORREF fg = *(const COLORREF*)((const char*)t + p->text);
+        COLORREF bg = *(const COLORREF*)((const char*)t + p->surface);
+        double r = ContrastRatio(fg, bg);
+        if (r < worst) worst = r;
+        if (r < 4.5) {
+            printf("FAIL contrast %s: %s %02X%02X%02X on %02X%02X%02X is %.2f:1\n", name, p->where,
+                   GetRValue(fg), GetGValue(fg), GetBValue(fg),
+                   GetRValue(bg), GetGValue(bg), GetBValue(bg), r);
+            bad++;
+        }
+    }
+    if (!bad) printf("ok   contrast %s: %d text pairs, lowest %.2f:1\n", name, n, worst);
+    return bad;
+}
+
 int main(int argc, char** argv) {
     BOOL update = FALSE, bmp = FALSE;
     for (int i = 1; i < argc; i++) {
@@ -324,6 +400,7 @@ int main(int argc, char** argv) {
     if (!update && s_goldCount == 0) printf("no goldens in %s - run with --update\n", goldPath);
 
     unsigned long long hashes[NCASES] = { 0 };
+    int contrastFails = CheckContrast(&ChartThemeLight, "light");
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -383,5 +460,6 @@ int main(int argc, char** argv) {
     }
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
-    return fails ? 1 : 0;
+    if (contrastFails) printf("%d light-theme text pairs under 4.5:1\n", contrastFails);
+    return (fails || contrastFails) ? 1 : 0;
 }
