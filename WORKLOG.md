@@ -3268,15 +3268,23 @@ captures were looked at: header, buttons, toolbar, overlay, axes, hover
 box and watermark all scaled. `chart_golden` 19/19 (the engine is
 unchanged). **Exe 208 384 → 211 456 bytes (+3 072).**
 
+**Real scale change (after the merge).** `shot_scale.ps1` opens the test
+panel at 100 %, sets the primary monitor to 150 % with
+`SPI_SETLOGICALDPIOVERRIDE` (a scratchpad tool, `dpi_scale.exe`; the
+script restores the scale in `finally`) and back. Windows' own
+`WM_DPICHANGED` took the panel to 144 dpi and 1920x1080 client, the
+capture at 150 % was looked at (fixtures, everything scaled), and after
+100 → 150 → 100 the panel was at 96 and 1280x720, pixel-identical to the
+capture before. 7/7, and the monitor was back at 96 dpi afterwards.
+
 ---
 
 ## Known limitations
 
-- **DPI awareness is untested on a real 150 % monitor** (phase 37). This
-  machine is at 100 %; the 144-dpi layout was checked with
-  `TICKER_FORCE_DPI` and with a `WM_DPICHANGED` sent through probe field
-  105. The one-time scaling of geometry saved by earlier builds only runs
-  when the system scale is not 100 %.
+- **The one-time scaling of old geometry is untested** (phase 37). It
+  reads `GetDpiForSystem`, which changes only at the next sign-in; the
+  scale changes in the tests were per-monitor and immediate. The panel
+  itself was tested through a real 100 → 150 → 100 % change.
 - **The tray icon is 16x16 at every scale** (phase 37). The micro font
   draws into a fixed 16 px bitmap, and the shell scales it at 150 %.
 
