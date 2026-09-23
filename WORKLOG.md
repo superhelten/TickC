@@ -78,10 +78,13 @@ status text, the alert balloon, `1h`/`4h`, ISO dates).
 **Phase 32** translates every comment in `tickc.c`, proven comment-only:
 the production exe is byte-identical apart from the link timestamp.
 **Phase 33** translates this work log and renames it from `ARBEIDSLOGG.md`.
+**Phase 34** moves the chart engine into `chart.c` / `chart.h`, pixel-identical,
+and gives the test build recorded responses and golden captures.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
-All code lives in **one file**, `tickc.c` (~6700 lines, English comments from phase 32). Next to it is
+The code is **two files** from phase 34: `tickc.c` (the app, ~5000 lines) and
+`chart.c` behind `chart.h` (the chart engine, ~1650 lines). Next to them is
 `tickc.manifest`, which the build embeds (phase 9). No external dependencies
 beyond Win32 and WinHTTP.
 
@@ -91,7 +94,7 @@ beyond Win32 and WinHTTP.
 
 ```
 "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars32.bat"
-cl /nologo /W4 /O2 tickc.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
+cl /nologo /W4 /O2 tickc.c chart.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
 ```
 
 **The manifest is not optional** (phase 9). Without `supportedOS` Windows 8+ the
@@ -104,7 +107,8 @@ the original exe). The process can run as several instances (phase 8), so
 `[ + ]` — otherwise it fails with
 `LNK1104: cannot open file 'TickC.exe'`.
 
-Footprint: ~3.5 MB private bytes, 202 KB exe after phase 30 (206 336 bytes;
+Footprint: ~3.5 MB private bytes, 203 KB exe after phase 34 (207 360 bytes;
+206 336 after phase 30,
 205 824 after phase 29, 204 800 after phase 28,
 203 776 after phase 27,
 199 680 after phase 26, 199 168 after phase 25, 195 584 after phase 24;
@@ -3074,6 +3078,53 @@ changed; exe 206 336 bytes.
 
 **The per-phase plan documents are not part of the public repository.** Each
 phase section above carries the plan's decisions, measurements and deviations.
+
+### Phase 34 — the chart engine in its own file, pixel-identical
+
+Branch `fase34-chart-split`, merged with `--no-ff`. The user asked for the
+chart code to become reusable in other projects, and for what would make it
+better afterwards; this is the first step, with no behavior change.
+
+**What moved.** `chart.h` / `chart.c` hold everything that is a pure function
+of candles and a DC: geometry (`ChartGeometry`, now with a `desktop`
+parameter instead of the global), hit testing, the view (`ClampView`,
+`GetView`, `PanView`, `ZoomView`), the display (`ApplyFrontShift`,
+`SyncDisp`, `PriceRange`, `VolumeMax`), the sessions, the indicator step
+machines, formatting, `Blend`, and the body of the old `DrawChart` as
+`ChartDrawBody`. The engine sees three structs: `ChartState` (the target
+view, the eased display, the hover; embedded in `AppContext` as `ch`),
+`ChartData` (the buffer, interval, alerts and mode for one frame) and
+`ChartStyle` (the app's fonts, pens and brushes). No window, lock, network,
+registry or global in it. What stayed in `tickc.c` became `DrawHeader` (price,
+change, offline text), `DrawEmptyState` and `DrawChartFrame`, which builds the
+two views and calls the engine. The desktop stamp font is now built in
+`DrawChartFrame` before the body, not lazily inside the stamp block.
+
+**Recorded responses (test build).** `TICKER_FIXTURE_DIR` makes `HttpGet`
+answer from files (`klines_<symbol>_<interval>.json`, `price_<symbol>.json`;
+a missing `hist_` file is "the history has ended"). Every capture then shows
+the same candles, and a probe runs offline. Probe field 104 on the panel sets
+the hover as a mouse move would, without a pointer: a posted `WM_MOUSEMOVE` is
+undone by `WM_MOUSELEAVE` within a tick.
+
+**Verified.** `golden.ps1`: eight captures from the fixtures (1280x720 at 1m,
+15m, 1h, 1d; 560x300 at 15m; 400x250 at 1h; 1h with the crosshair; the
+desktop surface at 3840x1600), each hashed on its raw pixels. Two runs of the
+same exe are identical, and **the split build is identical to the build
+before it in all eight**. `probe_migrate` 24/24. The five regression probes against the split build:
+`sess` 51/51, `ind` 54/54, `desk` 49/49, `prev` 47/52 and `lbl` 25/27 - the
+last two ran at 00:11 UTC, eleven minutes into today's session, when the
+level lines are 14 px wide and carry neither a dash pattern nor a label;
+control runs against the build before the split fail on exactly the same
+checks. The production `/EP` output was checked unchanged by the fixture
+commit.
+**Exe 206 336 → 207 360 bytes (+1 024)**, one alignment step from the second
+translation unit; `/TP` builds the same size.
+
+**Next for the engine:** golden-image unit tests that draw into a memory DC
+without a window, DPI awareness (a `dpi` field in `ChartStyle`), the colors
+as data, a time axis that compresses gaps, more panes, and a Direct2D backend
+behind the same header.
 
 ---
 
