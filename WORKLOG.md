@@ -3553,6 +3553,64 @@ not taken. The desktop draws no toolbar and no time labels, and its
 axis stays far from zero, so none of the changes reach it. **Exe
 218 624 → 221 696 bytes (+3 072).**
 
+### Phase 42 — the header on the Bloomberg model
+
+Branch `phase-42`, merged with `--no-ff`. The user asked for the volume in
+a pane of its own, a range bar like Bloomberg's, the large price moved
+somewhere less cluttered, and VOL/MA/RSI behind a settings icon with a
+real menu. Asked to choose between layouts, they answered: "the way the
+Bloomberg Professional terminal does it". This phase is the header; the
+volume pane is phase 43.
+
+**1. Data, no visible change.** Binance's `/api/v3/ticker/tradingDay`
+gives the UTC day's open, high, low and volume - the day HOD/LOD/PDC
+already draw. The thread fetches it with the panel open, at once when
+there is none for the symbol shown and then every fifth cycle, under the
+same `configGen` guard as the candles. A failure there leaves the old
+values and does not count toward the backoff. A symbol change clears it.
+Three theme roles, `quote` (Bloomberg's amber; the light theme uses the
+alert text's A85400), `accent` and `onAccent`, with their pairs in
+`chart_golden`'s contrast check. Fixture `day_BTCUSDT.json`, probe fields
+69-73. `golden.ps1 -Hidden` was identical to phase 41.
+
+**2. The header.** Row 1 is a quote line after the symbol: Last, Chg,
+%Chg, Op, Hi, Lo, Vol and At. The labels are in the text color and the
+values in amber, with Last and the change in green or red. The change is
+the day's, from the day's open, and high and low follow the live price
+between two fetches. On a narrow panel the fields drop **strictly by
+priority** (Last, %Chg, Chg, Hi, Lo, Op, Vol, At), so 400 px keeps Last
+and %Chg and 560 px adds Chg. The first draft let a short field that
+still fitted (Vol) jump ahead of one that did not (Hi), which read as
+random. Offline, `Offline Ns` in red takes At's place and the priority
+after Last. At is the last update, not a trade time; the test build
+shows the last candle's time instead, so a capture does not follow the
+clock. Row 2 is the range field: the eight ranges and the interval as
+cells one pixel apart, on the boxEdge surface. The box color was tried
+first and was too close to the background to read as cells. The pointer's
+cell gets a frame in the text color, the selected range and the open list
+are the accent with white text, and a gear sits at the right end. The
+change over the range moved there, before the gear (`-23.80% 1Y`). The
+gear opens a settings menu in the panel's colors (overlay kind 2):
+Volume, averages/VWAP/levels and RSI 14 under CHART, Light theme under
+APPEARANCE. Each is a check box that toggles while the menu stays open,
+and a click outside or Esc closes it. VOL, MA and RSI left the row; the
+keys V, M, I and the tray menu still work. The gear is drawn from a table
+of unit vectors, not with sin/cos (pitfall 75). The minimum width is
+unchanged: row 2 holds every cell and the gear at 400 px (C_ASSERT).
+
+**Verified** on the hidden desktop. `shot_quote.ps1` (12 checks): the
+day arrives with the fixture's open, high, low and volume; all eight
+fields at 1280 px, Last/Chg/%Chg at 560, Last/%Chg at 400 (probe field
+68, a mask of the fields drawn); the gear opens the menu; RSI toggles
+from it and is saved with the menu still open; the theme there and back;
+Esc and a click outside close it without a change. **Red run** without
+the trading-day fetch: 5 of 12 fail, exactly the quote-line checks.
+Green twice. `shot_range` 20/20, `shot_theme`, `shot_dpi` (minimum 600 at
+144) and `shot_rsi` pass with their clicks moved to the new cells.
+`chart_golden` 30/30 with 36 contrast pairs, lowest 4.60:1. `golden.ps1
+-Hidden`: every difference from `main` lies above y = 44. **Exe 221 696 →
+227 840 bytes (+6 144).**
+
 ---
 
 ## Known limitations
@@ -3563,6 +3621,10 @@ axis stays far from zero, so none of the changes reach it. **Exe
   itself was tested through a real 100 → 150 → 100 % change.
 - **The tray icon is 16x16 at every scale** (phase 37). The micro font
   draws into a fixed 16 px bitmap, and the shell scales it at 150 %.
+- **The quote line's At is the last update, not the last trade** (phase
+  42). The klines give no trade time; Bloomberg's At is the trade's.
+- **The day's high, low and volume refresh every 15 s** (phase 42), and
+  high and low follow the live price in between. Volume does not.
 - **YTD in the first week of January** (phase 41) is fewer than
   `MIN_VIEW` (8) daily candles, so the range cannot be shown on 1d and
   ends. It comes back once the year is eight days old.
@@ -4409,16 +4471,16 @@ axis stays far from zero, so none of the changes reach it. **Exe
 
 ## Backups
 
-**Only `tickc.c.bak35` and `chart.c.bak35` are left** (2026-09-23). From
+**Only `tickc.c.bak36` and `chart.c.bak36` are left** (2026-09-23). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 41 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 42 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak34` (phases 34–40) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak35` (phases 34–41) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40) and `.bak35` (phase 41). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41) and `.bak36` (phase 42). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

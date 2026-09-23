@@ -12,6 +12,9 @@ a browser tab open, and without a 150 MB Electron app. It grew from there.
 ## What it does
 
 - **Tray icon** with the live price. Updates every 3 seconds.
+- **A header on the Bloomberg model:** a quote line with Last, Chg, %Chg, Op, Hi, Lo, Vol
+and At for the UTC trading day, a range field (1D … Max, and the bar size), and a gear
+that opens the chart settings: volume, averages, RSI and the theme.
 - **Chart panel** (left-click the icon): candlesticks, volume bars, SMA 20, EMA 50,
 and a daily VWAP. You also get today's high and low, and yesterday's high, low and close
 (labelled HOD, LOD, PDH, PDL, PDC).
