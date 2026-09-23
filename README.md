@@ -16,7 +16,10 @@ a browser tab open, and without a 150 MB Electron app. It grew from there.
 and a daily VWAP. You also get today's high and low, and yesterday's high, low and close
 (labelled HOD, LOD, PDH, PDL, PDC).
 - **Symbols:** BTC, ETH, SOL and BNB against USDT.
-- **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d.
+- **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d, 1w, from a dropdown in the toolbar.
+- **Ranges:** 1D, 3D, 1M, 6M, YTD, 1Y, 5Y, Max. A range picks a fitting interval and shows
+exactly that period, and the change in the header is over the range. You can switch the
+interval afterwards and keep the range. Zoom or pan away, and `R` brings you back.
 - **Price alerts.** Click the price column to set one. When the price gets there you get a
 balloon and a sound, even with the panel closed.
 - **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
@@ -73,11 +76,11 @@ another machine, look at the pictures (`--bmp`) and rewrite them with `--update`
 Run `TickC.exe`. An icon appears in the tray.
 
 
-| Action                     | What happens                                                     |
-| -------------------------- | ---------------------------------------------------------------- |
-| Left-click the tray icon   | Show or hide the chart panel                                     |
-| Right-click the tray icon  | Symbol, interval, overlays, theme, desktop mode, autostart, quit |
-| `TickC.exe --desktop-mode` | Start with the chart on the desktop                              |
+| Action                     | What happens                                                            |
+| -------------------------- | ----------------------------------------------------------------------- |
+| Left-click the tray icon   | Show or hide the chart panel                                            |
+| Right-click the tray icon  | Symbol, interval, range, overlays, theme, desktop mode, autostart, quit |
+| `TickC.exe --desktop-mode` | Start with the chart on the desktop                                     |
 
 
 In the chart panel:
@@ -89,13 +92,14 @@ In the chart panel:
 | Drag, `←` / `→`                 | Pan                                                               |
 | `PgUp` / `PgDn`                 | Jump one screen                                                   |
 | `Home` / `End`                  | Oldest / newest candle                                            |
-| `1` … `6`                       | Switch interval                                                   |
+| `1` … `7`                       | Switch interval                                                   |
+| `Shift`+`1` … `8`               | Switch range (1D … Max); the selected one again turns it off      |
 | `V`                             | Volume bars on/off                                                |
 | `M`                             | Indicators on/off (moving averages, VWAP, levels)                 |
 | `I`                             | RSI band on/off (RSI 14 under the chart)                          |
 | `T`                             | Light theme on/off                                                |
 | `A`                             | Set an alert at the crosshair price                               |
-| `R`, double-click               | Reset zoom and pan                                                |
+| `R`, double-click               | Reset zoom and pan (to the range, if one is selected)             |
 | `Esc`                           | Close the symbol picker, then reset the view, then hide the panel |
 | `Ctrl`+`0`                      | Reset window size and position                                    |
 | `Ctrl`+`N`                      | Open another panel                                                |
