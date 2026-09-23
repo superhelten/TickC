@@ -3356,6 +3356,93 @@ failed three checks; one was the script reading `-1` as 4294967295 (a
 did not come back in two further runs, and their cause was not found.
 **Exe 211 456 → 217 088 bytes (+5 632).**
 
+### Phase 40 — the light theme as a setting
+
+Branch `phase-40`, merged with `--no-ff`. Phase 38 made the chart's colors
+data and left the light table unused; this phase makes it a choice in the
+app, for the whole panel, and holds it to WCAG AA. Three commits.
+
+**Baseline first.** The RSI pill changed the toolbar in phase 39, so a new
+`golden.ps1` reference was taken from `main` (391cf14) before any edit. Two
+runs gave the same eight hashes, and they equal the phase 39 captures.
+
+**1. The app's colors from the theme, pixel-identical.** The header, the
+button glyphs, the toolbar, the overlay, the empty-state text and the
+watermark read `ctx->sty.clr` instead of the `CLR_` macros (the comments
+keep the macro names, as in phase 38). The button pens and the close
+button's brush are built with the style, and `ApplyPanelDpi` became
+`ApplyPanelStyle`. Its early return compares the theme as well as the
+dpi (phase 38 had flagged that a dpi-only check would leave a theme
+switch undrawn). The watermark ink is the one color only the app draws,
+so it sits in a small app table, `AppTheme` (the chart theme plus
+`wmInk`): white on dark, as before, and the light theme's text color on
+light. White on `FAFAFB` would be invisible. Measured on the captures, the
+light watermark is as faint as the dark one: 1.14:1 against 1.16:1. Two
+engine roles were added, `onAlert` and `alertText` (see below), with the
+dark values `CLR_BG` and `CLR_ALERT`. The theme was still hardwired dark:
+`golden.ps1` was identical to the new reference in all eight captures,
+`chart_golden` 28/28.
+
+**2. The light table reaches 4.5:1.** An audit of every text/surface pair
+the chart and the app draw (33 pairs) found **20 under WCAG AA** in the
+phase 38 table. The alert tag's number was **2.65:1** (near-white on
+amber `D98A00`; the user had estimated about 3:1). The ghost tag was 2.77,
+the price stamp 3.42/3.74, the VWAP legend 3.39 and yesterday's level
+labels 2.95. The dark theme was not changed; see known limitations. Each
+light role was darkened with its hue kept (HLS), to at least 4.60:1 on
+the background. The binding case is the background `FAFAFB`, since the box
+is white. One constraint decided the design: **a color cannot both carry
+light text at 4.5:1 and be text at 4.5:1 on a light background**. The two
+need relative luminance below and above about 0.175. Up and down are text
+in the header, the hover box and the overlay, so they became text-safe
+(08805A 4.74, D52A3A 4.77), and the stamp keeps the light text, which is
+the same pair the other way round. The amber alert tag could not stay
+amber that way (darkened, it is ochre next to VWAP's gold), so it keeps
+its surface and gets dark text, `onAlert` = 1F2328, at 5.71:1. The ghost
+tag, a frame and a number on the box, draws in a darker amber,
+`alertText` = A85400, at 5.12. The candidates were also checked for
+roles that could be read as each other (CIE76 distance, compared with the
+dark theme's pairs). That caught a phase 39 slip: the light `up` 089981
+and `rsi` 00897B were almost the same teal (ΔE 8.6). Up is now green and
+RSI teal-cyan 007E83 (ΔE 26.6). `hot` went darker (A31D33), away from the
+new down. `chart_golden` now checks the 33 pairs of the light theme
+before it draws (red on the phase 38 table: exactly the 20). The 24 dark
+cases are unchanged, and the four light goldens were rewritten after
+their pictures had been looked at.
+
+**3. The setting.** "Light theme" in the tray menu (command 1009) and the
+key `T` on the panel. One choice per mode, like the overlays:
+`LightTheme` and `LightThemeDesktop`, **both off**. Dark is the look
+TickC has had, and the desktop surface is the wallpaper, so a white one is
+a change nobody asked for. `SetLightTheme` rebuilds the style at the
+current dpi. The switch is instant: a fade would have to blend every
+color in the panel per frame. A mode switch needs no code of its own:
+it recreates the surface, and `TogglePopup` applies the style.
+Probe field 64 reads the theme the panel is **drawn** with (the style's,
+not the choice). `golden.ps1 -Light` switches the theme after opening, for
+a light reference.
+
+**Verified.** `shot_theme.ps1` (31 checks, in the scratchpad): dark by
+default; 1009 → field 64 = 1 and `LightTheme` = 1 with
+`LightThemeDesktop` still 0; no pixel of the dark background `0D1117`
+left anywhere in the light capture; the header price, toolbar pills,
+active-pill frame and button glyphs in the light colors; the overlay in
+the light box; an alert tag in amber with dark text; `T` back to dark,
+pixel-identical to the first capture; no GDI leak (34 objects after one
+round trip and after three more); the panel opens light after a restart;
+on the desktop, dark while the panel's choice is light, then light through
+1009 with its own registry value; and a live mode switch (tray command
+1003) going light panel → dark desktop → light panel. **Red run** with the
+early return comparing only the dpi: 16 of 31 fail. The theme never reaches the
+drawing, and a restart opens dark, because the style is first built
+before the config is read. Green, 31/31, in the final run (earlier runs
+without the mode-switch checks: 29/29 twice). `golden.ps1` with the
+setting off: identical to `main` in all eight. Two `-Light` runs gave the
+same hashes. `shot_dpi.ps1` 9/9 and `shot_rsi.ps1` pass (the dpi path now
+goes through `ApplyPanelStyle`). The user was at the machine during the
+phase, and the pointer and a click reached the test panel (pitfall 107).
+**Exe 217 088 → 218 624 bytes (+1 536).**
+
 ---
 
 ## Known limitations
@@ -3366,6 +3453,19 @@ did not come back in two further runs, and their cause was not found.
   itself was tested through a real 100 → 150 → 100 % change.
 - **The tray icon is 16x16 at every scale** (phase 37). The micro font
   draws into a fixed 16 px bitmap, and the shell scales it at 150 %.
+- **The tray icon keeps its green in both themes** (phase 40). It sits on
+  the taskbar, which follows Windows' theme, not TickC's.
+- **The theme does not follow Windows' light/dark app mode** (phase 40).
+  It is an explicit choice, per mode, and dark by default.
+- **The dark theme has text pairs under 4.5:1** (phase 40): the muted
+  gray `CLR_DIM` on the box (3.69:1, hover box labels and overlay
+  headings) and on the background (4.12, toolbar pills at rest), and
+  yesterday's levels (`CLR_PREV`, 3.99 on the box, 4.45 on the
+  background). These are older, deliberate "muted" choices and were left
+  alone. The contrast check in `chart_golden` covers the light theme only.
+- **A hovered toolbar pill is fainter in the light theme** (phase 40): the
+  white box on `FAFAFB` is 1.05:1, against 1.10:1 in the dark theme. The
+  text turning from dim to the text color carries the hover.
 
 - **`probe_prev` cannot check a dash pattern when two levels share a row.**
   When today's high and yesterday's close lie one row apart (86 625.82 and
@@ -4152,21 +4252,44 @@ did not come back in two further runs, and their cause was not found.
     while the test panel had focus (not proven - the run was not
     instrumented). `golden.ps1` now reports `USER INPUT DURING RUN`; such a
     run is not evidence until it is repeated.
+106. **One color cannot serve both sides of a light theme's text.** A
+    role that carries light text at 4.5:1 needs relative luminance below
+    about 0.175, and a role that is text at 4.5:1 on a light background
+    needs it above that. Up/down are both (the stamp's surface and the
+    header's text), and the amber alert is both (the tag's surface and
+    the ghost tag's text). A table edit per failing pair runs around in
+    circles. Find the roles that serve both sides and split them
+    (`onAlert`, `alertText`), or pick the side (up/down: text-safe, light
+    stamp text). Check the final table as a whole, since the best text
+    color for a surface flips when the surface moves.
+107. **The real pointer reaches the test panel.** Phase 40's captures
+    were taken while the user worked. In separate runs a light `golden.ps1`
+    capture had the symbol overlay open (only a real click or a right-click
+    opens it), a ghost tag and its line (the pointer resting in the price
+    column), and a hover box. A dark run had an alert in every panel
+    capture, set by a click in the price column while the panel was at its
+    opening position. The desktop capture, which starts from a fresh
+    registry key, was clean, which placed the click in that run.
+    `golden.ps1` now places the panel on the half of the screen the pointer
+    is not on, and each capture reports `POINTER OVER PANEL`, alerts
+    (field 22) and an open overlay (field 20). The pointer can still
+    follow the panel. A flagged capture is not evidence, and a clean one
+    from another run is.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak33` and `chart.c.bak33` are left** (2026-09-23). From
+**Only `tickc.c.bak34` and `chart.c.bak34` are left** (2026-09-23). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 39 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 40 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak32` (phases 34–38) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak33` (phases 34–39) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38) and `.bak33` (phase 39). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39) and `.bak34` (phase 40). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

@@ -21,6 +21,8 @@ and a daily VWAP. You also get today's high and low, and yesterday's high, low a
 balloon and a sound, even with the panel closed.
 - **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
 It stays quiet on purpose: no volume or moving averages there unless you turn them on.
+- **Dark or light.** A light theme from the tray menu (or `T`), with every text on it
+readable at WCAG AA contrast. The panel and desktop mode each have their own choice.
 - **Scrolls back in time.** Pan into the left edge and it fetches older candles,
 up to 6000 of them.
 
@@ -60,7 +62,8 @@ cl /nologo /W4 /O2 /I. /Fo:tests\ /Fe:tests\chart_golden.exe tests\chart_golden.
 tests\chart_golden.exe
 ```
 
-Each case is hashed and compared with `tests/golden/chart.txt`; a failing case
+Before the pictures, the run checks every text/background pair of the light theme
+against WCAG AA (4.5:1). Each case is hashed and compared with `tests/golden/chart.txt`; a failing case
 is written to `tests/out/` as a BMP. Text goes through the installed fonts and
 the ClearType setting, so the hashes hold for the machine that wrote them. On
 another machine, look at the pictures (`--bmp`) and rewrite them with `--update`.
@@ -70,11 +73,11 @@ another machine, look at the pictures (`--bmp`) and rewrite them with `--update`
 Run `TickC.exe`. An icon appears in the tray.
 
 
-| Action                     | What happens                                              |
-| -------------------------- | --------------------------------------------------------- |
-| Left-click the tray icon   | Show or hide the chart panel                              |
-| Right-click the tray icon  | Symbol, interval, overlays, desktop mode, autostart, quit |
-| `TickC.exe --desktop-mode` | Start with the chart on the desktop                       |
+| Action                     | What happens                                                     |
+| -------------------------- | ---------------------------------------------------------------- |
+| Left-click the tray icon   | Show or hide the chart panel                                     |
+| Right-click the tray icon  | Symbol, interval, overlays, theme, desktop mode, autostart, quit |
+| `TickC.exe --desktop-mode` | Start with the chart on the desktop                              |
 
 
 In the chart panel:
@@ -90,6 +93,7 @@ In the chart panel:
 | `V`                             | Volume bars on/off                                                |
 | `M`                             | Indicators on/off (moving averages, VWAP, levels)                 |
 | `I`                             | RSI band on/off (RSI 14 under the chart)                          |
+| `T`                             | Light theme on/off                                                |
 | `A`                             | Set an alert at the crosshair price                               |
 | `R`, double-click               | Reset zoom and pan                                                |
 | `Esc`                           | Close the symbol picker, then reset the view, then hide the panel |
