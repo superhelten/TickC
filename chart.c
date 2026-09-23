@@ -904,6 +904,9 @@ const ChartTheme ChartThemeDark = {
     CLR_RSI,
     CLR_BG,        // onAlert: dark text on the amber tag
     CLR_ALERT,     // alertText
+    CLR_QUOTE,     // quote (phase 42)
+    CLR_ACCENT,    // accent
+    CLR_BTNHOT,    // onAccent: white
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -946,6 +949,9 @@ const ChartTheme ChartThemeLight = {
     RGB(0x00, 0x7E, 0x83),   // rsi        4.67
     RGB(0x1F, 0x23, 0x28),   // onAlert    5.71 on the amber
     RGB(0xA8, 0x54, 0x00),   // alertText  5.12
+    RGB(0xA8, 0x54, 0x00),   // quote      5.12 (phase 42: the alertText amber)
+    RGB(0x2F, 0x5D, 0xA8),   // accent
+    RGB(0xFF, 0xFF, 0xFF),   // onAccent   6.5 on the accent
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase

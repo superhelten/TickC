@@ -291,6 +291,16 @@ typedef struct {
     // stay there after the backfill.
     int  rangeIdx;
     int  rangeWant;
+    // The trading day (phase 42): Binance's statistics for the UTC day, as
+    // Bloomberg's quote line shows the day's open, high, low and volume.
+    // UTC, so it is the day HOD/LOD/PDC draw. Lock-protected: the worker
+    // thread writes, the UI reads. dayValid is FALSE until a fetch has
+    // succeeded for the symbol shown; a symbol change clears it.
+    // lastUpdMs is the wall-clock time of the last candle fetch that
+    // succeeded, the quote line's "At".
+    BOOL      dayValid;
+    double    dayOpen, dayHigh, dayLow, dayVol;
+    long long lastUpdMs;
 
     Candle candles[MAX_CANDLES];
     int candleCount;
@@ -540,6 +550,7 @@ static int g_forceDpi = 0;
 //                                                   when the file is missing
 //                                                   (the history has ended)
 //   /api/v3/ticker/price?symbol=S                -> price_S.json
+//   /api/v3/ticker/tradingDay?symbol=S           -> day_S.json (phase 42)
 // A missing klines or price file is a failed request, like a network error.
 static wchar_t g_fixtureDir[MAX_PATH] = L"";
 // Test build only (phase 24): counters read from the main window with
@@ -1397,6 +1408,7 @@ static BOOL FixtureGet(const wchar_t* path, char* buf, DWORD bufSize) {
     if (p) { p += 9; int k = 0; while (*p && *p != L'&' && k < 15) iv[k++] = *p++; iv[k] = 0; }
     BOOL hist = wcsstr(path, L"endTime=") != NULL;
     if (wcsstr(path, L"/klines"))      swprintf_s(file, MAX_PATH, L"%s\\%s_%s_%s.json", g_fixtureDir, hist ? L"hist" : L"klines", sym, iv);
+    else if (wcsstr(path, L"/tradingDay")) swprintf_s(file, MAX_PATH, L"%s\\day_%s.json", g_fixtureDir, sym);
     else if (wcsstr(path, L"/price")) swprintf_s(file, MAX_PATH, L"%s\\price_%s.json", g_fixtureDir, sym);
     else return FALSE;
 
@@ -1503,6 +1515,15 @@ static const char* ParseQuotedNumber(const char* p, double* out) {
     if (end == p + 1 || *end != '"') return NULL;
     *out = v;
     return end + 1;
+}
+
+// The quoted number after "key": in a flat JSON object (phase 42). FALSE when
+// the key is missing or the value is not a number.
+static BOOL ParseKeyNumber(const char* json, const char* key, double* out) {
+    const char* pos = strstr(json, key);
+    if (!pos) return FALSE;
+    pos += strlen(key);
+    return *pos == '"' && ParseQuotedNumber(pos, out) != NULL;
 }
 
 // outPrice is touched only when the response held a sane price.
@@ -1645,6 +1666,7 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     if (ctx->candleCount > 0) {
         ctx->lastPrice = ctx->candles[ctx->candleCount - 1].close;
     }
+    ctx->lastUpdMs = NowUnixMs();   // phase 42: the quote line's "At"
 
     if (ctx->ch.followLive) {
         int vc = (ctx->rangeWant > 0) ? ctx->rangeWant : ctx->ch.viewCount;   // phase 41
@@ -1711,6 +1733,40 @@ static BOOL WorkerFetchHistory(AppContext* ctx) {
     return got;
 }
 
+// The trading day (phase 42): one small request for the UTC day's open,
+// high, low and volume. Same configGen guard as the candles. Not a network
+// health signal: a failure here leaves the old values (or none) and does
+// not count toward the backoff - the candles decide that.
+static void WorkerFetchDay(AppContext* ctx) {
+    unsigned gen;
+    int si;
+    EnterCriticalSection(&ctx->lock);
+    gen = ctx->configGen;
+    si  = ctx->symIdx;
+    LeaveCriticalSection(&ctx->lock);
+
+    wchar_t path[96];
+    swprintf_s(path, 96, L"/api/v3/ticker/tradingDay?symbol=%s", SYMBOLS[si].api);
+    char buf[1024];
+    if (!HttpGet(ctx, path, buf, (DWORD)sizeof(buf))) return;
+
+    double o, h, l, v;
+    if (!ParseKeyNumber(buf, "\"openPrice\":", &o) || !ParseKeyNumber(buf, "\"highPrice\":", &h) ||
+        !ParseKeyNumber(buf, "\"lowPrice\":", &l)  || !ParseKeyNumber(buf, "\"volume\":", &v) ||
+        !PriceSane(o) || !PriceSane(h) || !PriceSane(l) || l > h || !(v >= 0.0 && v < 1.0e15)) {
+#ifdef TICKER_PROBE
+        InterlockedIncrement(&g_probeRejects);
+#endif
+        return;
+    }
+    EnterCriticalSection(&ctx->lock);
+    if (ctx->configGen == gen) {
+        ctx->dayOpen = o; ctx->dayHigh = h; ctx->dayLow = l; ctx->dayVol = v;
+        ctx->dayValid = TRUE;
+    }
+    LeaveCriticalSection(&ctx->lock);
+}
+
 static BOOL WorkerFetchPrice(AppContext* ctx) {
     unsigned gen;
     int si;
@@ -1740,12 +1796,14 @@ static BOOL WorkerFetchPrice(AppContext* ctx) {
 
 static DWORD WINAPI NetworkThread(LPVOID param) {
     AppContext* ctx = (AppContext*)param;
+    int dayCycle = 0;   // phase 42: cycles since the last trading-day fetch
     HANDLE waits[2] = { ctx->hStopEvent, ctx->hWakeEvent };
 
     for (;;) {
         EnterCriticalSection(&ctx->lock);
         HWND hp   = ctx->hPopup;
         BOOL hist = ctx->histPending;
+        BOOL dayOk = ctx->dayValid;   // phase 42
         BOOL drop = ctx->dropConn;
         ctx->dropConn = FALSE;
         LeaveCriticalSection(&ctx->lock);
@@ -1771,6 +1829,14 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
         if (hp && IsWindowVisible(hp)) {
             ok = hist ? WorkerFetchHistory(ctx) : TRUE;
             if (ok) ok = WorkerFetchKlines(ctx);
+            // The day's statistics (phase 42): every fifth cycle (15 s) - the
+            // day's open does not move, and its high, low and volume are
+            // followed live from the last price in between - and at once
+            // when there are none for the symbol shown.
+            if (ok && (!dayOk || ++dayCycle >= 5)) {
+                dayCycle = 0;
+                WorkerFetchDay(ctx);
+            }
         } else {
             ok = WorkerFetchPrice(ctx);
         }
@@ -2888,7 +2954,7 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     if (!isSym && idx == ctx->ivIdx)  return;
 
     EnterCriticalSection(&ctx->lock);
-    if (isSym) ctx->symIdx = idx;
+    if (isSym) { ctx->symIdx = idx; ctx->dayValid = FALSE; }   // phase 42: another symbol's day
     else       { ctx->ivIdx = idx; ctx->intervalMs = INTERVALS[idx].ms; }
     ctx->configGen++;
     ctx->candleCount = 0;
@@ -3960,6 +4026,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 65: r = g_Ctx.rangeIdx; break;
                 case 66: r = g_Ctx.rangeWant; break;
                 case 67: r = g_Ctx.overlayKind; break;
+                // 69-73 (phase 42): the trading day - valid, then open, high,
+                // low and volume x100 (-1 while not valid).
+                case 69: r = g_Ctx.dayValid; break;
+                case 70: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayOpen * 100.0 + 0.5) : -1; break;
+                case 71: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayHigh * 100.0 + 0.5) : -1; break;
+                case 72: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayLow  * 100.0 + 0.5) : -1; break;
+                case 73: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayVol  * 100.0 + 0.5) : -1; break;
                 case 62: r = (LRESULT)(g_Ctx.ch.dispRsiF * 1000.0); break;
                 case 63: {
                     double v;
