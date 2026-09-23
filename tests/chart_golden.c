@@ -353,8 +353,7 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     CP("overlay active row",      up,        box),
     // Phase 42: the quote line and the range field.
     CP("quote line values",       quote,     bg),
-    CP("range cells",             text,      box),
-    CP("range cell hot",          text,      boxEdge),
+    CP("range cells",             text,      boxEdge),
     CP("range cell selected",     onAccent,  accent),
 };
 
