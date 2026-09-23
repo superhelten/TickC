@@ -773,12 +773,69 @@ static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn,
     if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
 }
 
+// The themes (phase 38). Dark is the CLR_ macros, field for field, so TickC
+// draws exactly what it drew before the colors became data.
+const ChartTheme ChartThemeDark = {
+    CLR_BG,
+    CLR_GRID,
+    CLR_UP,
+    CLR_DOWN,
+    CLR_TEXT,
+    CLR_DIM,
+    CLR_CROSS,
+    CLR_BOX,
+    CLR_BOXEDGE,
+    CLR_CLOSEHOT,
+    CLR_BTNHOT,
+    CLR_AXIS,
+    CLR_VOL_UP,
+    CLR_VOL_DOWN,
+    CLR_SMA,
+    CLR_EMA,
+    CLR_VWAP,
+    CLR_SESSION,
+    CLR_PREV,
+    CLR_ALERT,
+    CLR_ALERT_LINE,
+};
+
+// Light: the same roles on a near-white background. The candles are the
+// deeper green/red of light trading charts - 00FF66 is unreadable on white.
+// The overlays keep their hues but darker; VWAP turns from yellow to dark
+// gold, which yellow cannot be on white. The volume bars are the candle
+// colors blended about 25 % toward the background, as in the dark theme.
+const ChartTheme ChartThemeLight = {
+    RGB(0xFA, 0xFA, 0xFB),   // bg
+    RGB(0xE8, 0xEA, 0xEE),   // grid
+    RGB(0x08, 0x99, 0x81),   // up
+    RGB(0xF2, 0x36, 0x45),   // down
+    RGB(0x1F, 0x23, 0x28),   // text
+    RGB(0x6A, 0x73, 0x7D),   // dim
+    RGB(0x9A, 0xA0, 0xA6),   // cross
+    RGB(0xFF, 0xFF, 0xFF),   // box
+    RGB(0xD0, 0xD7, 0xDE),   // boxEdge
+    RGB(0xC0, 0x2A, 0x3E),   // hot
+    RGB(0xFF, 0xFF, 0xFF),   // onHot
+    RGB(0x4A, 0x53, 0x60),   // axis
+    RGB(0xC3, 0xE4, 0xDF),   // volUp
+    RGB(0xFB, 0xCF, 0xD2),   // volDown
+    RGB(0x2F, 0x7F, 0xB5),   // sma
+    RGB(0x8E, 0x5C, 0xC7),   // ema
+    RGB(0xB0, 0x80, 0x00),   // vwap
+    RGB(0x6E, 0x74, 0x81),   // session
+    RGB(0x8A, 0x93, 0xA8),   // prev
+    RGB(0xD9, 0x8A, 0x00),   // alert
+    RGB(0xE8, 0xC4, 0x80),   // alertLine
+};
+
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
 // 34). Created once, not per repaint.
-BOOL ChartStyleCreate(ChartStyle* sty, int dpi) {
+BOOL ChartStyleCreate(ChartStyle* sty, int dpi, const ChartTheme* theme) {
+    const ChartTheme* t = theme ? theme : &ChartThemeDark;
     ZeroMemory(sty, sizeof(*sty));
     if (dpi <= 0) dpi = CHART_DPI_BASE;
     sty->dpi = dpi;
+    sty->clr = *t;
     sty->fontSmall = CreateFontW(-ChartPx(dpi, 11), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -794,17 +851,17 @@ BOOL ChartStyleCreate(ChartStyle* sty, int dpi) {
                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                                 ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
                                 L"Lucida Console");
-    sty->penGrid  = CreatePen(PS_SOLID, 1, CLR_GRID);
-    sty->penCross = CreatePen(PS_DOT,   1, CLR_CROSS);
+    sty->penGrid  = CreatePen(PS_SOLID, 1, t->grid);
+    sty->penCross = CreatePen(PS_DOT,   1, t->cross);
     // Dashed, not dotted: keeps the last-price line visually distinct from
     // both the grid (solid, muted) and the crosshair (dotted).
-    sty->penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
-    sty->penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
-    sty->brBg      = CreateSolidBrush(CLR_BG);
-    sty->brBox     = CreateSolidBrush(CLR_BOX);
-    sty->brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
-    sty->brVolUp   = CreateSolidBrush(CLR_VOL_UP);     // phase 21
-    sty->brVolDown = CreateSolidBrush(CLR_VOL_DOWN);
+    sty->penLastUp   = CreatePen(PS_DASH, 1, t->up);
+    sty->penLastDown = CreatePen(PS_DASH, 1, t->down);
+    sty->brBg      = CreateSolidBrush(t->bg);
+    sty->brBox     = CreateSolidBrush(t->box);
+    sty->brBoxEdge = CreateSolidBrush(t->boxEdge);
+    sty->brVolUp   = CreateSolidBrush(t->volUp);     // phase 21
+    sty->brVolDown = CreateSolidBrush(t->volDown);
     return sty->fontSmall && sty->fontAxis && sty->penGrid && sty->penCross &&
            sty->penLastUp && sty->penLastDown && sty->brBg && sty->brBox &&
            sty->brBoxEdge && sty->brVolUp && sty->brVolDown;
@@ -998,7 +1055,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         int na = in->alertCount;
         if (na > 0) {
             SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, CLR_ALERT_LINE);
+            SetDCPenColor(hdc, sty->clr.alertLine);
             for (int a = 0; a < na; ++a) {
                 int y = AlertY(st, &g, fabs(in->alerts[a]));
                 if (y < top || y > bottom) continue;
@@ -1073,7 +1130,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 if (yy < 0.0 || yy > (double)ch) continue;
                 int y = top + (int)yy;
                 if (y < top || y > bottom) continue;
-                SetDCPenColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
+                SetDCPenColor(hdc, Blend(sty->clr.bg, (q < 2) ? sty->clr.session : sty->clr.prev, indT));
                 DrawDashLine(hdc, xs, edge, y, left, PX(LVL_DASH[q]), PX(SESS_DASH_PERIOD));
                 yLvl[q] = y;
                 yLine[q] = y;
@@ -1108,8 +1165,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         int yClose = top + (int)(((maxP - c->close) / range) * ch);
 
         if (up != curUp) {
-            SetDCPenColor(hdc,   up ? CLR_UP : CLR_DOWN);
-            SetDCBrushColor(hdc, up ? CLR_UP : CLR_DOWN);
+            SetDCPenColor(hdc,   up ? sty->clr.up : sty->clr.down);
+            SetDCBrushColor(hdc, up ? sty->clr.up : sty->clr.down);
             curUp = up;
         }
 
@@ -1158,10 +1215,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         }
         SelectObject(hdc, GetStockObject(DC_PEN));
         indOk[0] = DrawIndicator(hdc, in->candles, n, &g, IND_SMA_PERIOD, FALSE,
-                                 Blend(CLR_BG, CLR_SMA, indT), dStart, slot, i0, i1,
+                                 Blend(sty->clr.bg, sty->clr.sma, indT), dStart, slot, i0, i1,
                                  maxP, range, legendIdx, &indVal[0]);
         indOk[1] = DrawIndicator(hdc, in->candles, n, &g, IND_EMA_PERIOD, TRUE,
-                                 Blend(CLR_BG, CLR_EMA, indT), dStart, slot, i0, i1,
+                                 Blend(sty->clr.bg, sty->clr.ema, indT), dStart, slot, i0, i1,
                                  maxP, range, legendIdx, &indVal[1]);
 #ifdef TICKER_PROBE
         {
@@ -1172,7 +1229,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             QueryPerformanceCounter(&sessQ0);
         }
 #endif
-        indOk[2] = DrawVwap(hdc, in, &g, Blend(CLR_BG, CLR_VWAP, indT),
+        indOk[2] = DrawVwap(hdc, in, &g, Blend(sty->clr.bg, sty->clr.vwap, indT),
                             dStart, slot, i0, i1, maxP, range, legendIdx, &indVal[2]);
 #ifdef TICKER_PROBE
         QueryPerformanceCounter(&sessQ1);
@@ -1193,7 +1250,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // Omega_y-axis: x in [edge + AXIS_LBL_GAP, W - AXIS_PAD_R).
     int axL = edge + PX(AXIS_LBL_GAP), axR = W - PX(AXIS_PAD_R);
     SelectObject(hdc, sty->fontAxis);
-    SetTextColor(hdc, CLR_AXIS);
+    SetTextColor(hdc, sty->clr.axis);
     // The stamp for the last price lies on top of the label at the same
     // height (see below). Both are 16 px tall, and with 11 px digits a label
     // less than 16 px away was half covered, with a truncated number visible
@@ -1284,7 +1341,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             if (y < top || y > bottom) continue;
             BOOL hot = (a == in->alertHot && in->alerts[a] != in->alertFresh);
             RECT rcA = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
-            SetDCBrushColor(hdc, hot ? CLR_CLOSEHOT : CLR_ALERT);
+            SetDCBrushColor(hdc, hot ? sty->clr.hot : sty->clr.alert);
             FillRect(hdc, &rcA, (HBRUSH)GetStockObject(DC_BRUSH));
             // If the stamp or a tag drawn later lies on top of this one, only
             // a strip of the surface sticks out - and with it a number cut
@@ -1299,7 +1356,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             }
             if (covered) continue;
             FormatTagPrice(hdc, lvl, range, axR - axL, buf, 64);
-            SetTextColor(hdc, hot ? CLR_BTNHOT : CLR_BG);
+            SetTextColor(hdc, hot ? sty->clr.onHot : sty->clr.bg);
             RECT rcAT = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
@@ -1315,10 +1372,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             if (yLvl[q] == INT_MIN) continue;
             int y = yLvl[q];
             RECT rcS = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
-            SetDCBrushColor(hdc, Blend(CLR_BG, CLR_BOX, indT));
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.box, indT));
             FillRect(hdc, &rcS, (HBRUSH)GetStockObject(DC_BRUSH));
             FormatTagPrice(hdc, lvlP[q], range, axR - axL, buf, 64);
-            SetTextColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
+            SetTextColor(hdc, Blend(sty->clr.bg, (q < 2) ? sty->clr.session : sty->clr.prev, indT));
             RECT rcST = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcST, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
@@ -1331,9 +1388,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         if (ghost) {
             int y = in->axisHotY;
             BOOL full = (nA >= ALERT_MAX);
-            COLORREF gc = full ? CLR_DIM : CLR_ALERT;
+            COLORREF gc = full ? sty->clr.dim : sty->clr.alert;
             SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, full ? CLR_CROSS : CLR_ALERT_LINE);
+            SetDCPenColor(hdc, full ? sty->clr.cross : sty->clr.alertLine);
             MoveToEx(hdc, left, y, NULL);
             LineTo(hdc, edge, y);
             RECT rcG = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
@@ -1345,7 +1402,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             RECT rcGT = { axL, y - tagHalf, axR, y + tagHalf };
             DrawTextW(hdc, buf, -1, &rcGT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
-        SetTextColor(hdc, CLR_AXIS);   // the time axis below inherits the color
+        SetTextColor(hdc, sty->clr.axis);   // the time axis below inherits the color
     }
 
     // --- Afterglow (phase 23) ---
@@ -1360,7 +1417,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         if (y >= top && y <= bottom) {
             int t = (int)(in->alertFlashF * 255.0 + 0.5);
             SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, Blend(CLR_BG, CLR_ALERT, t));
+            SetDCPenColor(hdc, Blend(sty->clr.bg, sty->clr.alert, t));
             MoveToEx(hdc, left, y, NULL);
             LineTo(hdc, edge, y);
         }
@@ -1454,13 +1511,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             BOOL struck = FALSE;
             for (int q = 0; q < LVL_COUNT; ++q)
                 if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
-            if (struck) { SetBkColor(hdc, CLR_BG); SetBkMode(hdc, OPAQUE); }
-            SetTextColor(hdc, Blend(CLR_BG, CLR_SMA, indT));
+            if (struck) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
+            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.sma, indT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
-            SetTextColor(hdc, Blend(CLR_BG, CLR_EMA, indT));
+            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.ema, indT));
             ExtTextOutW(hdc, lx + sz1.cx, ly, 0, NULL, lg + len1, lenAll - len1, NULL);
             if (lx + sz3.cx <= right - PX(6)) {
-                SetTextColor(hdc, Blend(CLR_BG, CLR_VWAP, indT));
+                SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.vwap, indT));
                 ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
             }
             if (struck) SetBkMode(hdc, TRANSPARENT);
@@ -1507,7 +1564,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 }
                 if (hit) continue;
                 placed[nPlaced++] = rcN;
-                SetTextColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
+                SetTextColor(hdc, Blend(sty->clr.bg, (q < 2) ? sty->clr.session : sty->clr.prev, indT));
                 ExtTextOutW(hdc, rcN.left, rcN.top, 0, NULL, LVL_NAME[q], 3, NULL);
 #ifdef TICKER_PROBE
                 st->probeLblMask |= (1 << q);
@@ -1564,7 +1621,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             LineTo(hdc, right, yLast);
 
             SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
+            SetDCPenColor(hdc, lastUp ? sty->clr.up : sty->clr.down);
             MoveToEx(hdc, right, yLast, NULL);
             LineTo(hdc, edge + 1, yLast);
             SelectObject(hdc, hOld2);
@@ -1582,7 +1639,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int half = in->desktop ? DeskPillH(H) / 2 : tagHalf;
 
                 RECT rcPill = { edge + 1, yLast - half, axR + PX(3), yLast + half };
-                SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
+                SetDCBrushColor(hdc, lastUp ? sty->clr.up : sty->clr.down);
                 FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
                 // "Precise value text": two decimals where they fit, otherwise
@@ -1604,7 +1661,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 // Dark text on the saturated surface - CLR_TEXT would drown.
                 // The surface is layered with LWA_ALPHA 255, not a color key,
                 // so CLR_BG is a color here and not a hole to the wallpaper.
-                SetTextColor(hdc, CLR_BG);
+                SetTextColor(hdc, sty->clr.bg);
                 RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
                 DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             }
@@ -1643,7 +1700,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         RECT rcTag = { edge + 1, hy - tagHalf, axR + PX(3), hy + tagHalf };
         FillRect(hdc, &rcTag, sty->brBoxEdge);
         SelectObject(hdc, sty->fontAxis);
-        SetTextColor(hdc, CLR_TEXT);
+        SetTextColor(hdc, sty->clr.text);
         RECT rcTagTxt = { axL, hy - tagHalf, axR, hy + tagHalf };
         DrawTextW(hdc, buf, -1, &rcTagTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
@@ -1680,21 +1737,21 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 
     int ty = by + PX(4);
     RECT rcL = { bx + PX(7), ty, bx + BOX_W - PX(6), ty + LINE_H };
-    SetTextColor(hdc, CLR_TEXT);
+    SetTextColor(hdc, sty->clr.text);
     DrawTextW(hdc, tbuf, -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     const wchar_t* lbl[5] = { L"O", L"H", L"L", L"C", L"V" };
     double val[5] = { hc->open, hc->high, hc->low, hc->close, hc->volume };
-    COLORREF cclr = (hc->close >= hc->open) ? CLR_UP : CLR_DOWN;
+    COLORREF cclr = (hc->close >= hc->open) ? sty->clr.up : sty->clr.down;
 
     for (int i = 0; i < 5; ++i) {
         ty += LINE_H;
         RECT rcRow = { bx + PX(7), ty, bx + BOX_W - PX(6), ty + LINE_H };
-        SetTextColor(hdc, CLR_DIM);
+        SetTextColor(hdc, sty->clr.dim);
         DrawTextW(hdc, lbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         if (i == 4) FormatVolume(val[i], buf, 64);   // phase 21
         else        swprintf_s(buf, 64, L"%.2f", val[i]);
-        SetTextColor(hdc, (i == 3) ? cclr : CLR_TEXT);
+        SetTextColor(hdc, (i == 3) ? cclr : sty->clr.text);
         DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
     }
 
@@ -1702,15 +1759,15 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // value in the text color - both faded against the box, not CLR_BG.
     if (indRows > 0) {
         const wchar_t* ilbl[3] = { L"SMA", L"EMA", L"VWAP" };
-        const COLORREF iclr[3] = { CLR_SMA, CLR_EMA, CLR_VWAP };
+        const COLORREF iclr[3] = { sty->clr.sma, sty->clr.ema, sty->clr.vwap };
         for (int i = 0; i < 3; ++i) {
             ty += LINE_H;
             RECT rcRow = { bx + PX(7), ty, bx + BOX_W - PX(6), ty + LINE_H };
-            SetTextColor(hdc, Blend(CLR_BOX, iclr[i], indT));
+            SetTextColor(hdc, Blend(sty->clr.box, iclr[i], indT));
             DrawTextW(hdc, ilbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             if (indOk[i]) swprintf_s(buf, 64, L"%.2f", indVal[i]);
             else          wcscpy_s(buf, 64, L"-");
-            SetTextColor(hdc, Blend(CLR_BOX, CLR_TEXT, indT));
+            SetTextColor(hdc, Blend(sty->clr.box, sty->clr.text, indT));
             DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
         }
     }

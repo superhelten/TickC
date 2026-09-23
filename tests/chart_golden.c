@@ -51,32 +51,38 @@ typedef struct {
     int  hoverX, hoverY;   // -1 = no crosshair
     BOOL alerts;      // two alerts, a ghost tag on the axis and an afterglow
     int  dpi;         // 96 = 100 %, 144 = 150 %, 192 = 200 % (phase 36)
+    BOOL light;       // ChartThemeLight instead of the default dark (phase 38)
 } Case;
 
 // The desktop stamp is sized from H (DeskPillFontH); 1920x1080 and a 3840x1600
 // surface give two different stamp fonts.
 static const Case CASES[] = {
-    { "panel_1m_1280x720",      1280, 720, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "panel_15m_1280x720",     1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "panel_1h_1280x720",      1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "panel_1d_1280x720",      1280, 720, FALSE, DAY_MS,       200, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "panel_15m_560x300",       560, 300, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "panel_1h_400x250",        400, 250, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "panel_1h_hover",         1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96 },
-    { "panel_1h_panned_zoomed", 1280, 720, FALSE, HOUR_MS,      360, FALSE,  60, 90, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "panel_1h_overlays_off",  1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96 },
-    { "panel_1h_overlays_fade", 1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.5, 0.5,  -1,  -1, FALSE,  96 },
-    { "panel_15m_alerts",       1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96 },
-    { "panel_1m_few_candles",    560, 300, FALSE, MIN_MS,        12, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96 },
-    { "desktop_1m_1920x1080",   1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96 },
-    { "desktop_1m_3840x1600",   3840,1600, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96 },
+    { "panel_1m_1280x720",      1280, 720, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_15m_1280x720",     1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_1h_1280x720",      1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_1d_1280x720",      1280, 720, FALSE, DAY_MS,       200, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_15m_560x300",       560, 300, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_1h_400x250",        400, 250, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_1h_hover",         1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96, FALSE },
+    { "panel_1h_panned_zoomed", 1280, 720, FALSE, HOUR_MS,      360, FALSE,  60, 90, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_1h_overlays_off",  1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_1h_overlays_fade", 1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 0.5, 0.5,  -1,  -1, FALSE,  96, FALSE },
+    { "panel_15m_alerts",       1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE },
+    { "panel_1m_few_candles",    560, 300, FALSE, MIN_MS,        12, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE },
+    { "desktop_1m_1920x1080",   1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE },
+    { "desktop_1m_3840x1600",   3840,1600, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE },
     // Phase 36: panels at 150 % and 200 %, in device pixels - what a
     // per-monitor-aware panel gets for 1280x720 and 560x300 logical.
-    { "dpi144_1h_1920x1080",    1920,1080, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144 },
-    { "dpi144_1h_hover",        1920,1080, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,1050, 450, FALSE, 144 },
-    { "dpi144_15m_alerts",      1920,1080, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,  144 },
-    { "dpi144_15m_840x450",      840, 450, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144 },
-    { "dpi192_1m_2560x1440",    2560,1440, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,1400, 600, FALSE, 192 },
+    { "dpi144_1h_1920x1080",    1920,1080, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144, FALSE },
+    { "dpi144_1h_hover",        1920,1080, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,1050, 450, FALSE, 144, FALSE },
+    { "dpi144_15m_alerts",      1920,1080, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,  144, FALSE },
+    { "dpi144_15m_840x450",      840, 450, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144, FALSE },
+    { "dpi192_1m_2560x1440",    2560,1440, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,1400, 600, FALSE, 192, FALSE },
+    // Phase 38: the light theme, with every element that has a color of its
+    // own in view - candles, bars, averages, VWAP, levels, alerts, crosshair.
+    { "light_15m_alerts",       1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, TRUE  },
+    { "light_1h_hover",         1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96, TRUE  },
+    { "light_desktop_1920x1080",1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, TRUE  },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -311,7 +317,7 @@ int main(int argc, char** argv) {
         const Case* k = &CASES[i];
         // One style per case: the fonts are built for the case's dpi.
         ChartStyle sty;
-        if (!ChartStyleCreate(&sty, k->dpi)) { printf("FAIL %s: ChartStyleCreate\n", k->name); fails++; continue; }
+        if (!ChartStyleCreate(&sty, k->dpi, k->light ? &ChartThemeLight : NULL)) { printf("FAIL %s: ChartStyleCreate\n", k->name); fails++; continue; }
         Surface s;
         ZeroMemory(&s, sizeof(s));
         if (!SurfaceOpen(&s, k->W, k->H)) {

@@ -4311,7 +4311,7 @@ static int PanelDpi(HWND hwnd) {
 static void ApplyPanelDpi(AppContext* ctx, int dpi) {
     if (ctx->sty.fontSmall && ctx->sty.dpi == dpi) return;
     ChartStyleDestroy(&ctx->sty);
-    ChartStyleCreate(&ctx->sty, dpi);
+    ChartStyleCreate(&ctx->sty, dpi, &ChartThemeDark);
     if (ctx->hFontBig) DeleteObject(ctx->hFontBig);
     ctx->hFontBig = CreateFontW(-ChartPx(dpi, 19), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -4939,7 +4939,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // with the golden tests in tests/).
     // 96 dpi until a surface exists: ApplyPanelDpi sets the panel's own dpi
     // when it opens (phase 37).
-    ChartStyleCreate(&g_Ctx.sty, CHART_DPI_BASE);
+    ChartStyleCreate(&g_Ctx.sty, CHART_DPI_BASE, &ChartThemeDark);
     // hFontWm is not created here: the height depends on the panel size, so
     // it is built in EnsureWatermark and only when the height changes.
 

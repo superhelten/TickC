@@ -3277,6 +3277,29 @@ capture at 150 % was looked at (fixtures, everything scaled), and after
 100 → 150 → 100 the panel was at 96 and 1280x720, pixel-identical to the
 capture before. 7/7, and the monitor was back at 96 dpi afterwards.
 
+### Phase 38 — the chart's colors as data
+
+Branch `phase-38`, merged with `--no-ff`. The third engine step. Every
+color `chart.c` draws with - 21 roles, from the background to the alert
+line - now comes from a `ChartTheme` that `ChartStyleCreate(sty, dpi,
+theme)` copies into `ChartStyle.clr` and builds the pens and brushes from.
+`ChartThemeDark` is the `CLR_` macros field for field, and TickC passes it;
+the macros stay, since the app's header, buttons and overlay still use them
+(theming the app is a step of its own, with a setting in the tray menu).
+`ChartThemeLight` is the second built-in table: near-white background, the
+deeper green/red of light trading charts (00FF66 is unreadable on white),
+the overlays darker, VWAP dark gold instead of yellow. The replacement was
+done in the code part of each line only, so the comments keep naming the
+macros they reason about.
+
+**Verified.** `chart_golden`: the 19 dark cases unchanged; three light
+cases (15m with alerts and levels, 1h with the crosshair, the desktop
+surface), looked at before their goldens were written. Red run with
+`volUp` and `volDown` swapped in the dark table: exactly the 16 dark cases
+with volume bars in view fail (not "overlays off", not the two desktop
+cases, not the light ones). Green 22/22 twice. `golden.ps1`: all eight
+identical to `main`. **Exe 211 456 bytes, unchanged.**
+
 ---
 
 ## Known limitations
@@ -4078,16 +4101,16 @@ capture before. 7/7, and the monitor was back at 96 dpi afterwards.
 
 ## Backups
 
-**Only `tickc.c.bak31` and `chart.c.bak31` are left** (2026-09-23). From
+**Only `tickc.c.bak32` and `chart.c.bak32` are left** (2026-09-23). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 37 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 38 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak30` (phases 34–36) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak31` (phases 34–37) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36) and `.bak31` (phase 37). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37) and `.bak32` (phase 38). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

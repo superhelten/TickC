@@ -72,6 +72,21 @@ typedef struct {
     long long     utcOffsetMs;
 } ChartData;
 
+// The chart's colors (phase 38). Every color the engine draws with comes from
+// here, not from the CLR_ macros: the macros below are the default dark theme
+// (ChartThemeDark), which TickC uses, and a second theme is a table, not an
+// edit of chart.c. The pens and brushes in ChartStyle are built from it.
+typedef struct {
+    COLORREF bg, grid, up, down, text, dim, cross, box, boxEdge;
+    COLORREF hot, onHot;         // a tag the pointer is on: surface and text
+    COLORREF axis, volUp, volDown;
+    COLORREF sma, ema, vwap, session, prev;
+    COLORREF alert, alertLine;
+} ChartTheme;
+
+extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
+extern const ChartTheme ChartThemeLight;   // phase 38: light background
+
 // GDI objects the chart draws with (phase 35: built by ChartStyleCreate, so
 // the app and the golden tests draw with the very same objects). fontPill
 // is NOT part of it: its height follows the surface, and the app builds it
@@ -82,6 +97,7 @@ typedef struct {
     HPEN   penGrid, penCross, penLastUp, penLastDown;
     HBRUSH brBg, brBox, brBoxEdge, brVolUp, brVolDown;
     int    dpi;                 // phase 36: the fonts are built for it; 96 = 100 %
+    ChartTheme clr;             // phase 38: the colors, copied from the theme
 } ChartStyle;
 
 // DPI (phase 36). Every length in this header is given at 96 dpi and is
@@ -283,9 +299,10 @@ int       NiceTimeStep(int step, long long intervalMs);
 
 // --- Style ---
 // Creates every object in ChartStyle except fontPill (set to NULL), with the
-// fonts sized for dpi (0 = 96). FALSE when any creation failed; the rest are
-// then still valid or NULL, and ChartStyleDestroy frees them.
-BOOL      ChartStyleCreate(ChartStyle* sty, int dpi);
+// fonts sized for dpi (0 = 96) and the colors from theme (NULL = dark).
+// FALSE when any creation failed; the rest are then still valid or NULL, and
+// ChartStyleDestroy frees them.
+BOOL      ChartStyleCreate(ChartStyle* sty, int dpi, const ChartTheme* theme);
 void      ChartStyleDestroy(ChartStyle* sty);
 // The desktop stamp font for a surface H px high (DeskPillFontH). The caller
 // owns it and sets it as ChartStyle.fontPill.
