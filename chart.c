@@ -542,6 +542,10 @@ void PriceRange(const Candle* candles, int vs, int vc, double* outMin, double* o
     double pad = range * 0.08;
     *outMin = mn - pad;
     *outMax = mx + pad;
+    // Phase 41: the padding must not take the axis below zero. A view whose
+    // low is small against its range - Max on 1w, from 3 100 to 126 000 -
+    // got a grid label of -7054. Prices are never negative, so the floor is 0.
+    if (mn >= 0.0 && *outMin < 0.0) *outMin = 0.0;
 }
 
 // Largest volume in the view (phase 21): the scale of the bars. 0 when no

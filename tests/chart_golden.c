@@ -32,6 +32,7 @@
 #define MIN_MS      60000LL
 #define HOUR_MS     3600000LL
 #define DAY_MS      86400000LL
+#define WEEK_MS     (7 * DAY_MS)
 // The last candle closes at 2026-09-21 14:00 UTC. The 1m buffer reaches back
 // past the previous day's start, so today's and yesterday's levels are drawn.
 #define T_END_MS    1789999200000LL
@@ -93,6 +94,10 @@ static const Case CASES[] = {
     { "rsi_1m_dpi144",          1920,1080, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,  144, FALSE, TRUE },
     { "rsi_light_1h",           1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, TRUE,  TRUE },
     { "rsi_desktop_1920x1080",  1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, TRUE },
+    // Phase 41: the ranges 1Y (365 x 1d) and 5Y (261 x 1w), where the time
+    // labels need the longer steps NiceTimeStep got (60 days, 26 weeks).
+    { "range_1y_1d",            1280, 720, FALSE, DAY_MS,       400, TRUE,  365,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE },
+    { "range_5y_1w",            1280, 720, FALSE, WEEK_MS,      300, TRUE,  261,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -380,6 +385,21 @@ static int CheckContrast(const ChartTheme* t, const char* name) {
     return bad;
 }
 
+// --- The price axis floor (phase 41) ---
+// A view whose low is small against its range must not get an axis below
+// zero: Max on 1w (3 100 to 126 000) drew a grid label of -7054.
+static int CheckPriceFloor(void) {
+    Candle c[2];
+    ZeroMemory(c, sizeof(c));
+    c[0].open = c[0].low = 3100.0;   c[0].high = c[0].close = 20000.0;
+    c[1].open = c[1].low = 20000.0;  c[1].high = c[1].close = 126000.0;
+    double mn = 0, mx = 0;
+    PriceRange(c, 0, 2, &mn, &mx);
+    if (mn < 0.0) { printf("FAIL price floor: min %.2f below zero\n", mn); return 1; }
+    printf("ok   price floor: min %.2f, max %.2f\n", mn, mx);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     BOOL update = FALSE, bmp = FALSE;
     for (int i = 1; i < argc; i++) {
@@ -400,7 +420,7 @@ int main(int argc, char** argv) {
     if (!update && s_goldCount == 0) printf("no goldens in %s - run with --update\n", goldPath);
 
     unsigned long long hashes[NCASES] = { 0 };
-    int contrastFails = CheckContrast(&ChartThemeLight, "light");
+    int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -460,6 +480,6 @@ int main(int argc, char** argv) {
     }
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
-    if (contrastFails) printf("%d light-theme text pairs under 4.5:1\n", contrastFails);
+    if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }

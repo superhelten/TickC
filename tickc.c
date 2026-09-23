@@ -40,6 +40,9 @@
 // The ranges are 100 wide; #error below the tables ensures they never overlap.
 #define ID_TRAY_SYMBOL_FIRST   1100
 #define ID_TRAY_INTERVAL_FIRST 1200
+// The ranges (phase 41). "Range" in ID_TRAY_RANGE_W below is the width of an
+// ID block; the time ranges are "periods" here to keep the two apart.
+#define ID_TRAY_PERIOD_FIRST   1300
 #define ID_TRAY_RANGE_W        100
 #define TIMER_INTERVAL   3000 // 3 seconds
 
@@ -173,18 +176,45 @@ static const IntervalDef INTERVALS[] = {
 };
 #define SYMBOL_COUNT   ((int)(sizeof(SYMBOLS) / sizeof(SYMBOLS[0])))
 #define INTERVAL_COUNT ((int)(sizeof(INTERVALS) / sizeof(INTERVALS[0])))
+
+// The ranges (phase 41), on the Bloomberg model: how far back the chart
+// goes, chosen apart from the bar size. A range is a DURATION. A click sets
+// its default bar size, picked so the view holds 180-365 candles (the old
+// default view was 300): enough to read as candles at 1280 px. Another bar
+// size can be picked afterwards and the range stays - 1M on 1h is 720
+// candles - unless it cannot be shown there (fewer than MIN_VIEW candles,
+// or more than the buffer holds: 1Y on 1m), which ends it. YTD counts from
+// 1 January 00:00 UTC; Max is as much as the exchange and the buffer give.
+#define RANGE_DAYS_YTD  (-1)
+#define RANGE_DAYS_MAX  (-2)
+typedef struct { const wchar_t* label; int days; long long ivMs; } RangeDef;
+static const RangeDef RANGES[] = {
+    { L"1D",  1,              300000LL },     // 5m  x 288
+    { L"3D",  3,              900000LL },     // 15m x 288
+    { L"1M",  30,             14400000LL },   // 4h  x 180
+    { L"6M",  182,            86400000LL },   // 1d  x 182
+    { L"YTD", RANGE_DAYS_YTD, 86400000LL },   // 1d  x day of the year
+    { L"1Y",  365,            86400000LL },   // 1d  x 365
+    { L"5Y",  1826,           604800000LL },  // 1w  x 261
+    { L"Max", RANGE_DAYS_MAX, 604800000LL },  // 1w  x all
+};
+#define RANGE_COUNT    ((int)(sizeof(RANGES) / sizeof(RANGES[0])))
+#define RANGE_1Y       5     // the last range guaranteed a pill at the minimum width
 // The tray menu's ID ranges (phase 17). sizeof cannot appear in #if, so the
 // guard is C_ASSERT: if a table grows past its range, the build stops here.
 C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
+C_ASSERT(RANGE_COUNT    <= ID_TRAY_RANGE_W);
+C_ASSERT(ID_TRAY_INTERVAL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_PERIOD_FIRST);
 
 #define ALERT_TAU_FLASH    900.0  // the afterglow when an alert fires (ms)
 
 // The toolbar (phase 22): symbol pill, interval pill and VOL, in the
 // header's row 2 - where the symbol line stood as plain text. Up to phase 40
 // every interval had a pill of its own; phase 41 made the interval (the bar
-// size) a dropdown like the symbol, to free the row for the ranges. Fixed
+// size) a dropdown like the symbol, and put one pill per range between it
+// and VOL. Fixed
 // widths, not measured text: WM_NCHITTEST must be able to compute the pills
 // without a DC, and painting and hit testing must read the same numbers
 // (pitfall 14). 15 px high, from y = 28: the price digits in row 1 end at
@@ -194,14 +224,17 @@ C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 #define TBAR_H             15
 #define TBAR_SYM_W         74    // "BNB/USDT" + arrow
 #define TBAR_IVDD_W        44    // "15m" + arrow (phase 41)
+#define TBAR_RANGE_W       22    // "1D" (phase 41)
+#define TBAR_RANGE_WIDE_W  28    // "YTD", "Max"
 #define TBAR_VOL_W         32
 #define TBAR_IND_W         26    // "MA" (phase 25)
 #define TBAR_RSI_W         30    // "RSI" (phase 39)
 #define TBAR_GAP           2     // between the pills of one group
-#define TBAR_GROUP_GAP     8     // between symbol, interval and VOL
+#define TBAR_GROUP_GAP     8     // between symbol, interval, ranges and VOL
 #define TBAR_SYM           0
 #define TBAR_IV            1     // the interval dropdown (phase 41)
-#define TBAR_VOL           (TBAR_IV + 1)
+#define TBAR_RANGE_FIRST   (TBAR_IV + 1)   // one pill per range (phase 41)
+#define TBAR_VOL           (TBAR_RANGE_FIRST + RANGE_COUNT)
 #define TBAR_IND           (TBAR_VOL + 1)   // same group as VOL: overlays
 #define TBAR_RSI           (TBAR_IND + 1)   // phase 39, same group; the first to go on a narrow panel
 #define TBAR_COUNT         (TBAR_RSI + 1)
@@ -463,6 +496,7 @@ static int Dp(int v) {
 }
 static int  PanelDpi(HWND hwnd);
 static void ApplyPanelStyle(AppContext* ctx, int dpi);
+static void SelectRange(AppContext* ctx, int r);   // phase 41
 // The theme for the mode we are in (phase 40).
 static const AppTheme* ThemeNow(const AppContext* ctx) {
     BOOL light = g_desktopMode ? ctx->lightThemeDesk : ctx->lightTheme;
@@ -656,6 +690,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->symIdx     = 0;
     ctx->ivIdx      = 0;
     ctx->intervalMs = INTERVALS[0].ms;
+    ctx->rangeIdx   = -1;   // phase 41: no range
     ctx->showVol    = TRUE;
     ctx->showInd    = TRUE;
     ctx->showVolDesk = FALSE;   // phase 26: the desktop starts clean
@@ -673,6 +708,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     }
     DWORD sy = RegReadDword(k, L"SymbolIndex",   0);
     DWORD iv = RegReadDword(k, L"IntervalIndex", 0);
+    DWORD rg = RegReadDword(k, L"RangeIndex", 0);   // phase 41: range + 1, 0 = none
     DWORD w  = RegReadDword(k, L"PanelWidth",    0);
     DWORD h  = RegReadDword(k, L"PanelHeight",   0);
     DWORD hasPos = RegReadDword(k, L"PanelHasPos", 0);
@@ -705,6 +741,9 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
         ctx->ivIdx      = (int)iv;
         ctx->intervalMs = INTERVALS[iv].ms;
     }
+    // Phase 41. Whether it can be shown at the saved bar size is decided by
+    // ResetView when the surface opens.
+    if (rg >= 1 && rg <= (DWORD)RANGE_COUNT) ctx->rangeIdx = (int)rg - 1;
     if (w >= 240 && w <= 8192) *outW = (int)w;
     if (h >= 160 && h <= 8192) *outH = (int)h;
 
@@ -896,6 +935,8 @@ static void SaveConfig(const AppContext* ctx) {
     DWORD sy = (DWORD)ctx->symIdx, iv = (DWORD)ctx->ivIdx;
     RegSetValueExW(k, L"SymbolIndex",   0, REG_DWORD, (const BYTE*)&sy, sizeof(sy));
     RegSetValueExW(k, L"IntervalIndex", 0, REG_DWORD, (const BYTE*)&iv, sizeof(iv));
+    DWORD rg = (DWORD)(ctx->rangeIdx + 1);   // phase 41
+    RegSetValueExW(k, L"RangeIndex",    0, REG_DWORD, (const BYTE*)&rg, sizeof(rg));
     DWORD sv = ctx->showVol ? 1 : 0;
     RegSetValueExW(k, L"ShowVolume",    0, REG_DWORD, (const BYTE*)&sv, sizeof(sv));
     DWORD si = ctx->showInd ? 1 : 0;
@@ -1877,12 +1918,17 @@ static int HeaderRow2Limit(int W) {
     return W - ChartAxisW(g_Ctx.sty.dpi) + Dp(AXIS_LBL_GAP) - Dp(HDR_GAP);
 }
 
-// The toolbar up to and including VOL must fit at the minimum width. If a
-// table or a pill width grows past that, the build stops here - and the rule
-// in ToolbarLayout, which hides pills from the right, never becomes what the
-// user sees on a panel of legal size. POPUP_MIN_W is not raised for a pill -
-// it also guards which geometry the registry is allowed to give back.
-C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + TBAR_IVDD_W + TBAR_GROUP_GAP + TBAR_VOL_W
+// The toolbar up to and including the 1Y pill must fit at the minimum width
+// (phase 41; through VOL before). If a table or a pill width grows past that,
+// the build stops here - and the rule in ToolbarLayout, which hides pills
+// from the right, never becomes what the user sees on a panel of legal size.
+// POPUP_MIN_W is not raised for a pill - it also guards which geometry the
+// registry is allowed to give back. At 400 px the row ends at x = 292 of 312;
+// 5Y, Max and the overlay pills (VOL, MA, RSI) are hidden there, and the
+// tray menu and the keys (Shift+7/8, V, M, I) carry them. At 1280 px every
+// pill shows.
+C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + TBAR_IVDD_W + TBAR_GROUP_GAP +
+         RANGE_1Y * TBAR_RANGE_W + TBAR_RANGE_WIDE_W + RANGE_1Y * TBAR_GAP   /* 1D 3D 1M 6M 1Y, YTD */
          <= POPUP_MIN_W - PAD_R + AXIS_LBL_GAP - HDR_GAP);
 
 // One pill's width and the gap in front of it, at 96 dpi. ToolbarLayout and
@@ -1890,13 +1936,15 @@ C_ASSERT(PAD_L + TBAR_SYM_W + TBAR_GROUP_GAP + TBAR_IVDD_W + TBAR_GROUP_GAP + TB
 static int ToolbarPillW(int i) {
     if (i == TBAR_SYM) return TBAR_SYM_W;
     if (i == TBAR_IV)  return TBAR_IVDD_W;
+    if (i >= TBAR_RANGE_FIRST && i < TBAR_VOL)
+        return (wcslen(RANGES[i - TBAR_RANGE_FIRST].label) >= 3) ? TBAR_RANGE_WIDE_W : TBAR_RANGE_W;
     if (i == TBAR_VOL) return TBAR_VOL_W;
     if (i == TBAR_IND) return TBAR_IND_W;
     return TBAR_RSI_W;
 }
 static int ToolbarGapBefore(int i) {
     if (i == 0) return 0;
-    return (i == TBAR_IV || i == TBAR_VOL) ? TBAR_GROUP_GAP : TBAR_GAP;
+    return (i == TBAR_IV || i == TBAR_RANGE_FIRST || i == TBAR_VOL) ? TBAR_GROUP_GAP : TBAR_GAP;
 }
 
 // The toolbar's pills. A pure function of the width, like ButtonLayout, and
@@ -1938,14 +1986,14 @@ static int ToolbarHit(const RECT* tb, int x, int y) {
 }
 
 // The narrowest panel whose toolbar still holds every pill up to and
-// including VOL at the current dpi (phase 37). At 96 it is 398, inside
+// including the 1Y pill (VOL until phase 41) at the current dpi (phase 37). At 96 it is 398, inside
 // POPUP_MIN_W as the C_ASSERT above demands; at 150 % the lengths round
 // separately, the column alone grows 4 px more than 1.5 x 84, and 1.5 x 400
 // would have hidden VOL on a panel of minimum size. Same sums as
 // ToolbarLayout and HeaderRow2Limit.
 static int ToolbarMinW(void) {
     int need = Dp(PAD_L);
-    for (int i = 0; i <= TBAR_VOL; ++i) need += Dp(ToolbarGapBefore(i)) + Dp(ToolbarPillW(i));
+    for (int i = 0; i <= TBAR_RANGE_FIRST + RANGE_1Y; ++i) need += Dp(ToolbarGapBefore(i)) + Dp(ToolbarPillW(i));
     return need + ChartAxisW(g_Ctx.sty.dpi) - Dp(AXIS_LBL_GAP) + Dp(HDR_GAP);
 }
 
@@ -1973,6 +2021,17 @@ static void ToolbarStrip(int W, RECT* out) {
 
 
 
+
+// Does the UI want older candles right now? Today's and yesterday's
+// sessions (phase 27/28, with the indicators on) or a range whose home view
+// is longer than the buffer (phase 41, in any mode - the user asked for
+// it). One definition, so WM_APP_DATA and probe field 54 cannot disagree
+// (pitfall 92). Called under the lock.
+static BOOL AppWantsHistory(const AppContext* ctx) {
+    if (ctx->candleCount > 0 && !ctx->histDone && ctx->rangeWant > ctx->candleCount) return TRUE;
+    return ShowIndNow(ctx) && SessionsNeedHistory(ctx->candles, ctx->candleCount,
+                                                  ctx->intervalMs, ctx->histDone);
+}
 
 // The user is up against the wall (viewStart == 0) and wants to go back
 // (phase 18). Sets histPending and wakes the thread - but only when the line
@@ -2447,7 +2506,14 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         else if (i == TBAR_IV)  { on = ctx->overlayOpen && ctx->overlayKind == 1; lbl = INTERVALS[ctx->ivIdx].label; }
         else if (i == TBAR_VOL) { on = ShowVolNow(ctx);  lbl = L"VOL"; }
         else if (i == TBAR_IND) { on = ShowIndNow(ctx);  lbl = L"MA"; }
-        else                    { on = ShowRsiNow(ctx);  lbl = L"RSI"; }
+        else if (i == TBAR_RSI) { on = ShowRsiNow(ctx);  lbl = L"RSI"; }
+        else {
+            // A range (phase 41) is lit while the view is at its home: the
+            // moment the user zooms or pans away, it goes out.
+            int rg = i - TBAR_RANGE_FIRST;
+            on  = (ctx->rangeIdx == rg && ctx->rangeWant > 0);
+            lbl = RANGES[rg].label;
+        }
 
         if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
         if (on)        FrameRect(hdc, r, ctx->sty.brBoxEdge);
@@ -2495,6 +2561,10 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
 
     wchar_t span[24];
     FormatSpan(vc, ctx->intervalMs, span, 24);
+    // At a range's home, and once the view holds all of it (or all there
+    // is), the change is over the range, and says so (phase 41).
+    if (ctx->rangeIdx >= 0 && ctx->rangeWant > 0 && (vc >= ctx->rangeWant || ctx->histDone))
+        wcscpy_s(span, 24, RANGES[ctx->rangeIdx].label);
 
 
     // --- Header layout, measured ---
@@ -2778,6 +2848,29 @@ static void StartAnim(HWND hwnd) {
     }
 }
 
+// How many candles a range's home view holds at a bar size (phase 41); 0
+// when the range cannot be shown there. See RANGES.
+static int RangeWantFor(int r, long long ivMs) {
+    if (r < 0 || r >= RANGE_COUNT || ivMs <= 0) return 0;
+    if (RANGES[r].days == RANGE_DAYS_MAX) return MAX_CANDLES;
+    long long want;
+    if (RANGES[r].days == RANGE_DAYS_YTD) {
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        SYSTEMTIME jan = { 0 };
+        jan.wYear = st.wYear; jan.wMonth = 1; jan.wDay = 1;
+        FILETIME ft;
+        if (!SystemTimeToFileTime(&jan, &ft)) return 0;
+        ULONGLONG t = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        long long jan1 = (long long)((t - 116444736000000000ULL) / 10000ULL);
+        want = (NowUnixMs() - jan1) / ivMs + 1;   // + 1: the candle still forming
+    } else {
+        want = (long long)RANGES[r].days * 86400000LL / ivMs;
+    }
+    if (want < MIN_VIEW || want > MAX_CANDLES) return 0;
+    return (int)want;
+}
+
 // Switches symbol or interval. Bumps configGen and empties the buffer in the
 // SAME critical section, so that a response from the previous config that
 // arrives right now is discarded instead of merged in.
@@ -2805,6 +2898,13 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     ctx->lastPrice   = 0.0;
     ctx->histPending = FALSE;   // new config: history starts over
     ctx->histDone    = FALSE;
+    // Phase 41: a new buffer starts at home. The range's want is set in the
+    // SAME critical section as the emptying: the next MergeCandles fills the
+    // view, and with rangeWant set after the lock it would first get the
+    // 300-candle default. A range that cannot be shown at the new bar size
+    // ends here.
+    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs);
+    if (ctx->rangeWant == 0) ctx->rangeIdx = -1;
     LeaveCriticalSection(&ctx->lock);
 
     ctx->ch.hoverIdx = -1;
@@ -3043,6 +3143,8 @@ static void OnToolbarClick(HWND hwnd, int th) {
         SetShowIndicators(&g_Ctx, !ShowIndNow(&g_Ctx));
     } else if (th == TBAR_RSI) {
         SetShowRsi(&g_Ctx, !ShowRsiNow(&g_Ctx));
+    } else if (th >= TBAR_RANGE_FIRST && th < TBAR_VOL) {
+        SelectRange(&g_Ctx, th - TBAR_RANGE_FIRST);
     }
 }
 
@@ -3052,12 +3154,17 @@ static void OnToolbarClick(HWND hwnd, int th) {
 // TogglePopup, on the other hand, wants a snap on opening and sets dispValid
 // itself. The window geometry is another matter: ResetToDefaultView owns it
 // (Ctrl+0).
+// With a range selected (phase 41) the default IS the range: R, a
+// double-click, Esc and opening the panel all go back to it.
 static void ResetView(AppContext* ctx) {
     EnterCriticalSection(&ctx->lock);
+    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs);
+    if (ctx->rangeWant == 0) ctx->rangeIdx = -1;
+    int home = (ctx->rangeWant > 0) ? ctx->rangeWant : DEFAULT_VIEW;
     ctx->ch.viewCount  = 0;
     ctx->ch.followLive = TRUE;
     if (ctx->candleCount > 0) {
-        int vc = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
+        int vc = (ctx->candleCount < home) ? ctx->candleCount : home;
         ctx->ch.viewCount = vc;
         ctx->ch.viewStart = ctx->candleCount - vc;
     }
@@ -3067,6 +3174,7 @@ static void ResetView(AppContext* ctx) {
 // Is the view where ResetView would have put it? ESC uses the answer to pick
 // a layer: if it is already at the default, ESC hides the panel instead.
 static BOOL ViewIsDefault(AppContext* ctx) {
+    if (ctx->rangeIdx >= 0) return ctx->rangeWant > 0;   // phase 41: at the range's home
     EnterCriticalSection(&ctx->lock);
     int n = ctx->candleCount, vs, vc;
     GetView(&ctx->ch, ctx->candleCount, &vs, &vc);
@@ -3077,6 +3185,37 @@ static BOOL ViewIsDefault(AppContext* ctx) {
 }
 
 
+
+// A range is picked (phase 41): from its pill, Shift+1..8 or the tray menu.
+// It sets its default bar size - through ApplyConfigChoice, which empties
+// the buffer and sets the want in one critical section - or, at the same
+// bar size, eases the view home from where it is. Picking the range that is
+// already selected, while at home, ends it: the free 300-candle view.
+static void SelectRange(AppContext* ctx, int r) {
+    if (r < 0 || r >= RANGE_COUNT) return;
+    if (ctx->rangeIdx == r && ctx->rangeWant > 0) {
+        ctx->rangeIdx = -1;
+        ResetView(ctx);
+    } else {
+        int iv = -1;
+        for (int i = 0; i < INTERVAL_COUNT; ++i)
+            if (INTERVALS[i].ms == RANGES[r].ivMs) iv = i;
+        ctx->rangeIdx = r;
+        if (iv >= 0 && iv != ctx->ivIdx) ApplyConfigChoice(ctx, SYMBOL_COUNT + iv);
+        else                             ResetView(ctx);
+    }
+    ctx->ch.hoverIdx = -1;
+    SaveConfig(ctx);
+    // The backfill starts at once rather than on the next WM_APP_DATA.
+    EnterCriticalSection(&ctx->lock);
+    BOOL more = (ctx->rangeWant > ctx->candleCount);
+    LeaveCriticalSection(&ctx->lock);
+    if (more) RequestHistory(ctx);
+    if (ctx->hPopup) {
+        StartAnim(ctx->hPopup);
+        InvalidateRect(ctx->hPopup, NULL, FALSE);
+    }
+}
 
 // Hides the panel to the notification area - or, in a duplicate, exits the
 // process. A duplicate has no main-instance role to return to, and a tail of
@@ -3530,8 +3669,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     double slot = (double)g.cw / (double)vc2;
                     int shift = (int)((double)(mx - g_Ctx.panAnchorX) / slot);
                     int want  = g_Ctx.ch.panAnchorView - shift;        // drag right = backward
+                    int vs0   = g_Ctx.ch.viewStart;
                     g_Ctx.ch.viewStart = want;
                     ClampView(&g_Ctx.ch, g_Ctx.candleCount);
+                    if (g_Ctx.ch.viewStart != vs0) g_Ctx.rangeWant = 0;   // phase 41: left home
                     // At the wall the finger slips: the anchor is moved here,
                     // so the overshoot is not remembered. Without this the
                     // drag after a backfill (phase 18) would jump by exactly
@@ -3592,6 +3733,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             BOOL atWall = FALSE;
             EnterCriticalSection(&g_Ctx.lock);
             if (g_Ctx.candleCount > 0) {
+                int ws0, wc0, ws1, wc1;
+                GetView(&g_Ctx.ch, g_Ctx.candleCount, &ws0, &wc0);
                 if (!ctrl) {
                     // Without Ctrl: pan in time. Wheel up = backward.
                     int vs, vc;
@@ -3604,6 +3747,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     double frac = (double)(pt.x - g.left) / (double)g.cw;
                     atWall = ZoomView(&g_Ctx.ch, g_Ctx.candleCount, frac, notches);
                 }
+                // A view that moved has left the range's home (phase 41).
+                GetView(&g_Ctx.ch, g_Ctx.candleCount, &ws1, &wc1);
+                if (ws1 != ws0 || wc1 != wc0) g_Ctx.rangeWant = 0;
                 g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, pt.x, pt.y);
             }
             LeaveCriticalSection(&g_Ctx.lock);
@@ -3793,9 +3939,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                     break;
                 }
-                case 54: r = ShowIndNow(&g_Ctx) &&
-                             SessionsNeedHistory(g_Ctx.candles, g_Ctx.candleCount,
-                                                 g_Ctx.intervalMs, g_Ctx.histDone); break;
+                case 54: r = AppWantsHistory(&g_Ctx); break;
                 case 56: r = (LRESULT)g_Ctx.ch.probePrevUs; break;
                 case 57: r = g_Ctx.ch.probeLblMask; break;
                 case 58: r = g_Ctx.ch.probeCrossTag; break;
@@ -4226,6 +4370,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     SetLightTheme(&g_Ctx, ThemeNow(&g_Ctx) != &APP_THEME_LIGHT);
                     return 0;
                 }
+                // Shift+1..8 (phase 41): the ranges in the pills' order.
+                if (!ctrl && shift && wParam >= '1' && wParam < (WPARAM)('1' + RANGE_COUNT)) {
+                    SelectRange(&g_Ctx, (int)(wParam - '1'));
+                    return 0;
+                }
                 // 1..7: the intervals in the dropdown's order (were the pills
                 // up to phase 40). Not with Shift, which phase 41 gives the
                 // ranges.
@@ -4267,6 +4416,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     BOOL atWall = FALSE;
                     EnterCriticalSection(&g_Ctx.lock);
                     if (g_Ctx.candleCount > 0) {
+                        int ks0, kc0, ks1, kc1;
+                        GetView(&g_Ctx.ch, g_Ctx.candleCount, &ks0, &kc0);
                         if (zoom != 0) {
                             atWall = ZoomView(&g_Ctx.ch, g_Ctx.candleCount, 0.5, zoom);
                         } else {
@@ -4282,6 +4433,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                             else                       delta = g_Ctx.candleCount;
                             atWall = PanView(&g_Ctx.ch, g_Ctx.candleCount, delta);
                         }
+                        GetView(&g_Ctx.ch, g_Ctx.candleCount, &ks1, &kc1);
+                        if (ks1 != ks0 || kc1 != kc0) g_Ctx.rangeWant = 0;   // phase 41: left home
                         g_Ctx.ch.hoverIdx = -1;
                     }
                     LeaveCriticalSection(&g_Ctx.lock);
@@ -4763,6 +4916,19 @@ static HMENU BuildIntervalMenu(void) {
     return h;
 }
 
+// The ranges (phase 41). The checked one is the selected range; picking it
+// again ends it, like a second click on its pill.
+static HMENU BuildRangeMenu(void) {
+    HMENU h = CreatePopupMenu();
+    if (!h) return NULL;
+    for (int i = 0; i < RANGE_COUNT; i++)
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_PERIOD_FIRST + i), RANGES[i].label);
+    if (g_Ctx.rangeIdx >= 0)
+        CheckMenuRadioItem(h, ID_TRAY_PERIOD_FIRST, ID_TRAY_PERIOD_FIRST + RANGE_COUNT - 1,
+                           (UINT)(ID_TRAY_PERIOD_FIRST + g_Ctx.rangeIdx), MF_BYCOMMAND);
+    return h;
+}
+
 // The tray menu. A separate function so the check marks and content can be
 // tested without a tray icon.
 //
@@ -4791,6 +4957,8 @@ static HMENU BuildTrayMenu(void) {
         HMENU hIv  = BuildIntervalMenu();
         if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
         if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Interval");
+        HMENU hRg = BuildRangeMenu();   // phase 41
+        if (hRg)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRg,  L"Range");
         // The VOL toggle (phase 22) - desktop mode has no toolbar.
         AppendMenuW(hMenu, MF_STRING | (ShowVolNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
                     ID_TRAY_VOLUME, L"Volume bars	V");
@@ -4900,6 +5068,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (id - ID_TRAY_INTERVAL_FIRST));
                     return 0;
                 }
+                if (id >= ID_TRAY_PERIOD_FIRST && id < ID_TRAY_PERIOD_FIRST + RANGE_COUNT) {
+                    SelectRange(&g_Ctx, id - ID_TRAY_PERIOD_FIRST);
+                    return 0;
+                }
             }
             if (LOWORD(wParam) == ID_TRAY_RESET) {
                 // Grayed in the menu in desktop mode; blocked here too, since
@@ -4974,10 +5146,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 // the desktop, where they are off by default, fetches
                 // nothing extra.
                 // RequestHistory is idempotent and stops at histDone.
-                if (ShowIndNow(&g_Ctx)) {
+                // Phase 41: a range longer than the buffer asks the same way.
+                {
                     EnterCriticalSection(&g_Ctx.lock);
-                    BOOL need = SessionsNeedHistory(g_Ctx.candles, g_Ctx.candleCount,
-                                                    g_Ctx.intervalMs, g_Ctx.histDone);
+                    BOOL need = AppWantsHistory(&g_Ctx);
                     LeaveCriticalSection(&g_Ctx.lock);
                     if (need) RequestHistory(&g_Ctx);
                 }
