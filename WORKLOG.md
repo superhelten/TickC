@@ -3443,6 +3443,23 @@ goes through `ApplyPanelStyle`). The user was at the machine during the
 phase, and the pointer and a click reached the test panel (pitfall 107).
 **Exe 217 088 → 218 624 bytes (+1 536).**
 
+**Tests on a hidden desktop (after the merge).** The user plays games at
+this machine while a phase runs, and the test panels took focus and caught
+the pointer (pitfall 107). The capture scripts in the scratchpad now take
+`-Hidden`: the test build is started with `CreateDesktop` +
+`STARTUPINFO.lpDesktop` on a desktop of its own, `TickCTest`, and its
+windows are found with `EnumDesktopWindows`. That desktop is never
+shown, so nothing appears on the user's screen, no real input reaches the
+panel, and the tray icon has no taskbar to land in. Posted and sent probe
+messages and `PrintWindow` work across desktops. Proof: `golden.ps1
+-Hidden` gave all seven panel captures **bit-identical to the reference
+from `main`** taken on the real desktop, and the light run was identical
+to the light reference. `shot_theme.ps1 -Hidden` passed every panel check.
+Desktop mode needs Explorer's WorkerW, which exists only on the real
+desktop, so those cases are skipped when hidden (the engine's desktop
+drawing is covered by `chart_golden`). The scripts never fall back to
+the user's desktop.
+
 ---
 
 ## Known limitations
