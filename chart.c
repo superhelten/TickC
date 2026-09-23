@@ -748,6 +748,52 @@ static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn)
     if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
 }
 
+// The chart's fixed GDI objects (phase 35; created in wWinMain until phase
+// 34). Created once, not per repaint.
+BOOL ChartStyleCreate(ChartStyle* sty) {
+    ZeroMemory(sty, sizeof(*sty));
+    sty->fontSmall = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    // The price and time axes. Monospace, so the labels stand still when the
+    // digits change, and AXIS_Y_W can be computed in characters. Grayscale
+    // antialiasing (ANTIALIASED_QUALITY), not ClearType: no color fringing on
+    // numbers. Measured with GetGlyphOutlineW(GGO_METRICS) on '0': Lucida
+    // Console em 15 gives 11 px digit height, 9 px character width and
+    // tmHeight 15. Consolas jumps from 10 to 12 px (em 16 -> 17), Cascadia Mono
+    // em 16 gives 11 px but tmHeight 21, which does not fit in the time axis's
+    // 18 px.
+    sty->fontAxis = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                                L"Lucida Console");
+    sty->penGrid  = CreatePen(PS_SOLID, 1, CLR_GRID);
+    sty->penCross = CreatePen(PS_DOT,   1, CLR_CROSS);
+    // Dashed, not dotted: keeps the last-price line visually distinct from
+    // both the grid (solid, muted) and the crosshair (dotted).
+    sty->penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
+    sty->penLastDown = CreatePen(PS_DASH, 1, CLR_DOWN);
+    sty->brBg      = CreateSolidBrush(CLR_BG);
+    sty->brBox     = CreateSolidBrush(CLR_BOX);
+    sty->brBoxEdge = CreateSolidBrush(CLR_BOXEDGE);
+    sty->brVolUp   = CreateSolidBrush(CLR_VOL_UP);     // phase 21
+    sty->brVolDown = CreateSolidBrush(CLR_VOL_DOWN);
+    return sty->fontSmall && sty->fontAxis && sty->penGrid && sty->penCross &&
+           sty->penLastUp && sty->penLastDown && sty->brBg && sty->brBox &&
+           sty->brBoxEdge && sty->brVolUp && sty->brVolDown;
+}
+
+void ChartStyleDestroy(ChartStyle* sty) {
+    HGDIOBJ own[] = { sty->fontSmall, sty->fontAxis, sty->penGrid, sty->penCross,
+                      sty->penLastUp, sty->penLastDown, sty->brBg, sty->brBox,
+                      sty->brBoxEdge, sty->brVolUp, sty->brVolDown };
+    for (int i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++)
+        if (own[i]) DeleteObject(own[i]);
+    HFONT pill = sty->fontPill;   // the app's, see chart.h
+    ZeroMemory(sty, sizeof(*sty));
+    sty->fontPill = pill;
+}
+
 // The background under everything: the app's cached watermark bitmap when it
 // has one (built for this size), otherwise the flat background color. BitBlt
 // REPLACES FillRect, it does not come in addition. Also sets the text mode

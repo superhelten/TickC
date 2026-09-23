@@ -66,7 +66,10 @@ typedef struct {
     double        alertFlashF;  // afterglow of a fired alert, 1..0
 } ChartData;
 
-// GDI objects the chart draws with. Created and freed by the app.
+// GDI objects the chart draws with (phase 35: built by ChartStyleCreate, so
+// the app and the golden tests draw with the very same objects). fontPill
+// is NOT part of it: its height follows the surface, and the app builds it
+// and sets it per frame. ChartStyleDestroy leaves it alone.
 typedef struct {
     HFONT  fontSmall, fontAxis;
     HFONT  fontPill;            // desktop stamp font, NULL = use fontAxis
@@ -260,6 +263,13 @@ void      FormatTagPrice(HDC hdc, double p, double range, int avail, wchar_t* ou
 COLORREF  Blend(COLORREF a, COLORREF b, int t);
 int       TimeTickStep(double dispCount, int chartW, int minDx);
 int       NiceTimeStep(int step, long long intervalMs);
+
+// --- Style ---
+// Creates every object in ChartStyle except fontPill (set to NULL). FALSE
+// when any creation failed; the rest are then still valid or NULL, and
+// ChartStyleDestroy frees them.
+BOOL      ChartStyleCreate(ChartStyle* sty);
+void      ChartStyleDestroy(ChartStyle* sty);
 
 // --- Drawing ---
 // Background: the cached watermark bitmap when there is one, else brBg.
