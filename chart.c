@@ -61,6 +61,10 @@ int NiceTimeStep(int step, long long intervalMs) {
     static const long long NICE_MIN[] = {
         1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
         1440, 2 * 1440, 3 * 1440, 7 * 1440, 14 * 1440, 28 * 1440,
+        // Phase 41: the ranges show a year of 1d candles and five years of
+        // 1w. 30 and 60 days suit 1d; 91, 182 and 364 days are 13, 26 and
+        // 52 weeks, so they suit 1w as well.
+        30 * 1440, 60 * 1440, 91 * 1440, 182 * 1440, 364 * 1440,
     };
     if (step < 1) step = 1;
     if (intervalMs <= 0) return step;
@@ -538,6 +542,10 @@ void PriceRange(const Candle* candles, int vs, int vc, double* outMin, double* o
     double pad = range * 0.08;
     *outMin = mn - pad;
     *outMax = mx + pad;
+    // Phase 41: the padding must not take the axis below zero. A view whose
+    // low is small against its range - Max on 1w, from 3 100 to 126 000 -
+    // got a grid label of -7054. Prices are never negative, so the floor is 0.
+    if (mn >= 0.0 && *outMin < 0.0) *outMin = 0.0;
 }
 
 // Largest volume in the view (phase 21): the scale of the bars. 0 when no

@@ -3460,6 +3460,99 @@ desktop, so those cases are skipped when hidden (the engine's desktop
 drawing is covered by `chart_golden`). The scripts never fall back to
 the user's desktop.
 
+### Phase 41 — ranges and the bar size as a dropdown
+
+Branch `phase-41`, merged with `--no-ff`. The user showed two pictures of
+Bloomberg's chart and asked what TickC could learn from them. The first
+thing: **Bloomberg keeps the range (1D 3D 1M 6M YTD 1Y 5Y Max) apart from
+the bar size ("Daily")**. TickC had mixed the two. Its interval pills were
+the bar size, and the period was whatever the zoom gave, so the header's
+`+9.85% (12d 12h)` described a span nobody had chosen. The quote line and
+a settings button are the next two phases.
+
+**1. Plumbing, no visible change.** `rangeIdx` (the selected range, UI)
+and `rangeWant` (how many candles its home view holds, lock-protected).
+Both `MergeCandles` and `WorkerFetchKlines` clamp a followed view to the
+buffer. A wanted 365 would therefore have become the 360 of the first
+fetch and stayed there after the backfill. The thread now uses the want
+in all three places it sets a followed view (`PrependCandles` included),
+so the view grows with the history. `NiceTimeStep` got 30, 60, 91, 182
+and 364 days: 13, 26 and 52 weeks suit 1w as well, and a year of 1d
+candles had drawn labels 37 days apart. Probe fields 65 (range), 66
+(want, 0 = away from home) and 67 (overlay kind). `golden.ps1 -Hidden`
+was identical to `main`, `chart_golden` 28/28.
+
+**2. The interval as a dropdown, and 1w.** The six interval pills became
+one pill, `1h ▾`, that opens the intervals as a one-column list right
+under it (`overlayKind` 1). It uses the picker's rows and indices, with
+empty rectangles for the symbols, so click, hover and highlight are the
+picker's code. The symbol pill and a right-click still open the
+two-column picker. `1w` is appended to the table, so indices 0..5 keep
+their meaning in the registry, the tray IDs and the probes. `golden.ps1
+-Hidden` differed from `main` only inside the toolbar row (checked with
+a bounding box, not by eye).
+
+**3. The ranges.** One pill per range between the dropdown and VOL. A
+range is a **duration**. A click sets its default bar size, picked so the
+view holds 180-365 candles: 1D is 5m x 288, 3D 15m x 288, 1M 4h x 180, 6M
+1d x 182, YTD 1d from 1 January UTC, 1Y 1d x 365, 5Y 1w x 261, and Max 1w
+with everything the exchange and the buffer give. Another bar size keeps
+the range where it can be shown (6M on 4h is 1092 candles) and ends it
+where it cannot (fewer than `MIN_VIEW`, or more than `MAX_CANDLES`: 6M on
+1m). That is Bloomberg's behavior, and a pair model (range = fixed bar
+size) would have undone the separation the user pointed at. The range is
+the panel's **home view**: a zoom, a wheel pan, a drag or a navigation
+key leaves it (`rangeWant` = 0, the pill goes out), and R, a double-click,
+Esc and opening the panel go back. A range pick changes the interval
+through `ApplyConfigChoice`, which sets the want in the same critical
+section as it empties the buffer. With the want written after the lock,
+the next merge would have given the 300-candle default for one frame.
+The header names the range (`-23.80% (1Y)`) once the view holds all of it,
+or all there is. Shift+1..8, a "Range" tray submenu (1300 + r), and
+`RangeIndex` in the registry. A second pick of the selected range ends
+it, back to the free 300-candle view.
+
+**The minimum width.** At 400 px the row guarantees symbol, interval and
+1D-1Y (it ends at x = 292 of 312). 5Y, Max and the overlay pills VOL, MA
+and RSI hide from the right, and the tray menu and the keys carry them.
+The C_ASSERT and `ToolbarMinW` now sum through the 1Y pill. Moving VOL, MA
+and RSI into a settings panel (⚙) is phase 43; in this phase they only
+hide on narrow panels.
+
+**A bug the ranges exposed.** `PriceRange` pads the axis by 8 % of the
+range, and on Max (weekly lows of 3 100 against 126 000) the axis went to
+-7 054 and drew it as a grid label. The floor is now 0. No earlier view
+came near zero, so every earlier capture and golden is unchanged.
+
+**New fixtures.** 5m, 4h and 1w, and history files for 1d and 1w,
+recorded from Binance (1w: 360 + 116 weeks back to 2017). The main build
+gave the same seven panel hashes with and without them (a hidden run, so
+the desktop case was not part of it).
+
+**Verified,** all on the hidden desktop. `shot_range.ps1` (20 checks): no
+range by default; 1D; 1Y growing 360 → 365 through the backfill with no
+more history asked for afterwards; a zoom and a pan leave home and R goes
+back; 6M kept on 4h with the view holding all 360 when the history ends;
+1m ends 6M; the dropdown opened by a click at the pill (kind 1) picks 5m
+and keeps 3D (864); the symbol pill opens the picker (kind 0); a second
+pick ends a range; Max holds all 476 weeks; a click on the 1M pill; and
+after a restart the panel opens on 1M. **Red run** with the thread
+ignoring the want: 6 of 20 fail (every view-size check). Green twice.
+`chart_golden` 30/30. A price-floor check and two cases were added, 1Y on
+1d and 5Y on 1w. Red against the engine without the new steps: only 1Y
+fails. At 261 candles, 5Y lands on 26 weeks with or without them, so that
+case covers weekly labels, not the change. `golden.ps1 -Hidden`: every
+difference from `main` inside the toolbar row. `shot_theme -Hidden`
+passes, and `shot_dpi` (9/9) and `shot_rsi` (7/7) got `-Hidden` and pass.
+The minimum width at 144 dpi is now 600 (601 in phase 37). The toolbar
+sum through 1Y is 574 there, so the 1.5 x 400 floor decides. Shift+1..8
+is not exercised by a probe: a posted `WM_KEYDOWN` cannot carry Shift
+(pitfall 63's class), so the ranges were reached through the tray
+command and the pills. The desktop-mode capture cannot run hidden (no WorkerW) and was
+not taken. The desktop draws no toolbar and no time labels, and its
+axis stays far from zero, so none of the changes reach it. **Exe
+218 624 → 221 696 bytes (+3 072).**
+
 ---
 
 ## Known limitations
@@ -3470,6 +3563,18 @@ the user's desktop.
   itself was tested through a real 100 → 150 → 100 % change.
 - **The tray icon is 16x16 at every scale** (phase 37). The micro font
   draws into a fixed 16 px bitmap, and the shell scales it at 150 %.
+- **YTD in the first week of January** (phase 41) is fewer than
+  `MIN_VIEW` (8) daily candles, so the range cannot be shown on 1d and
+  ends. It comes back once the year is eight days old.
+- **A view away from a range's home shows spans like `(2100d)`** (phase
+  41). `FormatSpan` counts days and hours; months and years are not
+  spelled out.
+- **The range is one choice for both modes** (phase 41), like the symbol
+  and the interval, not one per mode like the overlays. A duplicate from
+  [ + ] starts with the saved range and its own interval.
+- **The desktop-mode captures need the real desktop** (phase 41). The
+  hidden test desktop has no Explorer WorkerW, so `golden.ps1 -Hidden`
+  skips `desktop_1m`.
 - **The tray icon keeps its green in both themes** (phase 40). It sits on
   the taskbar, which follows Windows' theme, not TickC's.
 - **The theme does not follow Windows' light/dark app mode** (phase 40).
@@ -4292,21 +4397,28 @@ the user's desktop.
     (field 22) and an open overlay (field 20). The pointer can still
     follow the panel. A flagged capture is not evidence, and a clean one
     from another run is.
+108. **A clamp that runs on every fetch undoes a wish.** A followed view
+    was clamped to the buffer in `MergeCandles` and `WorkerFetchKlines` on
+    every fetch, so a range that wants 365 candles would have been cut to
+    the 360 of the first fetch, and nothing would ever have asked for it
+    to grow back. Keep the wish apart from the state it is clamped into
+    (`rangeWant` next to `viewCount`) and reapply it wherever the state is
+    set, not only where the wish is made.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak34` and `chart.c.bak34` are left** (2026-09-23). From
+**Only `tickc.c.bak35` and `chart.c.bak35` are left** (2026-09-23). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 40 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 41 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak33` (phases 34–39) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak34` (phases 34–40) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39) and `.bak34` (phase 40). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40) and `.bak35` (phase 41). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
