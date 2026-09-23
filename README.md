@@ -1,7 +1,7 @@
 # TickC
 
 A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
-One source file. No runtime, no installer, no dependencies beyond what ships with Windows.
+Two source files. No runtime, no installer, no dependencies beyond what ships with Windows.
 The whole thing compiles to a single exe of about 200 KB.
 
 I built it because I wanted the BTC price in the corner of my screen without keeping
@@ -43,7 +43,7 @@ with the Windows SDK
 Open a **Developer Command Prompt for VS** in the repo folder and run:
 
 ```
-cl /nologo /W4 /O2 tickc.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
+cl /nologo /W4 /O2 tickc.c chart.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
 ```
 
 That's it. The libraries are pulled in with `#pragma comment(lib, ...)` in the source,
@@ -99,7 +99,10 @@ to the new name, then removes the old ones.
 
 ## How it's put together
 
-Everything lives in `tickc.c`. A worker thread fetches data over HTTPS with WinHTTP.
+`tickc.c` is the app: tray icon, window, worker thread, registry, alerts. `chart.c`
+is the chart engine behind `chart.h`: geometry, view, indicators, sessions and all
+the drawing, with no window, lock or network in it, so it can be reused elsewhere.
+A worker thread fetches data over HTTPS with WinHTTP.
 The UI thread draws with GDI into a back buffer that's kept between frames.
 Nothing from the network is trusted: prices that come back as NaN, infinity, zero
 or garbage are dropped before they reach the chart.

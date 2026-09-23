@@ -13,6 +13,8 @@
 #include <math.h>
 #include <limits.h>
 
+#include "chart.h"
+
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "winhttp.lib")
@@ -60,8 +62,6 @@
 // began one sixth into the chart. The warm-up now lies beyond the left edge.
 #define SEED_COUNT       360
 #define DEFAULT_VIEW     300   // visible view on open
-#define MIN_VIEW         8     // minimum number of visible candles at full zoom
-#define ZOOM_STEP        1.2   // per mouse wheel notch
 #define TIMER_ANIM_ID    2
 #define TIMER_EMBED_ID   3      // desktop mode: try WorkerW again
 #define TIMER_REFIT_ID   4      // desktop mode: place the surface again after a display change (phase 26)
@@ -102,54 +102,6 @@
 #define NET_RECONNECT_AT 3      // number of failures before hConnect is dropped (new DNS)
 #define STALE_AFTER      (3 * TIMER_INTERVAL)  // 9 s = two missed cycles
 
-// Layout inside the popup window
-#define PAD_L            10
-// Right margin = the price axis column (AXIS_Y_W) + edge guard (AXIS_PAD_R).
-// Axis text begins at rcChart.right + AXIS_LBL_GAP and ends no later than
-// W - AXIS_PAD_R. The column has room for AXIS_Y_CHARS characters in the axis
-// font, which is monospace: 8 x 9 px = 72, exactly "75812.34" (measured,
-// Lucida Console em 15). The width is FIXED, not measured on the labels:
-// PriceDecimals can change in the middle of the Y easing, and a margin that
-// followed the text would make the whole chart jerk sideways while the price
-// axis glides.
-//
-// AXIS_PAD_R also stays above RESIZE_BORDER, so no digit stands in the zone
-// where the pointer becomes a resize arrow.
-#define AXIS_Y_CHARS     8
-#define AXIS_CHAR_W      9
-#define AXIS_LBL_GAP     4
-#define AXIS_Y_W         (AXIS_LBL_GAP + AXIS_Y_CHARS * AXIS_CHAR_W)
-#define AXIS_PAD_R       8
-#define PAD_R            (AXIS_Y_W + AXIS_PAD_R)
-// Space between the last candle and the axis edge (phase 15). The candles end
-// at rcChart.right; the grid, the dashed last-price line and the crosshair
-// run all the way to rcChart.edge, where the stamp and the labels begin.
-// Without this, the body or wick of the last candle could stand flush against
-// the stamp area. Applies to both modes from phase 16, when the desktop also
-// got a stamp.
-#define PLOT_PAD_R       10
-#if PLOT_PAD_R < 8 || PLOT_PAD_R > 12
-#error PLOT_PAD_R must be in [8, 12] px
-#endif
-// The stamp on the desktop (phase 16). Its height follows the surface height,
-// like the watermark: a 16 px pill is unreadable at 1600 px, and a fixed large
-// pill would burst a small surface. Floor and ceiling are in device pixels -
-// the surface is per-monitor aware, so H is already physical pixels, and the
-// proportional part scales itself.
-#define DESK_PILL_DIV    40
-#define DESK_PILL_MIN    16
-#define DESK_PILL_MAX    48
-#if AXIS_PAD_R < 6 || AXIS_PAD_R > 10
-#error AXIS_PAD_R must be in [6, 10] px
-#endif
-#define HEADER_H         44
-// rcChart.top = HEADER_H. The chart must never be able to creep up into the
-// header text or the control buttons (they end at BTN_TOP + BTN_H = 24), so a
-// floor is checked at compile time instead of being clamped at run time.
-#define CHART_TOP_MIN    32
-#if HEADER_H < CHART_TOP_MIN
-#error HEADER_H must leave rcChart at least CHART_TOP_MIN px below the top
-#endif
 
 // Control buttons in the header. Ultra-compact: 26x18 is enough for a 9 px
 // glyph with space around it, and still lets the header's 44 px carry two
@@ -161,84 +113,12 @@
 #define BTN_MARGIN_R     8
 #define SPAWN_OFFSET     30    // [ + ]: a new instance is offset this much down and to the right
 // The button row's left edge is read from ButtonStrip, not from a separate
-// width constant - DrawChart measures the header against it.
+// width constant - DrawHeader measures the header against it.
 //
 // Minimum space between two header texts on the same line, and between text
 // and the button row.
 #define HDR_GAP          8
-// The bottom margin is the time band, not empty space. The axis font is 15 px
-// high (tmHeight), so 18 px gives text from bottom + 2 to bottom + 17 = H - 1
-// without touching the row y = bottom, where the lowest wick and the bottom
-// grid line stand (the clip is inclusive there, see DrawChart).
-#define PAD_B            18
-// Minimum distance between two time labels. Used as
-// max(TIME_DX_MIN, label width + TIME_LBL_GAP): "DD.MM HH:MM" is 99 px in the
-// axis font, wider than 80, and would otherwise collide on 1h and 4h.
-#define TIME_DX_MIN      80
-#define TIME_LBL_GAP     12
 
-// Palette (matches the tray icon)
-#define CLR_BG           RGB(0x0D, 0x11, 0x17)
-#define CLR_GRID         RGB(0x1C, 0x22, 0x2B)
-#define CLR_UP           RGB(0x00, 0xFF, 0x66)
-#define CLR_DOWN         RGB(0xFF, 0x49, 0x66)
-#define CLR_TEXT         RGB(0xC3, 0xBC, 0xDB)
-#define CLR_DIM          RGB(0x6E, 0x76, 0x81)
-#define CLR_CROSS        RGB(0x55, 0x5F, 0x6E)
-#define CLR_BOX          RGB(0x16, 0x1D, 0x27)
-#define CLR_BOXEDGE      RGB(0x33, 0x3D, 0x4B)
-#define CLR_CLOSEHOT     RGB(0xC0, 0x2A, 0x3E)   // red background on the close cross
-#define CLR_BTNHOT       RGB(0xFF, 0xFF, 0xFF)   // glyph on red background
-// Axis text: 8.05:1 against CLR_BG (WCAG AA requires 4.5:1 for small text).
-// CLR_DIM, which the axes used before, gives 4.12:1. Only the axes - CLR_DIM
-// also drives buttons, header and overlay, and they are not part of this
-// change.
-#define CLR_AXIS         RGB(0xA0, 0xAA, 0xB8)
-
-// Volume bars (phase 21): bottom VOL_FRAC of the chart area, behind the
-// candles. The colors are CLR_UP/CLR_DOWN blended ~28 % towards CLR_BG -
-// muted enough to sit behind the candles, saturated enough to tell direction.
-// Exact values, so a probe can count them.
-#define VOL_FRAC         0.22
-#define CLR_VOL_UP       RGB(0x09, 0x54, 0x2D)
-#define CLR_VOL_DOWN     RGB(0x51, 0x21, 0x2D)
-// Moving averages (phase 25): SMA 20 and EMA 50 on the close, drawn as
-// 1 px lines over the candles. Muted steel blue and muted violet: neither
-// appears elsewhere on the surface (green/red are candles, amber is alerts,
-// gray is grid and crosshair), so a line can never be read as something else.
-// Exact values, so a probe can count them. The prefix is IND_, not MA_:
-// winuser.h owns MA_ACTIVATE and MA_NOACTIVATE (pitfall 67).
-#define IND_SMA_PERIOD   20
-#define IND_EMA_PERIOD   50
-#define CLR_SMA          RGB(0x3D, 0x8F, 0xBF)
-#define CLR_EMA          RGB(0xA0, 0x72, 0xD0)
-#define IND_TAU_FADE     ANIM_TAU_FADE   // the MA toggle fades the lines, like the overlay
-// Today's session (phase 27). VWAP is gold and a CURVE; the alerts are amber
-// and horizontal (CLR_ALERT FFB020, the line 86601B) - yellower and lighter
-// here, so the two are not read as the same thing. Today's high/low is
-// neutral gray and dashed: solid amber is an alert, dashed green/red is the
-// last price, dotted gray is the crosshair. The gray deliberately does NOT
-// lie on the blend line between CLR_BG and CLR_AXIS (8A93A0 does): antialiased
-// axis numbers would then contain exactly the same color, and a pixel probe
-// could not tell the line from the text. The pattern is 6 on / 6 off, anchored
-// at the surface's left edge, so the dashes do not crawl during panning.
-#define CLR_VWAP         RGB(0xF2, 0xD1, 0x4B)
-#define CLR_SESSION      RGB(0x90, 0x93, 0x9E)
-#define SESS_DASH_ON     6
-#define SESS_DASH_PERIOD 12
-// Yesterday's levels (phase 28): same language, one step further back. Cooler
-// and darker than CLR_SESSION - "same thing, older" - and it too is not on
-// the blend line from CLR_BG or CLR_BOX to any text color (computed per
-// channel, pitfall 87). Same period and same anchor as today's lines, so the
-// patterns stay in step: high/low is 2 on / 10 off (sparse dots; PS_DOT in
-// the crosshair is denser and follows the pointer), the close 10 on / 2 off
-// (almost solid - it is the level today's change is computed from).
-#define CLR_PREV         RGB(0x6F, 0x7B, 0x95)
-#define PREV_DASH_HL     2
-#define PREV_DASH_CLOSE  10
-// The levels in the price axis rank, highest first: today's high and low,
-// then yesterday's close, high and low. A tag yields to all ahead of it.
-#define LVL_COUNT        5
 // Both averages must be defined on the first visible candle when the panel
 // opens on the default view (see SEED_COUNT).
 C_ASSERT(SEED_COUNT >= DEFAULT_VIEW + IND_EMA_PERIOD);
@@ -285,21 +165,7 @@ C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 
-// Price alerts (phase 23): fixed slots per symbol, no malloc. Eight is more
-// than the price axis holds without the tags covering each other at 250 px
-// height (16 px per tag), and 4 x 8 doubles is 256 bytes.
-#define ALERT_MAX          8
-// Amber: not among the eleven fixed colors, so a probe can count pixels,
-// and neither up (green) nor down (red) - an alert has no direction before
-// it fires. The line over the data area is the same color blended halfway
-// down towards CLR_BG: a level is a reference like the grid, not a signal,
-// and must not shout louder than the candles. The tag on the axis carries
-// the saturated color.
-#define CLR_ALERT          RGB(0xFF, 0xB0, 0x20)
-#define CLR_ALERT_LINE     RGB(0x86, 0x60, 0x1B)
-#define ALERT_HIT_PX       8      // half the tag height: hit = what is drawn
 #define ALERT_TAU_FLASH    900.0  // the afterglow when an alert fires (ms)
-#define ALERT_PRICE_MAX    1.0e9  // guard against a hand-edited registry
 
 // The toolbar (phase 22): symbol pill, one pill per interval and VOL, in
 // the header's row 2 - where the symbol line stood as plain text. Fixed
@@ -347,23 +213,6 @@ static const unsigned char FONT_4X9[13][GLYPH_H] = {
 };
 
 typedef struct {
-    long long openTime; // Unix time in milliseconds
-    double open;
-    double high;
-    double low;
-    double close;
-    double volume;      // base volume in the candle (phase 21). 48 bytes per candle.
-} Candle;
-
-// The chart area is computed in two places (painting and mouse hit testing) -
-// they MUST agree, otherwise the crosshair points at the wrong candle.
-// right/cw is the CANDLES' area. edge is the axis edge: the stamp begins at
-// edge + 1 and the labels at edge + AXIS_LBL_GAP. Both modes have space
-// between them (PLOT_PAD_R); in desktop mode the margin outside edge is
-// narrower, because it only holds the stamp and no axis labels.
-typedef struct { int left, top, right, bottom, cw, ch, edge; } ChartRect;
-
-typedef struct {
     HWND hWnd;
     HWND hPopup;
     NOTIFYICONDATAW nid;
@@ -384,13 +233,12 @@ typedef struct {
     Candle candles[MAX_CANDLES];
     int candleCount;
 
-    // Visible view of the candle array. viewCount = 0 means "show all".
-    int viewStart;
-    int viewCount;
-    BOOL followLive;     // the view sits at the far right and follows new candles
+    // The chart engine's state (phase 34): the target view, the eased display
+    // and the hover. ch.viewStart/viewCount/followLive are lock-protected like
+    // candles[]; the rest is UI-owned. See chart.h.
+    ChartState ch;
     BOOL panning;        // dragging the chart sideways right now
     int  panAnchorX;     // mouse X when the panning started
-    int  panAnchorView;  // viewStart when the panning started
 
     HFONT hFontBig;
     HFONT hFontSmall;
@@ -400,8 +248,6 @@ typedef struct {
     // numbers.
     HFONT hFontAxis;
 
-    int hoverIdx;        // index of the candle under the pointer, -1 = none
-    int hoverY;          // mouse Y in client coordinates
     BOOL trackingMouse;  // whether WM_MOUSELEAVE has been requested
 
     // --- Animation clock ---
@@ -419,17 +265,6 @@ typedef struct {
     BOOL   overlayOpen;
     double overlayF;      // 0-255
     int    overlayHot;    // index into rows[], -1 = none
-
-    // --- View and Y-axis easing ---
-    // Pure UI doubles. The worker thread NEVER sees them. viewStart/viewCount
-    // are the target and are lock-protected; these are the display and are
-    // owned by the UI thread alone. That is why the easing does not touch the
-    // thread contract.
-    double dispStart, dispCount;   // fractional view
-    double dispMin, dispMax;       // animated price axis
-    double dispVolMax;             // animated volume scale (phase 21), 0 = no bars
-    BOOL   dispValid;              // FALSE = snap on next update
-    long long dispShiftSeen;       // frontShift the UI has compensated for
 
     // --- Worker thread ---
     // The lock covers candles[], candleCount, viewStart, viewCount,
@@ -482,7 +317,6 @@ typedef struct {
     // bars sink down instead of blinking away. All three are UI-owned.
     int    tbHot;
     BOOL   showVol;
-    double dispVolF;
     // Moving averages (phase 25): SMA 20 and EMA 50 over the candles. Same
     // pair as showVol/dispVolF: showInd is the choice and is saved in the
     // registry, dispIndF is the display, 0..1, and is eased by the clock -
@@ -490,7 +324,6 @@ typedef struct {
     // averages themselves are not stored: they are computed from candles[]
     // in every repaint (see IndStep).
     BOOL   showInd;
-    double dispIndF;
     // The overlays have one choice PER MODE (phase 26). showVol/showInd are
     // the panel's; these two are the desktop surface's, and they are OFF by
     // default: the surface is read peripherally behind the icons (phase 14),
@@ -589,30 +422,12 @@ static BOOL ShowIndNow(const AppContext* ctx) {
 static UINT g_msgTaskbarCreated = 0;   // Explorer restarted
 static char s_httpBuf[98304];    // 360 candles give a ~60 KB response
 static Candle s_incoming[SEED_COUNT];
-// Volume bars (phase 21) are drawn with PolyPolygon in batches: one call per
-// 256 bars instead of one FillRect per candle. Measured at 1280x720 with 300
-// visible candles: FillRect per candle added 0.40 ms to a 1.44 ms repaint.
-// Static, not stack - like the rest of the buffers in the file.
-//
-// Moving averages (phase 25) borrow s_volPts for Polyline, in batches of
-// IND_BATCH points. The bars are finished drawing when the lines begin, and
-// everything happens on the UI thread under the same lock, so the two cannot
-// meet.
-#define VOL_BATCH 256
-#define IND_BATCH (VOL_BATCH * 4)
-static POINT s_volPts[VOL_BATCH * 4];
-static INT   s_volCnt[VOL_BATCH];
 #ifdef TICKER_PROBE
 // Test build only (phase 21): the duration of the last full repaint in
 // microseconds, QPC around the slow path in PaintPopup. Read with
 // WM_APP_PROBE 15, so a probe can measure the median over many frames
 // without taking screenshots at the same time (pitfall 37).
 static LONGLONG g_probePaintUs = 0;
-// Test build only (phase 25): the time the two DrawIndicator calls took in
-// the last full repaint, in microseconds. Read with WM_APP_PROBE 39. The
-// overlay costs less than the noise between two measurement series of the
-// whole repaint (pitfall 80), so it is measured on its own.
-static LONGLONG g_probeIndUs = 0;
 // Test build only (phase 23): mutes balloon and sound when an alert fires, so
 // a probe can fire many alerts without bothering whoever sits at the machine.
 // Set with WM_APP_PROBE 101 to the main window. One run fires one alert
@@ -641,19 +456,6 @@ static volatile LONG g_probeConnDrops = 0;
 // Test build only (phase 26): WM_DISPLAYCHANGE seen on the main window. Read
 // with WM_APP_PROBE 114 there.
 static volatile LONG g_probeDisplayChanges = 0;
-// Test build only (phase 27): the time the session blocks (today's high/low
-// and VWAP) took in the last full repaint, in microseconds. WM_APP_PROBE 45.
-// Measured on its own for the same reason as g_probeIndUs.
-static LONGLONG g_probeSessUs = 0;
-// Test build only (phase 28): the time the yesterday block took in the last
-// full repaint, in microseconds. WM_APP_PROBE 56.
-static LONGLONG g_probePrevUs = 0;
-// Test build only (phase 29). 57: bitmask over the levels (bit q in the LVL
-// rank) that got a label in the last repaint. 58: whether the crosshair's
-// axis tag was drawn. 59: the time the label block took (us).
-static int      g_probeLblMask  = 0;
-static int      g_probeCrossTag = 0;
-static LONGLONG g_probeLblUs    = 0;
 // Test build only (phase 30): what the name migration did at startup, as a
 // bitmask. WM_APP_PROBE 115 on the main window. Bit 0 old settings copied,
 // 1 old key deleted, 2 autostart written under the new name, 3 old autostart
@@ -661,21 +463,7 @@ static LONGLONG g_probeLblUs    = 0;
 static int      g_probeMigrate  = 0;
 #endif
 
-// Keeps the view within the data.
-static void ClampView(AppContext* ctx) {
-    int n = ctx->candleCount;
-    if (n <= 0) { ctx->viewStart = 0; ctx->viewCount = 0; return; }
-    if (ctx->viewCount < MIN_VIEW) ctx->viewCount = MIN_VIEW;
-    if (ctx->viewCount > n)        ctx->viewCount = n;
-    if (ctx->viewStart > n - ctx->viewCount) ctx->viewStart = n - ctx->viewCount;
-    if (ctx->viewStart < 0)        ctx->viewStart = 0;
-}
 
-// Reads out the current view, with "show all" as the default.
-static void GetView(const AppContext* ctx, int* vs, int* vc) {
-    if (ctx->viewCount <= 0) { *vs = 0; *vc = ctx->candleCount; }
-    else                     { *vs = ctx->viewStart; *vc = ctx->viewCount; }
-}
 
 static long long NowUnixMs(void) {
     FILETIME ft;
@@ -715,43 +503,7 @@ static double WatermarkAlpha(int W) {
     return a;
 }
 
-// Step length S (in candles) between the time labels.
-//   N = floor(chartW / minDx),  M = ceil(dispCount),
-//   S = max(1, ceil((M - 1) / (N - 1)))
-// CEIL, not floor: with floor, M = 9, chartW = 320, minDx = 80 gives S = 2 and
-// 71 px between the labels - collision. With ceil the spacing S * chartW /
-// dispCount >= minDx for all M and N >= 2 (M >= N: (M-1)N >= (N-1)M; M < N:
-// S = 1 and one candle is already wider than minDx). N < 2 gives one label.
-static int TimeTickStep(double dispCount, int chartW, int minDx) {
-    if (dispCount < 1.0) dispCount = 1.0;
-    if (chartW <= 0 || minDx <= 0) return 1;
-    int m = (int)ceil(dispCount);
-    int nx = chartW / minDx;
-    if (nx < 2) return (m > 1) ? m : 1;
-    int s = (m - 1 + (nx - 1) - 1) / (nx - 1);
-    return (s < 1) ? 1 : s;
-}
 
-// Rounds S up to a step that is a whole number of candles AND a round time
-// span (5 min, 15 min, 1 h, 6 h, 1 d ...). TimeTickStep alone gives S = 23 on
-// 300 1m candles at 1280 px, i.e. labels at 02:48, 03:11, 03:34 (seen in
-// PrintWindow). Rounding up can only make the spacing LARGER, so the
-// collision guarantee in TimeTickStep holds. If S is larger than the table,
-// S is used as is.
-static int NiceTimeStep(int step, long long intervalMs) {
-    static const long long NICE_MIN[] = {
-        1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
-        1440, 2 * 1440, 3 * 1440, 7 * 1440, 14 * 1440, 28 * 1440,
-    };
-    if (step < 1) step = 1;
-    if (intervalMs <= 0) return step;
-    for (int i = 0; i < (int)(sizeof(NICE_MIN) / sizeof(NICE_MIN[0])); ++i) {
-        long long ms = NICE_MIN[i] * 60000LL;
-        if (ms % intervalMs != 0) continue;
-        if (ms / intervalMs >= step) return (int)(ms / intervalMs);
-    }
-    return step;
-}
 
 // Exponential backoff with jitter. 3s, 6s, 12s, 24s, 48s, then capped at
 // 60s. The jitter keeps many clients from synchronizing against the server
@@ -787,234 +539,21 @@ static BOOL AlertHit(double now, double signedLevel) {
     return (signedLevel > 0.0) ? (now >= signedLevel) : (now <= -signedLevel);
 }
 
-// Rounds a level pointed out with the mouse to the largest power of ten that
-// is not larger than one pixel in price (pxStep), so the alert moves less
-// than a pixel from where it was set, but reads 75120 and not 75123.4567. The
-// floor is 0.01: nothing finer is shown anywhere (pitfall 16 - the threshold
-// is computed from pixels, not from a fixed dollar amount).
-//
-// A staircase, not pow(10, floor(log10(x))): those two calls alone added
-// 28 KB to the exe (187 -> 216 KB, measured - the CRT's pow with tables), for
-// a rounding that has nine possible answers. Below 1 it divides by 10 or 100
-// instead of multiplying by 0.1 or 0.01, which do not exist exactly:
-// 751235 / 10 is correctly rounded, 751235 * 0.1 is 75123.500000000015.
-static double AlertRound(double price, double pxStep) {
-    if (price <= 0.0 || pxStep <= 0.0) return price;
-    double r;
-    if (pxStep >= 1.0) {
-        double q = 1.0;
-        while (q * 10.0 <= pxStep && q < 1.0e6) q *= 10.0;
-        r = floor(price / q + 0.5) * q;
-    } else {
-        double inv = (pxStep >= 0.1) ? 10.0 : 100.0;
-        r = floor(price * inv + 0.5) / inv;
-    }
-    return (r > 0.0) ? r : price;
-}
 
-// Moving averages (phase 25). A step machine, not a table: the averages are
-// not stored anywhere. The painting feeds the candles through IndStep and
-// draws the value as it comes out, so the overlay costs 40 bytes of stack and
-// no double[MAX_CANDLES] next to candles[].
-//
-// SMA: rolling sum over the last period closes. c is the WHOLE buffer, not
-// just the candle, because the step must subtract the candle that drops out
-// of the window. The machine can be started on any candle; the value is
-// defined from the period-th candle it has been fed onward.
-// EMA: seeded with the SMA of the first period candles, then
-// v += k * (close - v) with k = 2 / (period + 1) - the usual definition
-// (TradingView, Binance). EMA has infinite memory, so it is ALWAYS fed from
-// candle 0: started in the middle of the buffer, the line would depend on
-// where the view begins, and move during panning.
-//
-// Returns TRUE when s->val is defined. No pow, no log: only
-// + - * /, so the CRT does not grow (pitfall 75).
-typedef struct { int period; BOOL ema; int fed; double sum; double val; } IndState;
 
-static void IndInit(IndState* s, int period, BOOL ema) {
-    s->period = (period > 0) ? period : 1;
-    s->ema = ema;
-    s->fed = 0;
-    s->sum = 0.0;
-    s->val = 0.0;
-}
 
-static BOOL IndStep(IndState* s, const Candle* c, int i) {
-    double x = c[i].close;
-    s->fed++;
-    if (s->fed <= s->period) {
-        s->sum += x;
-        if (s->fed < s->period) return FALSE;
-        s->val = s->sum / (double)s->period;
-        return TRUE;
-    }
-    if (s->ema) {
-        s->val += (2.0 / (double)(s->period + 1)) * (x - s->val);
-    } else {
-        s->sum += x - c[i - s->period].close;
-        s->val = s->sum / (double)s->period;
-    }
-    return TRUE;
-}
 
-// First candle the machine must be fed from for the value on candle idx (and
-// all after it) to be the correct one: 0 for EMA, idx - period + 1 for SMA.
-static int IndFeedStart(int idx, int period, BOOL ema) {
-    if (period < 1) period = 1;   // same guard as IndInit, otherwise nothing is fed
-    int s = ema ? 0 : idx - period + 1;
-    return (s > 0) ? s : 0;
-}
 
-#ifdef TICKER_PROBE
-// Test build only: the average on one candle, FALSE when it is not defined
-// there (too few candles before it). Probe fields 36/37 and the unit tests
-// read this; the painting uses the machine directly and gets the whole view,
-// and the legend's value, in one pass.
-static BOOL IndValueAt(const Candle* c, int n, int period, BOOL ema, int idx, double* out) {
-    if (idx < 0 || idx >= n) return FALSE;
-    IndState s;
-    IndInit(&s, period, ema);
-    BOOL ok = FALSE;
-    for (int i = IndFeedStart(idx, period, ema); i <= idx; ++i) ok = IndStep(&s, c, i);
-    if (ok) *out = s.val;
-    return ok;
-}
-#endif
 
-// Today's session, VWAP and today's high/low (phase 27). Pure functions of
-// candles[], like the averages above: nothing is stored, everything is
-// computed during painting.
-//
-// The session is the UTC DAY - Binance's daily candles and 24-hour figures
-// break at 00:00 UTC, and so does VWAP at Bloomberg and TradingView. Not the
-// visible view: PriceRange adds 8 % padding around the view's high and low,
-// so two lines at the view's extremes would have stood in exactly the same
-// place in every single frame, and a VWAP anchored in the first visible
-// candle would have jumped with every candle during panning (same decision
-// as the time axis: anchored in time, not in the index).
-//
-// SessionStartAt gives the index of the first candle in the day that candle
-// idx belongs to, -1 when the session does not exist: empty buffer, or
-// candles of a day or more (then the candle IS the session, and high/low are
-// already in the hover box).
-// Binary search - openTime is sorted, and a linear search backward would be
-// 1440 64-bit comparisons per frame late in the day at 1m.
-// *complete: the buffer reaches back to the start of the day. It does when
-// there is an older candle before it, when the first candle opens on the day
-// rollover, or when the history has ended. If the session is incomplete,
-// nothing is drawn: a "today's high" computed from the last six hours is a
-// wrong number.
-#define DAY_MS 86400000LL
 
-static int SessionStartAt(const Candle* c, int n, int idx, long long intervalMs,
-                          BOOL histDone, BOOL* complete) {
-    *complete = FALSE;
-    if (n <= 0 || idx < 0 || idx >= n) return -1;
-    if (intervalMs <= 0 || intervalMs >= DAY_MS) return -1;
-    long long dayStart = (c[idx].openTime / DAY_MS) * DAY_MS;
-    int lo = 0, hi = idx;                 // first i with openTime >= dayStart
-    while (lo < hi) {
-        int mid = lo + (hi - lo) / 2;
-        if (c[mid].openTime >= dayStart) hi = mid; else lo = mid + 1;
-    }
-    *complete = (lo > 0) || histDone || (c[lo].openTime == dayStart);
-    return lo;
-}
 
-// Today's session: the day of the last candle.
-static int SessionStart(const Candle* c, int n, long long intervalMs,
-                        BOOL histDone, BOOL* complete) {
-    return SessionStartAt(c, n, n - 1, intervalMs, histDone, complete);
-}
 
-// Highest high and lowest low over [s, n).
-static void SessionHiLo(const Candle* c, int s, int n, double* outHi, double* outLo) {
-    double hi = c[s].high, lo = c[s].low;
-    for (int i = s + 1; i < n; ++i) {
-        if (c[i].high > hi) hi = c[i].high;
-        if (c[i].low  < lo) lo = c[i].low;
-    }
-    *outHi = hi;
-    *outLo = lo;
-}
 
-// VWAP: sum(typical price x volume) / sum(volume) from the start of the day,
-// with typical price (H + L + C) / 3 - the usual definition on candles. Step
-// machine like IndState: fed from the session's first candle, and the value
-// comes out per candle. FALSE until there is volume to divide by. The feeder
-// resets at every day rollover (see DrawVwap): each day has its own VWAP, so
-// the line and the hover value are defined also when the view is in
-// yesterday.
-typedef struct { double pv; double v; double val; } VwapState;
 
-static void VwapInit(VwapState* s) { s->pv = 0.0; s->v = 0.0; s->val = 0.0; }
 
-static BOOL VwapStep(VwapState* s, const Candle* c) {
-    s->pv += (c->high + c->low + c->close) / 3.0 * c->volume;
-    s->v  += c->volume;
-    if (s->v <= 0.0) return FALSE;
-    s->val = s->pv / s->v;
-    return TRUE;
-}
 
-#ifdef TICKER_PROBE
-// Test build only: VWAP on one candle within the candle's own day, FALSE when
-// the day is not wholly in the buffer or has no volume. Probe field 41 and
-// the unit tests read this.
-static BOOL VwapValueAt(const Candle* c, int n, long long intervalMs,
-                        BOOL histDone, int idx, double* out) {
-    BOOL full = FALSE;
-    int s = SessionStartAt(c, n, idx, intervalMs, histDone, &full);
-    if (s < 0 || !full) return FALSE;
-    VwapState v;
-    VwapInit(&v);
-    BOOL ok = FALSE;
-    for (int i = s; i <= idx; ++i) ok = VwapStep(&v, &c[i]);
-    if (ok) *out = v.val;
-    return ok;
-}
-#endif
 
-// Yesterday (phase 28): the previous UTC day's high, low and close as
-// reference levels. Pure functions of candles[] like the rest of the session
-// code.
-//
-// PrevSession gives yesterday's first candle, and in *outEnd today's first
-// (the candle AFTER yesterday's last) - the session is [return, *outEnd). -1
-// when it does not exist: no session today (empty buffer, 1d candles), today's
-// first candle is at the front of the buffer, or the candle before it is not
-// in the previous day (a gap of a day or more - then there is no yesterday to
-// show).
-// *complete as in SessionStartAt: a "yesterday's high" computed from the last
-// ten hours of yesterday is a wrong number, and is not drawn.
-static int PrevSession(const Candle* c, int n, long long intervalMs, BOOL histDone,
-                       int* outEnd, BOOL* complete) {
-    *complete = FALSE;
-    *outEnd = -1;
-    BOOL full = FALSE;
-    int s1 = SessionStart(c, n, intervalMs, histDone, &full);
-    if (s1 <= 0) return -1;
-    if (c[s1 - 1].openTime / DAY_MS != c[s1].openTime / DAY_MS - 1) return -1;
-    *outEnd = s1;
-    return SessionStartAt(c, n, s1 - 1, intervalMs, histDone, complete);
-}
 
-// Must the buffer be filled backward for today's AND yesterday's session to
-// be whole? Phase 27 stopped at today's day rollover; yesterday needs one more
-// day (at 1m at most 2880 candles, eight fetches). FALSE when the history has
-// ended, when there are no sessions (1d), and when yesterday does not exist
-// (gap) - then there is nothing to fetch toward.
-static BOOL SessionsNeedHistory(const Candle* c, int n, long long intervalMs, BOOL histDone) {
-    if (histDone) return FALSE;
-    BOOL full = FALSE;
-    int s1 = SessionStart(c, n, intervalMs, histDone, &full);
-    if (s1 < 0) return FALSE;
-    if (!full || s1 == 0) return TRUE;   // s1 == 0: today is covered, yesterday lies before the buffer
-    int end = -1;
-    BOOL prevFull = FALSE;
-    int s0 = PrevSession(c, n, intervalMs, histDone, &end, &prevFull);
-    return (s0 >= 0 && !prevFull);
-}
 
 // Distinguishes "no saved position" from a real coordinate, which may well be
 // negative on a monitor to the left of or above the primary one.
@@ -1454,25 +993,6 @@ static void UpdatePopupTitle(AppContext* ctx) {
     SetWindowTextW(ctx->hPopup, title);
 }
 
-// The span follows the zoom - "(60m)" would be wrong as soon as you zoom. With
-// a variable interval it is no longer enough to count candles as minutes: 300
-// candles of 1d are ten months, not five hours.
-static void FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch) {
-    long long mins = (long long)vc * intervalMs / 60000LL;
-    if (mins < 60) {
-        swprintf_s(out, cch, L"%lldm", mins);
-        return;
-    }
-    long long hours = mins / 60, rm = mins % 60;
-    if (hours < 24) {
-        if (rm) swprintf_s(out, cch, L"%lldh %lldm", hours, rm);
-        else    swprintf_s(out, cch, L"%lldh", hours);
-        return;
-    }
-    long long days = hours / 24, rh = hours % 24;
-    if (rh) swprintf_s(out, cch, L"%lldd %lldh", days, rh);
-    else    swprintf_s(out, cch, L"%lldd", days);
-}
 
 // Merges incoming candles with the buffer on openTime: the same timestamp
 // updates (the last candle changes while it forms), newer ones are appended.
@@ -1487,10 +1007,10 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     if (ctx->candleCount > 0 &&
         in[0].openTime > ctx->candles[ctx->candleCount - 1].openTime + 2 * ctx->intervalMs) {
         ctx->candleCount = 0;
-        ctx->viewStart   = 0;
-        ctx->viewCount   = 0;
-        ctx->followLive  = TRUE;
-        ctx->dispValid   = FALSE;   // new buffer: nothing to ease from
+        ctx->ch.viewStart   = 0;
+        ctx->ch.viewCount   = 0;
+        ctx->ch.followLive  = TRUE;
+        ctx->ch.dispValid   = FALSE;   // new buffer: nothing to ease from
         ctx->histPending = FALSE;   // new buffer: the history starts over
         ctx->histDone    = FALSE;
     }
@@ -1518,7 +1038,7 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
                 n--;
                 ctx->candleCount = n;
                 ctx->frontShift++;     // the UI thread shifts the disp indices by this
-                if (ctx->viewStart > 0) ctx->viewStart--;
+                if (ctx->ch.viewStart > 0) ctx->ch.viewStart--;
             }
             ctx->candles[n]  = *c;
             ctx->candleCount = n + 1;
@@ -1541,13 +1061,13 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     // own "0 -> DEFAULT_VIEW" comes too late to see the zero. Measured: the
     // first opening showed 8 candles instead of 300, in every build since
     // phase 1 - and every duplicate from [ + ] opens just before it has data.
-    if (ctx->followLive) {
-        if (ctx->viewCount <= 0) {
-            ctx->viewCount = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
+    if (ctx->ch.followLive) {
+        if (ctx->ch.viewCount <= 0) {
+            ctx->ch.viewCount = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
         }
-        ctx->viewStart = ctx->candleCount - ctx->viewCount;
+        ctx->ch.viewStart = ctx->candleCount - ctx->ch.viewCount;
     }
-    ClampView(ctx);
+    ClampView(&ctx->ch, ctx->candleCount);
 }
 
 // Backfill (phase 18): puts older candles IN FRONT of the buffer. in is
@@ -1582,9 +1102,9 @@ static void PrependCandles(AppContext* ctx, const Candle* in, int count) {
         // viewCount 0 is "show all" (GetView) and must stay so: ClampView
         // would raise 0 to MIN_VIEW. With a set view, it is moved k
         // places, so the same candles stand under it.
-        if (ctx->viewCount > 0) {
-            ctx->viewStart += k;
-            ClampView(ctx);
+        if (ctx->ch.viewCount > 0) {
+            ctx->ch.viewStart += k;
+            ClampView(&ctx->ch, ctx->candleCount);
         }
     }
     if (usable == 0 || ctx->candleCount >= MAX_CANDLES) ctx->histDone = TRUE;
@@ -1979,13 +1499,13 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
         ctx->lastPrice = ctx->candles[ctx->candleCount - 1].close;
     }
 
-    if (ctx->followLive) {
-        int vc = ctx->viewCount;
+    if (ctx->ch.followLive) {
+        int vc = ctx->ch.viewCount;
         if (vc <= 0) vc = DEFAULT_VIEW;
         if (vc > ctx->candleCount) vc = ctx->candleCount;
-        ctx->viewCount = vc;
-        ctx->viewStart = ctx->candleCount - vc;
-        if (ctx->viewStart < 0) ctx->viewStart = 0;
+        ctx->ch.viewCount = vc;
+        ctx->ch.viewStart = ctx->candleCount - vc;
+        if (ctx->ch.viewStart < 0) ctx->ch.viewStart = 0;
     }
     LeaveCriticalSection(&ctx->lock);
     return TRUE;
@@ -2190,17 +1710,6 @@ static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
 // Chart drawing (GDI, double-buffered)
 // ---------------------------------------------------------------------------
 
-// Linear color blend. t=0 gives a, t=255 gives b. Everything is drawn opaque
-// over CLR_BG, so blending toward the background is identical to real
-// transparency.
-static COLORREF Blend(COLORREF a, COLORREF b, int t) {
-    if (t <= 0) return a;
-    if (t >= 255) return b;
-    int r = (GetRValue(a) * (255 - t) + GetRValue(b) * t) / 255;
-    int g = (GetGValue(a) * (255 - t) + GetGValue(b) * t) / 255;
-    int l = (GetBValue(a) * (255 - t) + GetBValue(b) * t) / 255;
-    return RGB(r, g, l);
-}
 
 
 static BOOL PtInRect2(const RECT* r, int x, int y) {
@@ -2330,170 +1839,17 @@ static void ToolbarStrip(int W, RECT* out) {
     out->bottom = tb[0].bottom;
 }
 
-// Shared geometry for painting and mouse hits.
-// Desktop mode: the header and the time band existed only for text that is no
-// longer drawn (phase 14), so top, bottom and left run edge to edge. The right
-// side, however, has got a margin back (phase 16) - not for axis labels, but
-// for the one stamp with the last price. The margin is narrower than the
-// panel's because it only has to hold the stamp.
-//
-// Everything else follows from here: the watermark's centering, the grid, the
-// candles, the clip region and the last-price line.
-// The stamp's height, font height and margin width in desktop mode. Pure
-// functions of the surface's height: ChartGeometry is also called from hit
-// detection and panning, where there is no DC to measure in.
-static int DeskPillH(int H) {
-    int h = H / DESK_PILL_DIV;
-    if (h < DESK_PILL_MIN) h = DESK_PILL_MIN;
-    if (h > DESK_PILL_MAX) h = DESK_PILL_MAX;
-    return h;
-}
 
-// Same ratio as in the panel: a 16 px stamp around a 15 px font.
-static int DeskPillFontH(int H) { return MulDiv(DeskPillH(H), 15, 16); }
 
-// AXIS_CHAR_W is measured at em 15. The width is rounded UP: a character width
-// that is really 22.2 px would have given eight characters 1.6 px too little,
-// and the price would silently have fallen back to the axis's resolution
-// instead of two decimals.
-static int DeskAxisW(int H) {
-    int cw = (DeskPillFontH(H) * AXIS_CHAR_W + 14) / 15;
-    return AXIS_LBL_GAP + AXIS_Y_CHARS * cw + AXIS_PAD_R;
-}
 
-static ChartRect ChartGeometry(int W, int H) {
-    ChartRect g;
-    g.left   = g_desktopMode ? 0 : PAD_L;
-    g.top    = g_desktopMode ? 0 : HEADER_H;
-    g.edge   = g_desktopMode ? W - DeskAxisW(H) : W - PAD_R;
-    g.right  = g.edge - PLOT_PAD_R;
-    g.bottom = g_desktopMode ? H : H - PAD_B;
-    g.cw     = g.right - g.left;
-    g.ch     = g.bottom - g.top;
-    return g;
-}
 
-// Which candle is the mouse over? Returns an absolute index, -1 outside.
-// MUST read the same disp values as DrawChart. If one reads the target and the
-// other the display, the crosshair points at the wrong candle mid-animation -
-// that is bug #7 from the log in new clothes.
-static int HitCandle(const AppContext* ctx, const ChartRect* g, int mx, int my) {
-    if (ctx->dispCount <= 0.0 || g->cw <= 0) return -1;
-    if (ctx->candleCount <= 0) return -1;
-    if (mx < g->left || mx >= g->right || my < g->top || my > g->bottom) return -1;
 
-    double slot = (double)g->cw / ctx->dispCount;
-    if (slot <= 0.0) return -1;
-    int idx = (int)(ctx->dispStart + (double)(mx - g->left) / slot);
 
-    // Bounded by candleCount, not by vs + vc: during the animation the
-    // display can hang outside the target view.
-    if (idx < 0) idx = 0;
-    if (idx >= ctx->candleCount) idx = ctx->candleCount - 1;
-    return idx;
-}
 
-// Price alerts (phase 23): price <-> y. Drawing and hit-testing MUST read the
-// same source (pitfall 14), so both directions go through these two, and both
-// read the DISPLAY (dispMin/dispMax) with the same range guard and the same
-// truncation as the candles in DrawChart. The clamp before (int) is for a
-// level far outside the view: 75 000 on a SOL axis with a span of 1 gives 5e7
-// pixels, and an alert from the registry can be anything below ALERT_PRICE_MAX.
-static int AlertY(const AppContext* ctx, const ChartRect* g, double level) {
-    double range = ctx->dispMax - ctx->dispMin;
-    if (range < 1e-9) range = 1.0;
-    double yd = ((ctx->dispMax - level) / range) * (double)g->ch;
-    if (yd < -100000.0) yd = -100000.0;
-    if (yd >  100000.0) yd =  100000.0;
-    return g->top + (int)yd;
-}
 
-// The price at height y, rounded to below one pixel (AlertRound).
-static double AlertPriceAtY(const AppContext* ctx, const ChartRect* g, int y) {
-    double range = ctx->dispMax - ctx->dispMin;
-    if (range < 1e-9) range = 1.0;
-    if (g->ch <= 0) return 0.0;
-    double p = ctx->dispMax - ((double)(y - g->top) / (double)g->ch) * range;
-    return AlertRound(p, range / (double)g->ch);
-}
 
-// Which alert is the pointer on in the price column? The nearest tag within
-// ALERT_HIT_PX - that is, exactly the area the tag is drawn on - and -1
-// otherwise. Tags outside [top, bottom] are not drawn and cannot be hit.
-static int AlertAxisHit(const AppContext* ctx, const ChartRect* g, int my) {
-    int best = -1, bestD = ALERT_HIT_PX + 1;
-    int s = ctx->symIdx;
-    for (int i = 0; i < ctx->alertCount[s]; ++i) {
-        int y = AlertY(ctx, g, fabs(ctx->alerts[s][i]));
-        if (y < g->top || y > g->bottom) continue;
-        // The tag is [y - 8, y + 8): FillRect is exclusive at the bottom.
-        if (my < y - ALERT_HIT_PX || my >= y + ALERT_HIT_PX) continue;
-        int d = abs(my - y);
-        if (d < bestD) { bestD = d; best = i; }
-    }
-    return best;
-}
 
-// The number of decimals on the price axis is chosen from the SPACING between
-// the labels, not from the size of the price. SOL around 97 dollars has a span
-// of under one dollar: with "%.0f" all five labels read "97". BTC around
-// 75 000 needs no decimals. Same class of bug as #5 in the log - the format
-// must follow the number actually shown, not an assumed order of magnitude.
-static int PriceDecimals(double step) {
-    if (step <= 0.0) return 2;
-    int d = 0;
-    while (step < 2.0 && d < 6) { step *= 10.0; ++d; }
-    return d;
-}
 
-// Min/max over the visible candles, with 8% headroom above and below.
-static void PriceRange(const AppContext* ctx, int vs, int vc, double* outMin, double* outMax) {
-    double mn = ctx->candles[vs].low, mx = ctx->candles[vs].high;
-    for (int i = 1; i < vc; ++i) {
-        const Candle* c = &ctx->candles[vs + i];
-        if (c->low  < mn) mn = c->low;
-        if (c->high > mx) mx = c->high;
-    }
-    double range = mx - mn;
-    if (range < 1e-9) range = 1.0;
-    double pad = range * 0.08;
-    *outMin = mn - pad;
-    *outMax = mx + pad;
-}
-
-// Largest volume in the view (phase 21): the scale of the bars. 0 when no
-// candle has volume - then no bars are drawn, instead of the height becoming
-// NaN. Called under the lock, like PriceRange.
-static double VolumeMax(const AppContext* ctx, int vs, int vc) {
-    double mx = 0.0;
-    for (int i = 0; i < vc; ++i) {
-        double v = ctx->candles[vs + i].volume;
-        if (v > mx) mx = v;
-    }
-    return mx;
-}
-
-// When candles drop out at the front, EVERYTHING that is an absolute index is
-// shifted by the same amount. Without this the chart jumps one candle to the
-// left every minute once the buffer has reached its cap, and hoverIdx points
-// at the neighboring candle.
-// Idempotent: delta is 0 the second time. Called under the lock.
-static void ApplyFrontShift(AppContext* ctx) {
-    long long delta = ctx->frontShift - ctx->dispShiftSeen;
-    if (delta == 0) return;
-    ctx->dispShiftSeen = ctx->frontShift;
-
-    // No easing: an eviction is not a movement the user should see, and a
-    // backfill (delta < 0, phase 18) should not move the frame at all.
-    ctx->dispStart -= (double)delta;
-    if (ctx->dispStart < 0.0) ctx->dispStart = 0.0;
-    if (ctx->hoverIdx >= 0) {
-        ctx->hoverIdx -= (int)delta;
-        if (ctx->hoverIdx < 0) ctx->hoverIdx = -1;
-    }
-    ctx->panAnchorView -= (int)delta;
-    if (ctx->panAnchorView < 0) ctx->panAnchorView = 0;
-}
 
 // The user is up against the wall (viewStart == 0) and wants to go back
 // (phase 18). Sets histPending and wakes the thread - but only when the line
@@ -2512,67 +1868,9 @@ static void RequestHistory(AppContext* ctx) {
     if (wake) SetEvent(ctx->hWakeEvent);
 }
 
-// Sets the display equal to the target without animation. Used when an
-// animation makes no sense: first frame, new buffer after a config change,
-// the panel opens. Called under the lock.
-static void SyncDisp(AppContext* ctx) {
-    int vs, vc;
-    GetView(ctx, &vs, &vc);
-    ctx->dispStart = (double)vs;
-    ctx->dispCount = (vc > 0) ? (double)vc : 1.0;
-    ctx->dispShiftSeen = ctx->frontShift;
-
-    // With an empty buffer there is no price axis to sync against. If we mark
-    // ourselves valid here, dispMin/dispMax ease from [0, 1] up to the real
-    // span when the data arrives - that is, a Y axis that slides up from zero
-    // for half a second after every symbol change. We stay invalid instead,
-    // so the first frame WITH data snaps.
-    if (ctx->candleCount <= 0 || vc <= 0) {
-        ctx->dispMin   = 0.0;
-        ctx->dispMax   = 1.0;
-        ctx->dispVolMax = 0.0;
-        ctx->dispValid = FALSE;
-        return;
-    }
-
-    PriceRange(ctx, vs, vc, &ctx->dispMin, &ctx->dispMax);
-    ctx->dispVolMax = VolumeMax(ctx, vs, vc);   // phase 21
-    ctx->dispValid = TRUE;
-}
-
-// Unix ms -> local time. On long candles "HH:MM" is not enough - every 1d
-// candle would read "00:00". From 1h upward we include the date.
-static void FormatCandleTime(long long unixMs, long long intervalMs,
-                             wchar_t* out, size_t cch) {
-    ULONGLONG t = (ULONGLONG)(unixMs / 1000) * 10000000ULL + 116444736000000000ULL;
-    FILETIME utc, local;
-    utc.dwLowDateTime  = (DWORD)(t & 0xFFFFFFFFULL);
-    utc.dwHighDateTime = (DWORD)(t >> 32);
-    SYSTEMTIME st;
-    if (FileTimeToLocalFileTime(&utc, &local) && FileTimeToSystemTime(&local, &st)) {
-        if (intervalMs >= 86400000LL) {
-            swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
-        } else if (intervalMs >= 3600000LL) {
-            swprintf_s(out, cch, L"%02d-%02d %02d:%02d",
-                       st.wMonth, st.wDay, st.wHour, st.wMinute);
-        } else {
-            swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
-        }
-    } else {
-        wcscpy_s(out, cch, L"--:--");
-    }
-}
 
 
-// Layout and hit detection share one function. Two independent calculations of
-// the same area end up pointing at different places - see bug #7 in the log.
-// Volume for the hover box (phase 21): compact, so DOGE volume in millions
-// fits in 104 px. Below a thousand two decimals, otherwise K/M with one decimal.
-static void FormatVolume(double v, wchar_t* out, size_t cch) {
-    if (v >= 1e6)      swprintf_s(out, cch, L"%.1fM", v / 1e6);
-    else if (v >= 1e3) swprintf_s(out, cch, L"%.1fK", v / 1e3);
-    else               swprintf_s(out, cch, L"%.2f", v);
-}
+
 
 #define OVL_ROWS_MAX  16
 #define OVL_ROW_H     22
@@ -2647,7 +1945,7 @@ static int OverlayHit(const OverlayRects* r, int x, int y) {
 
 // The palette is CLR_BG/CLR_BOX/CLR_BOXEDGE - identical to the hover box, so
 // the overlay reads as the same family of elements.
-// Called from PaintPopup, NOT from DrawChart: DrawChart returns early when
+// Called from PaintPopup, NOT from DrawChartFrame: that returns early when
 // candleCount == 0, and that is exactly the state right after a config change.
 // Had the call been there, the fade-out would never be drawn after a change.
 static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
@@ -2733,7 +2031,7 @@ static BOOL EnsureBackBuffer(AppContext* ctx, HDC ref, int W, int H) {
 
 // Builds background + watermark when (W, H, symIdx, ivIdx) changes - not
 // per frame. Same discipline as the GDI cache from phase 1.
-// If anything fails here, wmValid = FALSE is set and DrawChart falls back to
+// If anything fails here, wmValid = FALSE is set and ChartDrawBackground falls back to
 // FillRect. The watermark is decoration; it must never block painting.
 static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     if (ctx->wmValid && ctx->wmW == W && ctx->wmH == H &&
@@ -2773,7 +2071,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     SetTextColor(ctx->wmDC, Blend(CLR_BG, CLR_WM_INK,
                                   (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
 
-    ChartRect g = ChartGeometry(W, H);
+    ChartRect g = ChartGeometry(W, H, g_desktopMode);
 
     // The font height follows the height of the chart surface, not a fixed
     // value: a small panel must not get the watermark clipped, and a large
@@ -2864,1175 +2162,10 @@ static void EnsurePillFont(AppContext* ctx, int H) {
     ctx->pillFontH = ctx->hFontPill ? fh : 0;
 }
 
-// The text in a tag on the price axis (phase 23): two decimals where they
-// fit, otherwise the axis resolution - same rule as the stamp for the last
-// price, measured on the fully formatted string (bug #5). The font must be
-// selected into hdc before the call.
-static void FormatTagPrice(HDC hdc, double p, double range, int avail,
-                           wchar_t* out, size_t cch) {
-    SIZE sz = { 0, 0 };
-    swprintf_s(out, cch, L"%.2f", p);
-    if (GetTextExtentPoint32W(hdc, out, (int)wcslen(out), &sz) && sz.cx > avail) {
-        swprintf_s(out, cch, L"%.*f", PriceDecimals(range / 4.0), p);
-    }
-}
 
-// A moving-average line (phase 25) over the view [i0, i1). Called from
-// DrawChart under the lock and inside the chart's clip, with DC_PEN selected.
-//
-// The line goes ONE candle out on each side of the view, so it leaves the
-// surface through the clip instead of ending in the middle of the outermost
-// candle. Same x and y as the candles: the middle of the column, and
-// top + (int)(...) on the price - floor on x because the candle beyond the
-// left edge has a negative offset, where (int) rounds toward zero and not
-// downward.
-//
-// y is clamped to 16 surface heights: the average looks period candles back
-// and can lie far outside a zoomed-in price range, and GDI computes in 27
-// bits. The clamp is so far out that it does not change the slope of
-// anything visible.
-//
-// The points go to Polyline in batches; the last point of a batch is the
-// first of the next, so the line is continuous. With more candles than
-// pixels many points fall in the same column - Polyline draws them as the
-// vertical stroke they are.
-//
-// legendIdx: the candle the legend wants the value for. TRUE when *legendVal
-// is set - the value falls out of the same pass, without an extra one.
-static BOOL DrawIndicator(HDC hdc, const AppContext* ctx, const ChartRect* g,
-                          int period, BOOL ema, COLORREF clr,
-                          double dStart, double slot, int i0, int i1,
-                          double maxP, double range,
-                          int legendIdx, double* legendVal) {
-    int n = ctx->candleCount;
-    int first = (i0 > 0) ? i0 - 1 : 0;
-    int last  = (i1 < n) ? i1 : n - 1;
-    double yLo = -16.0 * (double)g->ch, yHi = 17.0 * (double)g->ch;
 
-    IndState s;
-    IndInit(&s, period, ema);
-    BOOL haveLegend = FALSE;
-    int k = 0;
-    SetDCPenColor(hdc, clr);
-    for (int i = IndFeedStart(first, period, ema); i <= last; ++i) {
-        if (!IndStep(&s, ctx->candles, i)) continue;
-        if (i == legendIdx) { *legendVal = s.val; haveLegend = TRUE; }
-        if (i < first) continue;
-        double yy = ((maxP - s.val) / range) * (double)g->ch;
-        if (yy < yLo) yy = yLo;
-        if (yy > yHi) yy = yHi;
-        s_volPts[k].x = g->left + (int)floor(((double)i - dStart + 0.5) * slot);
-        s_volPts[k].y = g->top + (int)yy;
-        if (++k == IND_BATCH) {
-            Polyline(hdc, s_volPts, k);
-            s_volPts[0] = s_volPts[k - 1];
-            k = 1;
-        }
-    }
-    if (k >= 2) Polyline(hdc, s_volPts, k);
-    return haveLegend;
-}
 
-// The VWAP line (phase 27) over the view [i0, i1). Same contract, same x and y
-// and same batches as DrawIndicator. The difference is the anchoring: the
-// machine is fed from the start of the day the first drawn candle belongs to,
-// and reset at every day rollover. The line is also broken there - today's
-// VWAP has nothing to do with yesterday's last value, and a stroke between
-// the two would be a number that does not exist. If the oldest day is not
-// fully in the buffer, nothing is drawn before the next day rollover.
-static BOOL DrawVwap(HDC hdc, const AppContext* ctx, const ChartRect* g, COLORREF clr,
-                     double dStart, double slot, int i0, int i1,
-                     double maxP, double range,
-                     int legendIdx, double* legendVal) {
-    int n = ctx->candleCount;
-    const Candle* c = ctx->candles;
-    int first = (i0 > 0) ? i0 - 1 : 0;
-    int last  = (i1 < n) ? i1 : n - 1;
-    double yLo = -16.0 * (double)g->ch, yHi = 17.0 * (double)g->ch;
 
-    BOOL live = FALSE;
-    int s = SessionStartAt(c, n, first, ctx->intervalMs, ctx->histDone, &live);
-    if (s < 0) return FALSE;
-    long long nextDay = (c[s].openTime / DAY_MS + 1) * DAY_MS;
-
-    VwapState v;
-    VwapInit(&v);
-    BOOL haveLegend = FALSE;
-    int k = 0;
-    SetDCPenColor(hdc, clr);
-    for (int i = s; i <= last; ++i) {
-        if (c[i].openTime >= nextDay) {
-            if (k >= 2) Polyline(hdc, s_volPts, k);
-            k = 0;
-            VwapInit(&v);
-            live = TRUE;
-            nextDay = (c[i].openTime / DAY_MS + 1) * DAY_MS;
-        }
-        if (!VwapStep(&v, &c[i]) || !live) continue;
-        if (i == legendIdx) { *legendVal = v.val; haveLegend = TRUE; }
-        if (i < first) continue;
-        double yy = ((maxP - v.val) / range) * (double)g->ch;
-        if (yy < yLo) yy = yLo;
-        if (yy > yHi) yy = yHi;
-        s_volPts[k].x = g->left + (int)floor(((double)i - dStart + 0.5) * slot);
-        s_volPts[k].y = g->top + (int)yy;
-        if (++k == IND_BATCH) {
-            Polyline(hdc, s_volPts, k);
-            s_volPts[0] = s_volPts[k - 1];
-            k = 1;
-        }
-    }
-    if (k >= 2) Polyline(hdc, s_volPts, k);
-    return haveLegend;
-}
-
-// A dashed horizontal line over [x0, x1) on row y (phase 27: today's high and
-// low). Not a PS_DASH pen: the line fades with dispIndF, and a pen cannot
-// change color per frame without being recreated. The dashes go to
-// PolyPolyline in batches, with DC_PEN - no new GDI objects. The pattern is
-// anchored at anchor (the surface's left edge), not at x0, so the dashes stand
-// still when the session start slides during panning. GDI does not draw the
-// end point, so [a, b) is exactly dashOn pixels. The period is shared
-// (SESS_DASH_PERIOD); dashOn separates today's lines from yesterday's (phase 28).
-static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn) {
-    if (x0 < anchor) x0 = anchor;
-    int x = anchor + ((x0 - anchor) / SESS_DASH_PERIOD) * SESS_DASH_PERIOD;
-    int k = 0;
-    for (; x < x1; x += SESS_DASH_PERIOD) {
-        int a = (x < x0) ? x0 : x;
-        int b = x + dashOn;
-        if (b > x1) b = x1;
-        if (a >= b) continue;
-        s_volPts[k * 2].x     = a; s_volPts[k * 2].y     = y;
-        s_volPts[k * 2 + 1].x = b; s_volPts[k * 2 + 1].y = y;
-        s_volCnt[k++] = 2;
-        if (k == VOL_BATCH) { PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k); k = 0; }
-    }
-    if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
-}
-
-static void DrawChart(AppContext* ctx, HDC hdc, int W, int H) {
-    RECT rcAll = { 0, 0, W, H };
-    // The watermark sits IN the background, before grid, candles and axes -
-    // the chart floats cleanly over the text. BitBlt REPLACES FillRect, it
-    // does not come in addition.
-    EnsureWatermark(ctx, hdc, W, H);
-    if (ctx->wmValid) {
-        BitBlt(hdc, 0, 0, W, H, ctx->wmDC, 0, 0, SRCCOPY);
-    } else {
-        FillRect(hdc, &rcAll, ctx->brBg);   // fallback, the watermark is decoration
-    }
-
-    SetBkMode(hdc, TRANSPARENT);
-
-    // Called under the lock, so the health fields can be read directly.
-    ULONGLONG nowTick = GetTickCount64();
-    BOOL stale = (ctx->lastOkTick != 0) &&
-                 (nowTick - ctx->lastOkTick > STALE_AFTER);
-    int staleSecs = stale ? (int)((nowTick - ctx->lastOkTick) / 1000) : 0;
-
-    int n = ctx->candleCount;
-    if (n <= 0) {
-        // Desktop mode: no status on the wallpaper. The surface shows
-        // background and watermark until there are candles to draw. The
-        // message would be the only text left, and it says nothing a user
-        // who cannot click on the surface can do anything about.
-        if (g_desktopMode) return;
-
-        wchar_t msg[96];
-        SelectObject(hdc, ctx->hFontSmall);
-        SetTextColor(hdc, CLR_DIM);
-
-        // Without a connection it used to say "Loading data from Binance..."
-        // forever. The message lied about the state - now it says what is
-        // actually happening, and when we retry.
-        if (ctx->netFailures > 0) {
-            ULONGLONG nx = ctx->nextRetryTick;
-            int in_s = (nx > nowTick) ? (int)((nx - nowTick + 999) / 1000) : 0;
-            swprintf_s(msg, 96, L"No connection - retrying in %ds", in_s);
-        } else {
-            wcscpy_s(msg, 96, L"Loading data from Binance...");
-        }
-        DrawTextW(hdc, msg, -1, &rcAll, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-        return;
-    }
-
-    int vs, vc;
-    GetView(ctx, &vs, &vc);
-    if (vc <= 0) return;
-
-    // --- Header: price + change over the VISIBLE view ---
-    double first = ctx->candles[vs].open;
-    double last  = ctx->candles[vs + vc - 1].close;
-    double chg   = (first > 0.0) ? ((last - first) / first) * 100.0 : 0.0;
-    COLORREF chgClr = (chg >= 0.0) ? CLR_UP : CLR_DOWN;
-
-    wchar_t span[24];
-    FormatSpan(vc, ctx->intervalMs, span, 24);
-
-    wchar_t buf[64];
-    ChartRect g = ChartGeometry(W, H);
-
-    // --- Header layout, measured ---
-    // Previously the price and the percentage shared ONE rectangle, left- and
-    // right-aligned. On a narrow panel they then meet in the middle and are
-    // drawn on top of each other - DrawTextW clips to the rectangle, not to
-    // the neighboring text. Now each text is measured on the fully formatted
-    // string in its own font (bug #5), and row by row the right bound of the
-    // left-aligned text is compared with the left bound of the right-aligned.
-    //
-    // Row 1 (y 10-30): price on the left, percentage and button row on the
-    // right. Row 2 (y 28-42): the symbol line on the left. On the right there
-    // are not the buttons (they end at y = 24), but the price axis's top
-    // label, which sits at y = top +- 8 from x = right + AXIS_LBL_GAP.
-    // The metadata overlay (phase 14). Price, percentage and symbol line are
-    // the layer that is read foveally: the user has to stop and decode
-    // numbers. On the desktop they compete with icons and folders, and the
-    // surface is meant to be read peripherally. The whole block is therefore
-    // idle in desktop mode.
-    if (!g_desktopMode) {
-        RECT strip;
-        ButtonStrip(W, &strip);
-        int btnLeft = strip.left;          // X_left_bound for the button row
-
-        // Row 1, left: the price. The rectangle ends at the button row, so even
-        // a price that does not fit is never drawn under the buttons.
-        SelectObject(hdc, ctx->hFontBig);
-        SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
-        swprintf_s(buf, 64, L"$%.2f", last);
-        int lenPrice = (int)wcslen(buf);
-        SIZE szPrice = { 0, 0 };
-        GetTextExtentPoint32W(hdc, buf, lenPrice, &szPrice);
-        int priceRight = PAD_L + szPrice.cx;   // X_right_bound
-        RECT rcPrice = { PAD_L, 10, btnLeft - HDR_GAP, 30 };
-        DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-        // Row 1, right: the percentage in three steps. Full with span, then
-        // without span, then hidden. Never clipped in the middle of a number -
-        // "+0.5" where it says "+0.50%" is a wrong value, not a shorter one.
-        SelectObject(hdc, ctx->hFontSmall);
-        int pctRight = btnLeft - HDR_GAP;
-        wchar_t pctFull[48], pctShort[24];
-        swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
-        swprintf_s(pctShort, 24, L"%+.2f%%", chg);
-        int lenFull = (int)wcslen(pctFull), lenShort = (int)wcslen(pctShort);
-        SIZE szFull = { 0, 0 }, szShort = { 0, 0 };
-        GetTextExtentPoint32W(hdc, pctFull, lenFull, &szFull);
-
-        // The short form is measured only when the full one did not fit. Each
-        // GetTextExtentPoint32W is ~20 us, and above the minimum width the full
-        // one fits with a good margin - measured at 400 px: ~115 px of air to
-        // the price.
-        const wchar_t* pct = NULL;
-        int lenPct = 0;
-        if (HeaderFits(priceRight, pctRight - szFull.cx)) {
-            pct = pctFull;  lenPct = lenFull;
-        } else {
-            GetTextExtentPoint32W(hdc, pctShort, lenShort, &szShort);
-            if (HeaderFits(priceRight, pctRight - szShort.cx)) {
-                pct = pctShort; lenPct = lenShort;
-            }
-        }
-        if (pct) {
-            SetTextColor(hdc, chgClr);
-            RECT rcPct = { priceRight + HDR_GAP, 10, pctRight, 30 };
-            DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-        }
-
-        // Row 2: the toolbar (phase 22) sits where the symbol line used to,
-        // and carries symbol and interval itself. It is drawn from PaintPopup
-        // - also when the buffer is empty. All that is left here is the
-        // offline text, which reads the health fields under the lock: to the
-        // right of the last pill, and only when the WHOLE text fits before the
-        // price axis's label. Same rule as the percentage: a truncated seconds
-        // count is a wrong number. Dimmed price, the tray tip and the icon
-        // carry the state at any width.
-        if (stale) {
-            RECT tb[TBAR_COUNT];
-            int tbN = ToolbarLayout(W, tb);
-            int subLeft  = (tbN > 0) ? tb[tbN - 1].right + HDR_GAP : PAD_L;
-            int subLimit = HeaderRow2Limit(W);
-            swprintf_s(buf, 64, L"offline %ds", staleSecs);
-            int lenSub = (int)wcslen(buf);
-            SIZE szSub = { 0, 0 };
-            GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
-            if (subLeft + szSub.cx <= subLimit) {
-                SetTextColor(hdc, CLR_DIM);
-                RECT rcSub = { subLeft, TBAR_TOP, subLimit, TBAR_TOP + TBAR_H };
-                DrawTextW(hdc, buf, lenSub, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            }
-        }
-    }
-
-    // --- Chart geometry ---
-    int left = g.left, top = g.top, right = g.right, bottom = g.bottom;
-    int cw = g.cw, ch = g.ch;
-    int edge = g.edge;   // the axis edge; right is where the candles end
-    if (cw <= 0 || ch <= 0) return;
-
-    // Called under the lock, so frontShift can be read directly.
-    ApplyFrontShift(ctx);
-    if (!ctx->dispValid) SyncDisp(ctx);
-
-    // The drawing reads the DISPLAY. The target (vs, vc) is used only for the
-    // span text in the header and to work out what the display should ease
-    // TOWARDS - and the latter happens in WM_TIMER, not here.
-    double dStart = ctx->dispStart;
-    double dCount = ctx->dispCount;
-    if (dCount < 1.0) dCount = 1.0;
-
-    double minP = ctx->dispMin, maxP = ctx->dispMax;
-    double range = maxP - minP;
-    if (range < 1e-9) range = 1.0;
-
-    // --- Clipping to the chart surface ---
-    // With dStart = 142.7 there are half candles at both edges, and in the
-    // middle of the Y easing wicks lie above maxP and below minP. Grid and
-    // candles are therefore drawn inside a clip region bounded to rcChart,
-    // and nothing else: the axis texts, the stamp and the header lie outside
-    // the surface and are drawn after SelectClipRgn(NULL).
-    //
-    // The right edge is EXCLUSIVE: column x = edge belongs to the axis margin,
-    // and the grid ends at edge - 1. With edge + 1 here we measured candle
-    // pixels in that column in 21 of 240 frames during panning, maximized
-    // (phase 6).
-    //
-    // The clip goes to edge, not to right: the candles stay inside right by
-    // themselves (slot is computed from cw), while the grid and the last-price
-    // line must cross the air gap and reach all the way to the axis (phase 15).
-    //
-    // The bottom is INCLUSIVE (bottom + 1): grid line i = 4 lies at
-    // y = bottom, and so does the wick of the candle with the lowest price. A
-    // [top, bottom) clip would erase the bottom line.
-    RECT rcChart = { left, top, edge, bottom + 1 };
-    IntersectClipRect(hdc, rcChart.left, rcChart.top, rcChart.right, rcChart.bottom);
-
-    // --- Grid ---
-    // Edge to edge puts line i = 0 at y = 0 and i = 4 at y = H - 1. That is a
-    // 1 px frame around the whole screen - the very interference desktop mode
-    // is supposed to be free of. The three inner lines carry the spatial
-    // frame of reference alone.
-    HPEN hOldPen = (HPEN)SelectObject(hdc, ctx->penGrid);
-    int gi0 = g_desktopMode ? 1 : 0, gi1 = g_desktopMode ? 3 : 4;
-    for (int i = gi0; i <= gi1; ++i) {
-        int y = top + (ch * i) / 4;
-        MoveToEx(hdc, left, y, NULL);
-        LineTo(hdc, edge, y);
-    }
-    SelectObject(hdc, hOldPen);
-
-    // --- Candlesticks ---
-    double slot = (double)cw / dCount;
-    int bodyW = (int)(slot * 0.62);
-    if (bodyW < 1)  bodyW = 1;
-    if (bodyW > 18) bodyW = 18;   // prevents chunky candles at full zoom-in
-
-    // The loop still runs over VISIBLE candles, not over the whole history:
-    // i1 - i0 is dCount + 1 rounded. The performance characteristics from
-    // phase 1 stand.
-    int i0 = (int)floor(dStart);
-    int i1 = (int)ceil(dStart + dCount);
-    if (i0 < 0) i0 = 0;
-    if (i1 > n) i1 = n;
-
-    // --- Volume bars (phase 21) ---
-    // Behind the candles, in the bottom VOL_FRAC of the surface, inside the
-    // same clip. The scale is dispVolMax - the DISPLAY, which is eased in
-    // WM_TIMER - not the target, otherwise the bars jump while the candles
-    // glide. The direction is the candle's own (close vs open), the same rule
-    // as the candle color and a different one from the last-price line's
-    // (see there). The bottom row is y = bottom, inclusive, as for wicks and
-    // grid line 4 (pitfall 33); FillRect is exclusive at the bottom, hence
-    // bottom + 1. No geometry or hit-test code is touched: the bars are an
-    // overlay in the candles' own surface.
-    //
-    // One PolyPolygon per color and batch of VOL_BATCH bars, with NULL_PEN:
-    // the polygon fill leaves out the right and bottom edges like Rectangle,
-    // so the corners [x0, x1) x [bottom + 1 - h, bottom + 1) fill exactly the
-    // same pixels FillRect would have.
-    //
-    // WINDING, not ALTERNATE: with more candles than pixels (vc > cw) slot is
-    // below 1, bodyW is clamped to 1, and neighboring candles land on the
-    // same cx. Two identical rectangles in the same batch CANCEL each other
-    // under ALTERNATE (even/odd), so the bar disappears. FillRect overdrew;
-    // polygon fill counts edges. With WINDING and the same winding direction
-    // on all the rectangles they add up, and the union - the tallest -
-    // remains. Measured in the probe: two identical rectangles give 0 pixels
-    // under ALTERNATE and w x h under WINDING.
-    //
-    // dispVolF (phase 22) is the VOL toggle's display, 0..1: the bars sink
-    // into the bottom when switched off, and rise again. At 1.0 the factor
-    // is exact, so the pixels are the same as before the toggle existed.
-    if (ctx->dispVolMax > 0.0 && ctx->dispVolF > 0.0) {
-        int bandH = (int)((double)ch * VOL_FRAC);
-        int oldFill = SetPolyFillMode(hdc, WINDING);
-        HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
-        for (int pass = 0; pass < 2; ++pass) {          // 0 = up, 1 = down
-            SelectObject(hdc, pass == 0 ? ctx->brVolUp : ctx->brVolDown);
-            int k = 0;
-            for (int i = i0; i < i1; ++i) {
-                const Candle* c = &ctx->candles[i];
-                if ((c->close >= c->open) != (pass == 0)) continue;
-                int h = (int)(c->volume / ctx->dispVolMax * (double)bandH * ctx->dispVolF + 0.5);
-                if (h <= 0) continue;
-                if (h > bandH) h = bandH;   // mid-easing a candle can lie above the scale
-                int cx = left + (int)(((double)i - dStart + 0.5) * slot);
-                int x0 = cx - bodyW / 2, x1 = x0 + bodyW;
-                int y0 = bottom + 1 - h, y1 = bottom + 1;
-                POINT* p = &s_volPts[k * 4];
-                p[0].x = x0; p[0].y = y0;
-                p[1].x = x1; p[1].y = y0;
-                p[2].x = x1; p[2].y = y1;
-                p[3].x = x0; p[3].y = y1;
-                s_volCnt[k++] = 4;
-                if (k == VOL_BATCH) { PolyPolygon(hdc, s_volPts, s_volCnt, k); k = 0; }
-            }
-            if (k > 0) PolyPolygon(hdc, s_volPts, s_volCnt, k);
-        }
-        SelectObject(hdc, oldPenV);
-        SetPolyFillMode(hdc, oldFill);
-    }
-
-    // --- Alert lines (phase 23) ---
-    // Behind the candles and above the bars, inside the same clip, from left
-    // to edge like the grid: a level is a reference, and the candles are what
-    // is read. Muted amber (CLR_ALERT_LINE), solid - dashed is the last price,
-    // and dotted is the crosshair. DC_PEN, so no new GDI objects. Drawn in
-    // both modes: on the desktop the line is a spatial reference like the
-    // grid, while the tag with the number exists only in the panel (phase 14).
-    // Outside [top, bottom] nothing is drawn, same rule as the last price.
-    {
-        int na = ctx->alertCount[ctx->symIdx];
-        if (na > 0) {
-            SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, CLR_ALERT_LINE);
-            for (int a = 0; a < na; ++a) {
-                int y = AlertY(ctx, &g, fabs(ctx->alerts[ctx->symIdx][a]));
-                if (y < top || y > bottom) continue;
-                MoveToEx(hdc, left, y, NULL);
-                LineTo(hdc, edge, y);
-            }
-        }
-    }
-
-    // --- Today's high and low (phase 27) ---
-    // Behind the candles, like the alert lines: a reference, not what is read.
-    // Two dashed, neutral lines at the highest high and lowest low of today's
-    // UTC day, from the day's first candle in to the axis - so the line also
-    // shows WHERE the day begins. If the view is in yesterday (the x lies to
-    // the right of the surface), nothing is drawn, and the same outside
-    // [top, bottom] - same rule as the last price and the alerts.
-    //
-    // Belongs to the indicator toggle (M, the MA pill, "Indicators" in the
-    // tray menu) and fades with it. So they are OFF on the desktop by
-    // default (phase 26), without a new key in the registry, and the toolbar
-    // - already full at the minimum width - needs no new pill.
-    //
-    // Yesterday's close, high and low (phase 28) are the same kind of
-    // reference and are drawn in the same block, from the same x: levels FOR
-    // TODAY, so the candles that made them get no line across them. Cooler
-    // color and its own pattern (see CLR_PREV). If yesterday is not complete
-    // in the buffer, they are not drawn. All five levels sit in a table in
-    // the axis column's rank order, so the collision rule, the tags and the
-    // legend's "struck" are one loop each.
-    // yLine is the rows that were actually drawn; the axis tags below read
-    // yLvl.
-    static const int LVL_DASH[LVL_COUNT] = { SESS_DASH_ON, SESS_DASH_ON,
-                                             PREV_DASH_CLOSE, PREV_DASH_HL, PREV_DASH_HL };
-    int    indT = (int)(ctx->dispIndF * 255.0 + 0.5);
-    double lvlP[LVL_COUNT] = { 0.0, 0.0, 0.0, 0.0, 0.0 };
-    BOOL   lvlOn[LVL_COUNT] = { FALSE, FALSE, FALSE, FALSE, FALSE };
-    int    yLvl[LVL_COUNT];    // the axis tags; the collision rule can strike them
-    int    yLine[LVL_COUNT];   // the lines that were drawn
-    for (int q = 0; q < LVL_COUNT; ++q) { yLvl[q] = INT_MIN; yLine[q] = INT_MIN; }
-    int    lvlXs = left;       // where the level lines begin (the labels, phase 29)
-#ifdef TICKER_PROBE
-    LARGE_INTEGER sessQ0, sessQ1, sessQf, prevQ0, prevQ1;
-    QueryPerformanceCounter(&sessQ0);
-    prevQ0 = sessQ0; prevQ1 = sessQ0;
-#endif
-    if (indT > 0) {
-        BOOL sessFull = FALSE;
-        int  sessS = SessionStart(ctx->candles, n, ctx->intervalMs, ctx->histDone, &sessFull);
-        int  xs = (sessS >= 0) ? left + (int)floor(((double)sessS - dStart) * slot) : edge;
-        if (sessS >= 0 && sessFull && xs < edge) {
-            SessionHiLo(ctx->candles, sessS, n, &lvlP[0], &lvlP[1]);
-            lvlOn[0] = lvlOn[1] = TRUE;
-#ifdef TICKER_PROBE
-            QueryPerformanceCounter(&prevQ0);
-#endif
-            int  prevE = -1;
-            BOOL prevFull = FALSE;
-            int  prevS = PrevSession(ctx->candles, n, ctx->intervalMs, ctx->histDone, &prevE, &prevFull);
-            if (prevS >= 0 && prevFull) {
-                lvlP[2] = ctx->candles[prevE - 1].close;
-                SessionHiLo(ctx->candles, prevS, prevE, &lvlP[3], &lvlP[4]);
-                lvlOn[2] = lvlOn[3] = lvlOn[4] = TRUE;
-            }
-#ifdef TICKER_PROBE
-            QueryPerformanceCounter(&prevQ1);
-#endif
-            lvlXs = (xs > left) ? xs : left;
-            SelectObject(hdc, GetStockObject(DC_PEN));
-            for (int q = 0; q < LVL_COUNT; ++q) {
-                if (!lvlOn[q]) continue;
-                double yy = ((maxP - lvlP[q]) / range) * (double)ch;
-                if (yy < 0.0 || yy > (double)ch) continue;
-                int y = top + (int)yy;
-                if (y < top || y > bottom) continue;
-                SetDCPenColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
-                DrawDashLine(hdc, xs, edge, y, left, LVL_DASH[q]);
-                yLvl[q] = y;
-                yLine[q] = y;
-            }
-        }
-    }
-#ifdef TICKER_PROBE
-    QueryPerformanceCounter(&sessQ1);
-    QueryPerformanceFrequency(&sessQf);
-    g_probeSessUs = (sessQ1.QuadPart - sessQ0.QuadPart) * 1000000LL / sessQf.QuadPart;
-    // Field 56: the computation of yesterday (binary search + one pass over
-    // the day). The three lines are in field 45 together with today's.
-    g_probePrevUs = (prevQ1.QuadPart - prevQ0.QuadPart) * 1000000LL / sessQf.QuadPart;
-#endif
-
-    // The candles are drawn with the system DC_PEN and DC_BRUSH, colored per
-    // candle, instead of four dedicated pens and brushes. That is four GDI
-    // objects fewer; the persistent buffer takes two, so the count at rest
-    // goes down by two. Solid 1 px in both cases, so the pixels are the same.
-    // The color is set only when it changes.
-    SelectObject(hdc, GetStockObject(DC_PEN));
-    SelectObject(hdc, GetStockObject(DC_BRUSH));
-    int curUp = -1;
-    for (int i = i0; i < i1; ++i) {
-        Candle* c = &ctx->candles[i];
-        int up = (c->close >= c->open);
-
-        int cx     = left + (int)(((double)i - dStart + 0.5) * slot);
-        int yHigh  = top + (int)(((maxP - c->high)  / range) * ch);
-        int yLow   = top + (int)(((maxP - c->low)   / range) * ch);
-        int yOpen  = top + (int)(((maxP - c->open)  / range) * ch);
-        int yClose = top + (int)(((maxP - c->close) / range) * ch);
-
-        if (up != curUp) {
-            SetDCPenColor(hdc,   up ? CLR_UP : CLR_DOWN);
-            SetDCBrushColor(hdc, up ? CLR_UP : CLR_DOWN);
-            curUp = up;
-        }
-
-        // Wick
-        MoveToEx(hdc, cx, yHigh, NULL);
-        LineTo(hdc, cx, yLow);
-
-        // Body
-        int yTop = (yOpen < yClose) ? yOpen : yClose;
-        int yBot = (yOpen < yClose) ? yClose : yOpen;
-        if (yBot - yTop < 1) yBot = yTop + 1; // doji -> at least 1px
-        Rectangle(hdc, cx - bodyW / 2, yTop, cx - bodyW / 2 + bodyW, yBot);
-    }
-
-    // --- Moving averages (phase 25) ---
-    // ABOVE the candles, inside the same clip: a 1 px muted line behind
-    // saturated candle bodies would vanish exactly where it crosses the price,
-    // which is where it is read. Below the last-price line, the crosshair and
-    // the overlay. Both modes - a curve is not text (phase 14). The price axis
-    // does NOT see the averages: PriceRange is untouched, and a line outside
-    // the view's price range is clipped, as in TradingView. Otherwise a
-    // zoomed-in view would be squeezed by an average lying far away.
-    //
-    // dispIndF (0..1) fades the color towards CLR_BG - the MA toggle. DC_PEN,
-    // so no new GDI objects. EMA last: the long line lies on top where the
-    // two cross.
-    //
-    // The legend (below) shows the value at the candle under the crosshair,
-    // otherwise at the last visible candle. Same condition the crosshair uses.
-    //
-    // VWAP (phase 27) is the third line in the same block, and on top: gold
-    // over blue and purple. indVal[2] is the value at the same candle as the
-    // other two.
-    double indVal[3] = { 0.0, 0.0, 0.0 };
-    BOOL   indOk[3]  = { FALSE, FALSE, FALSE };
-#ifdef TICKER_PROBE
-    LARGE_INTEGER indQ0;
-    QueryPerformanceCounter(&indQ0);
-    if (indT <= 0) g_probeIndUs = 0;
-#endif
-    if (indT > 0) {
-        int legendIdx = i1 - 1;
-        if (ctx->hoverIdx >= 0 && ctx->hoverIdx < n) {
-            double hr = (double)ctx->hoverIdx - dStart;
-            if (hr >= 0.0 && hr < dCount) legendIdx = ctx->hoverIdx;
-        }
-        SelectObject(hdc, GetStockObject(DC_PEN));
-        indOk[0] = DrawIndicator(hdc, ctx, &g, IND_SMA_PERIOD, FALSE,
-                                 Blend(CLR_BG, CLR_SMA, indT), dStart, slot, i0, i1,
-                                 maxP, range, legendIdx, &indVal[0]);
-        indOk[1] = DrawIndicator(hdc, ctx, &g, IND_EMA_PERIOD, TRUE,
-                                 Blend(CLR_BG, CLR_EMA, indT), dStart, slot, i0, i1,
-                                 maxP, range, legendIdx, &indVal[1]);
-#ifdef TICKER_PROBE
-        {
-            LARGE_INTEGER indQ1, indQf;
-            QueryPerformanceCounter(&indQ1);
-            QueryPerformanceFrequency(&indQf);
-            g_probeIndUs = (indQ1.QuadPart - indQ0.QuadPart) * 1000000LL / indQf.QuadPart;
-            QueryPerformanceCounter(&sessQ0);
-        }
-#endif
-        indOk[2] = DrawVwap(hdc, ctx, &g, Blend(CLR_BG, CLR_VWAP, indT),
-                            dStart, slot, i0, i1, maxP, range, legendIdx, &indVal[2]);
-#ifdef TICKER_PROBE
-        QueryPerformanceCounter(&sessQ1);
-        g_probeSessUs += (sessQ1.QuadPart - sessQ0.QuadPart) * 1000000LL / sessQf.QuadPart;
-#endif
-    }
-
-    // The clipping MUST be removed for the axis texts - they lie in the
-    // margin on the right.
-    SelectClipRgn(hdc, NULL);
-
-    SelectObject(hdc, GetStockObject(BLACK_PEN));
-    SelectObject(hdc, GetStockObject(NULL_BRUSH));
-
-    // --- Price labels ---
-    // A separate loop after the clipping, not in the grid loop: there they
-    // would have been clipped away along with everything else outside rcChart.
-    // Omega_y-axis: x in [edge + AXIS_LBL_GAP, W - AXIS_PAD_R).
-    int axL = edge + AXIS_LBL_GAP, axR = W - AXIS_PAD_R;
-    SelectObject(hdc, ctx->hFontAxis);
-    SetTextColor(hdc, CLR_AXIS);
-    // The stamp for the last price lies on top of the label at the same
-    // height (see below). Both are 16 px tall, and with 11 px digits a label
-    // less than 16 px away was half covered, with a truncated number visible
-    // underneath. A label that would collide is therefore not drawn. Same
-    // rule and same yLast as the stamp.
-    // Phase 14: no measured values on the desktop. The column does not exist
-    // there either - axL lies outside the surface when the geometry runs
-    // edge to edge.
-    int yPill = INT_MIN;
-    int yCross = INT_MIN;   // the crosshair tag's row when it is to be drawn (phase 29)
-    if (!g_desktopMode) {
-        {
-            double lp = ctx->candles[n - 1].close;
-            int yl = top + (int)(((maxP - lp) / range) * ch);
-            if (yl >= top && yl <= bottom) yPill = yl;
-        }
-        // The alert tags (phase 23) and the ghost tag under the pointer lie in
-        // the same column and are equally tall, so they get the same collision
-        // rule as the stamp: a label less than 16 px away is not drawn.
-        int yTag[ALERT_MAX + 2], nTag = 0;
-        int sA = ctx->symIdx, nA = ctx->alertCount[sA];
-        // The crosshair's axis tag (phase 29) is the only tag that moves with
-        // the hand, and it had no collision rule: when the pointer was 1-15 px
-        // from a label, a strip of the number stuck out beneath it. The rank
-        // is the stamp, then the crosshair tag, then the rest. Same visibility
-        // test and same clamping as the crosshair block at the bottom; within
-        // 16 px of the stamp the crosshair tag is not drawn (the last price is
-        // the number that must never be cut), and then nothing yields to it
-        // either.
-        if (ctx->hoverIdx >= 0 && ctx->hoverIdx < n) {
-            double hrelT = (double)ctx->hoverIdx - dStart;
-            if (hrelT >= 0.0 && hrelT < dCount) {
-                int hyT = ctx->hoverY;
-                if (hyT < top) hyT = top;
-                if (hyT > bottom) hyT = bottom;
-                if (yPill == INT_MIN || abs(hyT - yPill) >= 16) yCross = hyT;
-            }
-        }
-        if (yCross != INT_MIN) yTag[nTag++] = yCross;
-        for (int a = 0; a < nA; ++a) {
-            int y = AlertY(ctx, &g, fabs(ctx->alerts[sA][a]));
-            if (y >= top && y <= bottom) yTag[nTag++] = y;
-        }
-        BOOL ghost = (ctx->axisHotY >= top && ctx->axisHotY <= bottom &&
-                      (ctx->alertHot < 0 || ctx->alertHot >= nA));
-        if (ghost) yTag[nTag++] = ctx->axisHotY;
-
-        // The tags for today's high and low (phase 27) sit in the same column
-        // and rank lowest: a tag under 16 px from the stamp, an alert, the
-        // ghost tag or the other session tag is not drawn (high wins over
-        // low). The grid labels give way to them as to the others. Decided
-        // HERE, before the labels, and drawn after the alerts.
-        // Yesterday's tags (phase 28) sit last in the same table: a tag gives
-        // way to the stamp, the alerts, the ghost tag and to every level
-        // ahead of it in rank that was itself kept.
-        for (int q = 0; q < LVL_COUNT; ++q) {
-            if (yLvl[q] == INT_MIN) continue;
-            BOOL hide = (yPill != INT_MIN && abs(yLvl[q] - yPill) < 16);
-            for (int t = 0; t < nTag && !hide; ++t) if (abs(yLvl[q] - yTag[t]) < 16) hide = TRUE;
-            for (int p = 0; p < q && !hide; ++p)
-                if (yLvl[p] != INT_MIN && abs(yLvl[q] - yLvl[p]) < 16) hide = TRUE;
-            if (hide) yLvl[q] = INT_MIN;
-        }
-
-        for (int i = 0; i <= 4; ++i) {
-            int y = top + (ch * i) / 4;
-            if (yPill != INT_MIN && abs(y - yPill) < 16) continue;
-            BOOL hidden = FALSE;
-            for (int t = 0; t < nTag; ++t) if (abs(y - yTag[t]) < 16) hidden = TRUE;
-            for (int q = 0; q < LVL_COUNT; ++q) if (yLvl[q] != INT_MIN && abs(y - yLvl[q]) < 16) hidden = TRUE;
-            if (hidden) continue;
-            double p = maxP - (range * i) / 4.0;
-            swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
-            RECT rcLbl = { axL, y - 8, axR, y + 8 };
-            DrawTextW(hdc, buf, -1, &rcLbl, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        }
-
-        // --- Alert tags on the price axis (phase 23) ---
-        // Same surface as the stamp and the crosshair's label: [edge + 1,
-        // axR + 3) x [y - 8, y + 8). Amber surface with dark text. The tag
-        // the pointer is on (alertHot) turns red like the close button: a
-        // click there REMOVES the alert, and the color says so before the
-        // click. The stamp for the last price is drawn afterwards and sits on
-        // top - if the two are at the same height, the alert is about to fire.
-        for (int a = 0; a < nA; ++a) {
-            double lvl = fabs(ctx->alerts[sA][a]);
-            int y = AlertY(ctx, &g, lvl);
-            if (y < top || y > bottom) continue;
-            BOOL hot = (a == ctx->alertHot && ctx->alerts[sA][a] != ctx->alertFresh);
-            RECT rcA = { edge + 1, y - 8, axR + 3, y + 8 };
-            SetDCBrushColor(hdc, hot ? CLR_CLOSEHOT : CLR_ALERT);
-            FillRect(hdc, &rcA, (HBRUSH)GetStockObject(DC_BRUSH));
-            // If the stamp or a tag drawn later lies on top of this one, only
-            // a strip of the surface sticks out - and with it a number cut
-            // lengthwise. Same rule as the labels: a clipped number is worse
-            // than no number (seen in PrintWindow: "81034.00" halfway under
-            // the stamp). The surface is drawn, the text is not.
-            BOOL covered = (yPill != INT_MIN && abs(y - yPill) < 16) ||
-                           (yCross != INT_MIN && abs(y - yCross) < 16);
-            for (int b = a + 1; b < nA && !covered; ++b) {
-                int yb = AlertY(ctx, &g, fabs(ctx->alerts[sA][b]));
-                if (yb >= top && yb <= bottom && abs(y - yb) < 16) covered = TRUE;
-            }
-            if (covered) continue;
-            FormatTagPrice(hdc, lvl, range, axR - axL, buf, 64);
-            SetTextColor(hdc, hot ? CLR_BTNHOT : CLR_BG);
-            RECT rcAT = { axL, y - 8, axR, y + 8 };
-            DrawTextW(hdc, buf, -1, &rcAT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        }
-
-        // --- Tags for today's high and low (phase 27) ---
-        // Same surface as the other tags, but muted: the box color against
-        // the background and gray text, no frame and no saturated surface - a
-        // tag you can click is amber, and this is not one. The surface sets
-        // the number apart from the grid labels, which have the same font and
-        // almost the same color. Faded with the lines. Yesterday's tags
-        // (phase 28) are the same, with the number in CLR_PREV like the line.
-        for (int q = 0; q < LVL_COUNT; ++q) {
-            if (yLvl[q] == INT_MIN) continue;
-            int y = yLvl[q];
-            RECT rcS = { edge + 1, y - 8, axR + 3, y + 8 };
-            SetDCBrushColor(hdc, Blend(CLR_BG, CLR_BOX, indT));
-            FillRect(hdc, &rcS, (HBRUSH)GetStockObject(DC_BRUSH));
-            FormatTagPrice(hdc, lvlP[q], range, axR - axL, buf, 64);
-            SetTextColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
-            RECT rcST = { axL, y - 8, axR, y + 8 };
-            DrawTextW(hdc, buf, -1, &rcST, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        }
-
-        // The ghost tag: the pointer is in the price column on an empty spot,
-        // and a click SETS an alert here. Framed, not filled, with the line
-        // across the chart, so the user sees which candles the level cuts
-        // before the click. If all slots are used, it is gray, and the click
-        // does nothing. The price is the ROUNDED one - the one actually set.
-        if (ghost) {
-            int y = ctx->axisHotY;
-            BOOL full = (nA >= ALERT_MAX);
-            COLORREF gc = full ? CLR_DIM : CLR_ALERT;
-            SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, full ? CLR_CROSS : CLR_ALERT_LINE);
-            MoveToEx(hdc, left, y, NULL);
-            LineTo(hdc, edge, y);
-            RECT rcG = { edge + 1, y - 8, axR + 3, y + 8 };
-            FillRect(hdc, &rcG, ctx->brBox);
-            SetDCBrushColor(hdc, gc);
-            FrameRect(hdc, &rcG, (HBRUSH)GetStockObject(DC_BRUSH));
-            FormatTagPrice(hdc, AlertPriceAtY(ctx, &g, y), range, axR - axL, buf, 64);
-            SetTextColor(hdc, gc);
-            RECT rcGT = { axL, y - 8, axR, y + 8 };
-            DrawTextW(hdc, buf, -1, &rcGT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        }
-        SetTextColor(hdc, CLR_AXIS);   // the time axis below inherits the color
-    }
-
-    // --- Afterglow (phase 23) ---
-    // An alert that has fired is REMOVED; left behind is a line in full amber
-    // that fades out over a couple of seconds (alertFlashF, 1..0, eased by the
-    // clock), so whoever looks at the panel sees WHERE it went off. Blended
-    // against CLR_BG like everything else here - opaque over the background
-    // is identical to alpha. Over the candles, not behind: this is a signal,
-    // not a reference. Both modes.
-    if (ctx->alertFlashF > 0.0) {
-        int y = AlertY(ctx, &g, ctx->alertFlashLevel);
-        if (y >= top && y <= bottom) {
-            int t = (int)(ctx->alertFlashF * 255.0 + 0.5);
-            SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, Blend(CLR_BG, CLR_ALERT, t));
-            MoveToEx(hdc, left, y, NULL);
-            LineTo(hdc, edge, y);
-        }
-    }
-
-    // --- Time axis (Omega_x-axis) ---
-    // Text only, no axis line. The labels sit under the candle's midpoint in
-    // the band [bottom + 2, H - 1], and never outside [left, right]: under
-    // the right column lie the price axis's bottom label and the stamp.
-    //
-    // Which candles get a label is anchored in TIME, not in the index i0.
-    // Relative to i0 the labels would jump to new candles in every frame of
-    // a pan; relative to the absolute index they would jump one candle every
-    // time a candle is dropped at the front when the buffer is full.
-    // openTime / intervalMs is stable through both.
-    //
-    // O(number of labels): one modulo to find the first label, then steps
-    // of S straight in candles[]. No allocation.
-    if (i0 < i1 && !g_desktopMode) {
-        wchar_t tl[24];
-        FormatCandleTime(ctx->candles[i0].openTime,
-                         ctx->intervalMs, tl, 24);
-        int tlLen = (int)wcslen(tl);
-        SIZE tsz = { 0, 0 };
-        GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // the axis font is selected
-        int minDx = tsz.cx + TIME_LBL_GAP;
-        if (minDx < TIME_DX_MIN) minDx = TIME_DX_MIN;
-        long long iv = (ctx->intervalMs > 0) ? ctx->intervalMs : 60000LL;
-        int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
-
-        // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
-        // here and not on 02, 08 ... (UTC + 2 in summer). The offset is read
-        // at i0; a DST change in the middle of the view only moves the
-        // labels one hour.
-        long long t0 = ctx->candles[i0].openTime, tzMs = 0;
-        {
-            ULONGLONG ft = (ULONGLONG)(t0 / 1000) * 10000000ULL + 116444736000000000ULL;
-            FILETIME fu, fl;
-            fu.dwLowDateTime  = (DWORD)(ft & 0xFFFFFFFFULL);
-            fu.dwHighDateTime = (DWORD)(ft >> 32);
-            if (FileTimeToLocalFileTime(&fu, &fl)) {
-                ULONGLONG lt = ((ULONGLONG)fl.dwHighDateTime << 32) | fl.dwLowDateTime;
-                tzMs = ((long long)lt - (long long)ft) / 10000LL;
-            }
-        }
-        long long slotNo = (t0 + tzMs) / iv;
-        int rem = (int)(slotNo % step);
-        int k = i0 + ((rem == 0) ? 0 : (step - rem));
-
-        UINT oldAlign = SetTextAlign(hdc, TA_CENTER | TA_TOP);
-        for (; k < i1; k += step) {
-            int x = left + (int)(((double)k - dStart + 0.5) * slot);
-            if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-            FormatCandleTime(ctx->candles[k].openTime, ctx->intervalMs, tl, 24);
-            ExtTextOutW(hdc, x, bottom + 2, 0, NULL, tl, (int)wcslen(tl), NULL);
-        }
-        SetTextAlign(hdc, oldAlign);
-    }
-
-    // --- Legend for the moving averages (phase 25) ---
-    // Top left of the chart surface, in the lines' own colors: the color
-    // is what says which line is which, and the number is the average at
-    // the candle under the crosshair (no crosshair: the last visible
-    // candle). An average that is not defined there - fewer than period
-    // candles before it - gets a dash. The axis font, which is selected
-    // here; transparent over the candles, like the watermark under them.
-    // Not on the desktop (phase 14: no readings there), and only when the
-    // WHOLE text fits in the surface - same rule as the percentage in the
-    // header: a clipped number is a wrong number.
-#ifdef TICKER_PROBE
-    if (!(indT > 0 && !g_desktopMode)) g_probeLblMask = 0;
-#endif
-    if (indT > 0 && !g_desktopMode) {
-        RECT rcLegend = { 0, 0, 0, 0 };   // empty when the legend did not fit
-        wchar_t lg[96];
-        int len1, lenAll;
-        if (indOk[0]) swprintf_s(lg, 96, L"SMA %d  %.2f    ", IND_SMA_PERIOD, indVal[0]);
-        else          swprintf_s(lg, 96, L"SMA %d  -    ", IND_SMA_PERIOD);
-        len1 = (int)wcslen(lg);
-        if (indOk[1]) swprintf_s(lg + len1, 96 - len1, L"EMA %d  %.2f", IND_EMA_PERIOD, indVal[1]);
-        else          swprintf_s(lg + len1, 96 - len1, L"EMA %d  -", IND_EMA_PERIOD);
-        lenAll = (int)wcslen(lg);
-        // VWAP (phase 27) is the third item. If all three do not fit, the
-        // VWAP item drops out and the two averages stand as before; if those
-        // do not fit either, nothing is shown. Each item whole or not at all.
-        int len2 = lenAll;
-        if (indOk[2]) swprintf_s(lg + len2, 96 - len2, L"    VWAP  %.2f", indVal[2]);
-        else          swprintf_s(lg + len2, 96 - len2, L"    VWAP  -");
-        int len3 = (int)wcslen(lg);
-        SIZE szAll = { 0, 0 }, sz1 = { 0, 0 }, sz3 = { 0, 0 };
-        GetTextExtentPoint32W(hdc, lg, lenAll, &szAll);
-        GetTextExtentPoint32W(hdc, lg, len1, &sz1);
-        GetTextExtentPoint32W(hdc, lg, len3, &sz3);
-        int lx = left + 6, ly = top + 4;
-        if (lx + szAll.cx <= right - 6 && ly + szAll.cy <= bottom) {
-            // Today's high (phase 27) lies 8 % below the surface's top when
-            // today's top is the view's, and on a short panel that is in the
-            // middle of this row: the dashes ran right through the digits
-            // (seen in a capture at 560x300). Then - and only then - the text
-            // gets an opaque background, so the numbers stay whole and the
-            // line continues behind them.
-            BOOL struck = FALSE;
-            for (int q = 0; q < LVL_COUNT; ++q)
-                if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
-            if (struck) { SetBkColor(hdc, CLR_BG); SetBkMode(hdc, OPAQUE); }
-            SetTextColor(hdc, Blend(CLR_BG, CLR_SMA, indT));
-            ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
-            SetTextColor(hdc, Blend(CLR_BG, CLR_EMA, indT));
-            ExtTextOutW(hdc, lx + sz1.cx, ly, 0, NULL, lg + len1, lenAll - len1, NULL);
-            if (lx + sz3.cx <= right - 6) {
-                SetTextColor(hdc, Blend(CLR_BG, CLR_VWAP, indT));
-                ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
-            }
-            if (struck) SetBkMode(hdc, TRANSPARENT);
-            rcLegend.left = lx; rcLegend.top = ly;
-            rcLegend.right = lx + sz3.cx; rcLegend.bottom = ly + szAll.cy;
-        }
-
-        // --- Labels on the level lines (phase 29) ---
-        // Five horizontal lines without names had to be read from the dash
-        // pattern. The label sits at the line's LEFT end - by the axis are
-        // the newest candles, and the axis tag carries the number there -
-        // just above the line, below it when there is no room above. Trading
-        // jargon, like VWAP and O H L C elsewhere in the panel: high/low of
-        // day, previous day's close/high/low.
-        // HERE and not in the level block: that is drawn behind the candles,
-        // and text there would be painted over. The axis font (selected
-        // above), the line's color, faded.
-        // The text never touches the line's own row or the rows next to it,
-        // so the dash pattern stays clean. In rank: a label that would hit
-        // the legend or a label ahead of it in rank is not drawn - two
-        // levels four pixels apart get one label, not two on top of each
-        // other. Below 200 px of surface they all drop out.
-        static const wchar_t* const LVL_NAME[LVL_COUNT] = { L"HOD", L"LOD", L"PDC", L"PDH", L"PDL" };
-#ifdef TICKER_PROBE
-        LARGE_INTEGER lblQ0, lblQ1, lblQf;
-        QueryPerformanceCounter(&lblQ0);
-        g_probeLblMask = 0;
-#endif
-        if (right - left >= 200) {
-            RECT placed[LVL_COUNT + 1];
-            int  nPlaced = 0;
-            if (rcLegend.right > rcLegend.left) placed[nPlaced++] = rcLegend;
-            for (int q = 0; q < LVL_COUNT; ++q) {
-                if (yLine[q] == INT_MIN) continue;
-                SIZE szN = { 0, 0 };
-                GetTextExtentPoint32W(hdc, LVL_NAME[q], 3, &szN);
-                RECT rcN = { lvlXs + 4, yLine[q] - 2 - szN.cy, lvlXs + 4 + szN.cx, yLine[q] - 2 };
-                if (rcN.top < top) { rcN.top = yLine[q] + 3; rcN.bottom = rcN.top + szN.cy; }
-                if (rcN.bottom > bottom || rcN.right > right) continue;
-                BOOL hit = FALSE;
-                for (int t = 0; t < nPlaced && !hit; ++t) {
-                    RECT tmp;
-                    if (IntersectRect(&tmp, &rcN, &placed[t])) hit = TRUE;
-                }
-                if (hit) continue;
-                placed[nPlaced++] = rcN;
-                SetTextColor(hdc, Blend(CLR_BG, (q < 2) ? CLR_SESSION : CLR_PREV, indT));
-                ExtTextOutW(hdc, rcN.left, rcN.top, 0, NULL, LVL_NAME[q], 3, NULL);
-#ifdef TICKER_PROBE
-                g_probeLblMask |= (1 << q);
-#endif
-            }
-        }
-#ifdef TICKER_PROBE
-        QueryPerformanceCounter(&lblQ1);
-        QueryPerformanceFrequency(&lblQf);
-        g_probeLblUs = (lblQ1.QuadPart - lblQ0.QuadPart) * 1000000LL / lblQf.QuadPart;
-#endif
-    }
-
-    // --- Last price: dashed line + axis stamp ---
-    // Sits HERE on purpose: over the candles and the grid, under the
-    // crosshair and the overlay. And before the early return in the
-    // crosshair block below - without hover the line must still be drawn.
-    //
-    // The color follows the sign of the momentary change, dP = P_t - P_t-1,
-    // that is the last close against the previous one. That is a different
-    // rule from the candles' own (close against open in the SAME candle), so
-    // they can point different ways: a green candle that still lies below
-    // the previous close gives a red line. That is intended - the line
-    // answers "where are we against the previous close", not "how is this
-    // candle going".
-    {
-        const Candle* lastC = &ctx->candles[n - 1];
-        double lastP = lastC->close;
-        double prevP = (n >= 2) ? ctx->candles[n - 2].close : lastC->open;
-        BOOL   lastUp = (lastP >= prevP);
-
-        int yLast = top + (int)(((maxP - lastP) / range) * ch);
-
-        // Outside the visible price range nothing is drawn. A stamp clamped
-        // to the edge would place the price somewhere it is not.
-        if (yLast >= top && yLast <= bottom) {
-            int xLast = left + (int)(((double)(n - 1) - dStart + 0.5) * slot);
-            if (xLast < left)  xLast = left;
-            if (xLast > right) xLast = right;
-
-            // The line runs from the last candle all the way to the stamp
-            // (phase 15). Dashed over the data surface, SOLID over the gap:
-            // PS_DASH ends wherever the pattern happens to be, and at 1004 px
-            // width the end landed in an "off" interval - measured as a black
-            // hole against the stamp. The bridge over the gap is the one part
-            // that MUST hit, so it is drawn without a pattern.
-            //
-            // edge + 1 because LineTo does not draw the end point: without
-            // that one pixel the column x = edge stays empty, and the stamp
-            // only starts at edge + 1.
-            HPEN penLast = lastUp ? ctx->penLastUp : ctx->penLastDown;
-            HPEN hOld2 = (HPEN)SelectObject(hdc, penLast);
-            MoveToEx(hdc, xLast, yLast, NULL);
-            LineTo(hdc, right, yLast);
-
-            SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
-            MoveToEx(hdc, right, yLast, NULL);
-            LineTo(hdc, edge + 1, yLast);
-            SelectObject(hdc, hOld2);
-
-            // The axis stamp overwrites the grid label at this height, so
-            // that there are not two numbers on top of each other.
-            // The surface gets 3 px of air on each side of the text; the text
-            // itself stays inside axR.
-            //
-            // Phase 16: the stamp is drawn in BOTH modes. On the desktop it is
-            // the only text left - axis labels, time axis and header are
-            // still gone - and the height follows the surface instead of the
-            // panel's fixed 16 px.
-            {
-                int half = g_desktopMode ? DeskPillH(H) / 2 : 8;
-                if (g_desktopMode) EnsurePillFont(ctx, H);
-
-                RECT rcPill = { edge + 1, yLast - half, axR + 3, yLast + half };
-                SetDCBrushColor(hdc, lastUp ? CLR_UP : CLR_DOWN);
-                FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
-
-                // "Precise value text": two decimals where they fit, otherwise
-                // the same resolution as the axis. The width is measured on
-                // the fully formatted string - bug #5 again.
-                HFONT fPill = (g_desktopMode && ctx->hFontPill) ? ctx->hFontPill
-                                                                : ctx->hFontAxis;
-                SelectObject(hdc, fPill);
-                int pillDec = 2;
-                swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
-                SIZE psz = { 0, 0 };
-                int pillAvail = axR - axL;
-                if (GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &psz) &&
-                    psz.cx > pillAvail) {
-                    pillDec = PriceDecimals(range / 4.0);
-                    swprintf_s(buf, 64, L"%.*f", pillDec, lastP);
-                }
-
-                // Dark text on the saturated surface - CLR_TEXT would drown.
-                // The surface is layered with LWA_ALPHA 255, not a color key,
-                // so CLR_BG is a color here and not a hole to the wallpaper.
-                SetTextColor(hdc, CLR_BG);
-                RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
-                DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            }
-        }
-    }
-
-    // --- Crosshair + hover box ---
-    // Bound to the VISIBLE surface, not to the target view - the two come
-    // apart in the middle of an animation.
-#ifdef TICKER_PROBE
-    g_probeCrossTag = 0;
-#endif
-    if (ctx->hoverIdx < 0 || ctx->hoverIdx >= n) return;
-    double hrel = (double)ctx->hoverIdx - dStart;
-    if (hrel < 0.0 || hrel >= dCount) return;
-
-    const Candle* hc = &ctx->candles[ctx->hoverIdx];
-    int hx = left + (int)((hrel + 0.5) * slot);
-    int hy = ctx->hoverY;
-    if (hy < top) hy = top;
-    if (hy > bottom) hy = bottom;
-
-    HPEN hPrev = (HPEN)SelectObject(hdc, ctx->penCross);
-    MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, bottom);
-    // Same bridge as the last-price line: the horizontal reaches the axis,
-    // otherwise there would be a gap between the cross and its label.
-    MoveToEx(hdc, left, hy, NULL);     LineTo(hdc, edge, hy);
-    SelectObject(hdc, hPrev);
-
-    // Price label on the right axis where the pointer is. Not when it would
-    // partly cover the stamp (phase 29, see yCross above): the line is
-    // drawn, the tag is not.
-    if (yCross != INT_MIN) {
-        double hp = maxP - ((double)(hy - top) / (double)ch) * range;
-        swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
-        RECT rcTag = { edge + 1, hy - 8, axR + 3, hy + 8 };
-        FillRect(hdc, &rcTag, ctx->brBoxEdge);
-        SelectObject(hdc, ctx->hFontAxis);
-        SetTextColor(hdc, CLR_TEXT);
-        RECT rcTagTxt = { axL, hy - 8, axR, hy + 8 };
-        DrawTextW(hdc, buf, -1, &rcTagTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    }
-#ifdef TICKER_PROBE
-    g_probeCrossTag = (yCross != INT_MIN);
-#endif
-
-    // Hover box with time + OHLC. Back to the normal small font:
-    // LINE_H = 13 is measured on it, and the axis font is 15 px tall.
-    SelectObject(hdc, ctx->hFontSmall);
-    wchar_t tbuf[24];
-    FormatCandleTime(hc->openTime, ctx->intervalMs, tbuf, 24);
-
-    // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
-    // With the indicators on (phase 27) three more rows are added: SMA, EMA
-    // and VWAP at the candle under the crosshair - the same numbers the
-    // legend shows, since legendIdx IS hoverIdx when this block runs (same
-    // condition). The rows stay as long as the lines are visible (indT > 0)
-    // and fade with them, in the lines' own colors; an average that is not
-    // defined at the candle gets a dash, as in the legend.
-    const int indRows = (indT > 0) ? 3 : 0;
-    const int BOX_W = 104, BOX_H = 87 + indRows * 13, LINE_H = 13;
-    int bx = hx + 12;
-    if (bx + BOX_W > right) bx = hx - 12 - BOX_W;   // flip to the left at the edge
-    if (bx < left) bx = left;
-    int by = hy - BOX_H / 2;
-    if (by < top) by = top;
-    if (by + BOX_H > bottom) by = bottom - BOX_H;
-
-    RECT rcBox = { bx, by, bx + BOX_W, by + BOX_H };
-    FillRect(hdc, &rcBox, ctx->brBox);
-    FrameRect(hdc, &rcBox, ctx->brBoxEdge);
-
-    int ty = by + 4;
-    RECT rcL = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
-    SetTextColor(hdc, CLR_TEXT);
-    DrawTextW(hdc, tbuf, -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
-    const wchar_t* lbl[5] = { L"O", L"H", L"L", L"C", L"V" };
-    double val[5] = { hc->open, hc->high, hc->low, hc->close, hc->volume };
-    COLORREF cclr = (hc->close >= hc->open) ? CLR_UP : CLR_DOWN;
-
-    for (int i = 0; i < 5; ++i) {
-        ty += LINE_H;
-        RECT rcRow = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
-        SetTextColor(hdc, CLR_DIM);
-        DrawTextW(hdc, lbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        if (i == 4) FormatVolume(val[i], buf, 64);   // phase 21
-        else        swprintf_s(buf, 64, L"%.2f", val[i]);
-        SetTextColor(hdc, (i == 3) ? cclr : CLR_TEXT);
-        DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-    }
-
-    // The indicator rows (phase 27). The label in the line's color, the
-    // value in the text color - both faded against the box, not CLR_BG.
-    if (indRows > 0) {
-        const wchar_t* ilbl[3] = { L"SMA", L"EMA", L"VWAP" };
-        const COLORREF iclr[3] = { CLR_SMA, CLR_EMA, CLR_VWAP };
-        for (int i = 0; i < 3; ++i) {
-            ty += LINE_H;
-            RECT rcRow = { bx + 7, ty, bx + BOX_W - 6, ty + LINE_H };
-            SetTextColor(hdc, Blend(CLR_BOX, iclr[i], indT));
-            DrawTextW(hdc, ilbl[i], -1, &rcRow, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            if (indOk[i]) swprintf_s(buf, 64, L"%.2f", indVal[i]);
-            else          wcscpy_s(buf, 64, L"-");
-            SetTextColor(hdc, Blend(CLR_BOX, CLR_TEXT, indT));
-            DrawTextW(hdc, buf, -1, &rcRow, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-        }
-    }
-}
 
 
 // The control buttons. Pure GDI vectors - no font, no glyph lookup. A
@@ -4137,7 +2270,7 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
 // palette is the hover box's and the overlay's. No new GDI objects: the
 // brushes exist, and the arrow is drawn with DC_PEN/DC_BRUSH.
 //
-// Called from PaintPopup, not from DrawChart, for the same reason as the
+// Called from PaintPopup, not from DrawChartFrame, for the same reason as the
 // buttons: right after an interval switch the buffer is empty, and that is
 // exactly when the user looks for which pill became active. Everything it
 // reads is UI-owned or written only by the UI thread (symIdx, ivIdx).
@@ -4188,6 +2321,194 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
     SelectObject(hdc, oldFont);
 }
 
+// The header over the chart (was the top of DrawChart before phase 34): the
+// price, the change over the visible view and the offline text. App-level,
+// not chart-level: it reads the network health and the toolbar layout.
+// Called under the lock, like the chart body.
+static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSecs,
+                       int vs, int vc) {
+    wchar_t buf[64];
+    // --- Header: price + change over the VISIBLE view ---
+    double first = ctx->candles[vs].open;
+    double last  = ctx->candles[vs + vc - 1].close;
+    double chg   = (first > 0.0) ? ((last - first) / first) * 100.0 : 0.0;
+    COLORREF chgClr = (chg >= 0.0) ? CLR_UP : CLR_DOWN;
+
+    wchar_t span[24];
+    FormatSpan(vc, ctx->intervalMs, span, 24);
+
+
+    // --- Header layout, measured ---
+    // Previously the price and the percentage shared ONE rectangle, left- and
+    // right-aligned. On a narrow panel they then meet in the middle and are
+    // drawn on top of each other - DrawTextW clips to the rectangle, not to
+    // the neighboring text. Now each text is measured on the fully formatted
+    // string in its own font (bug #5), and row by row the right bound of the
+    // left-aligned text is compared with the left bound of the right-aligned.
+    //
+    // Row 1 (y 10-30): price on the left, percentage and button row on the
+    // right. Row 2 (y 28-42): the symbol line on the left. On the right there
+    // are not the buttons (they end at y = 24), but the price axis's top
+    // label, which sits at y = top +- 8 from x = right + AXIS_LBL_GAP.
+    // The metadata overlay (phase 14). Price, percentage and symbol line are
+    // the layer that is read foveally: the user has to stop and decode
+    // numbers. On the desktop they compete with icons and folders, and the
+    // surface is meant to be read peripherally. The whole block is therefore
+    // idle in desktop mode.
+    if (!g_desktopMode) {
+        RECT strip;
+        ButtonStrip(W, &strip);
+        int btnLeft = strip.left;          // X_left_bound for the button row
+
+        // Row 1, left: the price. The rectangle ends at the button row, so even
+        // a price that does not fit is never drawn under the buttons.
+        SelectObject(hdc, ctx->hFontBig);
+        SetTextColor(hdc, stale ? CLR_DIM : CLR_TEXT);
+        swprintf_s(buf, 64, L"$%.2f", last);
+        int lenPrice = (int)wcslen(buf);
+        SIZE szPrice = { 0, 0 };
+        GetTextExtentPoint32W(hdc, buf, lenPrice, &szPrice);
+        int priceRight = PAD_L + szPrice.cx;   // X_right_bound
+        RECT rcPrice = { PAD_L, 10, btnLeft - HDR_GAP, 30 };
+        DrawTextW(hdc, buf, lenPrice, &rcPrice, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+        // Row 1, right: the percentage in three steps. Full with span, then
+        // without span, then hidden. Never clipped in the middle of a number -
+        // "+0.5" where it says "+0.50%" is a wrong value, not a shorter one.
+        SelectObject(hdc, ctx->hFontSmall);
+        int pctRight = btnLeft - HDR_GAP;
+        wchar_t pctFull[48], pctShort[24];
+        swprintf_s(pctFull,  48, L"%+.2f%%  (%s)", chg, span);
+        swprintf_s(pctShort, 24, L"%+.2f%%", chg);
+        int lenFull = (int)wcslen(pctFull), lenShort = (int)wcslen(pctShort);
+        SIZE szFull = { 0, 0 }, szShort = { 0, 0 };
+        GetTextExtentPoint32W(hdc, pctFull, lenFull, &szFull);
+
+        // The short form is measured only when the full one did not fit. Each
+        // GetTextExtentPoint32W is ~20 us, and above the minimum width the full
+        // one fits with a good margin - measured at 400 px: ~115 px of air to
+        // the price.
+        const wchar_t* pct = NULL;
+        int lenPct = 0;
+        if (HeaderFits(priceRight, pctRight - szFull.cx)) {
+            pct = pctFull;  lenPct = lenFull;
+        } else {
+            GetTextExtentPoint32W(hdc, pctShort, lenShort, &szShort);
+            if (HeaderFits(priceRight, pctRight - szShort.cx)) {
+                pct = pctShort; lenPct = lenShort;
+            }
+        }
+        if (pct) {
+            SetTextColor(hdc, chgClr);
+            RECT rcPct = { priceRight + HDR_GAP, 10, pctRight, 30 };
+            DrawTextW(hdc, pct, lenPct, &rcPct, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+        }
+
+        // Row 2: the toolbar (phase 22) sits where the symbol line used to,
+        // and carries symbol and interval itself. It is drawn from PaintPopup
+        // - also when the buffer is empty. All that is left here is the
+        // offline text, which reads the health fields under the lock: to the
+        // right of the last pill, and only when the WHOLE text fits before the
+        // price axis's label. Same rule as the percentage: a truncated seconds
+        // count is a wrong number. Dimmed price, the tray tip and the icon
+        // carry the state at any width.
+        if (stale) {
+            RECT tb[TBAR_COUNT];
+            int tbN = ToolbarLayout(W, tb);
+            int subLeft  = (tbN > 0) ? tb[tbN - 1].right + HDR_GAP : PAD_L;
+            int subLimit = HeaderRow2Limit(W);
+            swprintf_s(buf, 64, L"offline %ds", staleSecs);
+            int lenSub = (int)wcslen(buf);
+            SIZE szSub = { 0, 0 };
+            GetTextExtentPoint32W(hdc, buf, lenSub, &szSub);
+            if (subLeft + szSub.cx <= subLimit) {
+                SetTextColor(hdc, CLR_DIM);
+                RECT rcSub = { subLeft, TBAR_TOP, subLimit, TBAR_TOP + TBAR_H };
+                DrawTextW(hdc, buf, lenSub, &rcSub, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            }
+        }
+    }
+}
+
+// The status text while the buffer is empty (was in DrawChart before phase
+// 34). Reads the network health under the lock.
+static void DrawEmptyState(AppContext* ctx, HDC hdc, int W, int H, ULONGLONG nowTick) {
+    RECT rcAll = { 0, 0, W, H };
+    {
+        // Desktop mode: no status on the wallpaper. The surface shows
+        // background and watermark until there are candles to draw. The
+        // message would be the only text left, and it says nothing a user
+        // who cannot click on the surface can do anything about.
+        if (g_desktopMode) return;
+
+        wchar_t msg[96];
+        SelectObject(hdc, ctx->hFontSmall);
+        SetTextColor(hdc, CLR_DIM);
+
+        // Without a connection it used to say "Loading data from Binance..."
+        // forever. The message lied about the state - now it says what is
+        // actually happening, and when we retry.
+        if (ctx->netFailures > 0) {
+            ULONGLONG nx = ctx->nextRetryTick;
+            int in_s = (nx > nowTick) ? (int)((nx - nowTick + 999) / 1000) : 0;
+            swprintf_s(msg, 96, L"No connection - retrying in %ds", in_s);
+        } else {
+            wcscpy_s(msg, 96, L"Loading data from Binance...");
+        }
+        DrawTextW(hdc, msg, -1, &rcAll, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        return;
+    }
+}
+
+// One frame of the chart area (phase 34): background, then the app's own
+// header or status text, then the chart engine's body. The engine sees a
+// ChartData/ChartStyle view of AppContext and nothing else. Called under
+// the lock, so the buffer and the health fields can be read directly.
+static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
+    // The watermark sits IN the background, before grid, candles and axes -
+    // the chart floats cleanly over the text. BitBlt REPLACES FillRect, it
+    // does not come in addition.
+    EnsureWatermark(ctx, hdc, W, H);
+    ChartDrawBackground(hdc, W, H, ctx->wmValid ? ctx->wmDC : NULL, ctx->brBg);
+
+    ULONGLONG nowTick = GetTickCount64();
+    BOOL stale = (ctx->lastOkTick != 0) &&
+                 (nowTick - ctx->lastOkTick > STALE_AFTER);
+    int staleSecs = stale ? (int)((nowTick - ctx->lastOkTick) / 1000) : 0;
+
+    int n = ctx->candleCount;
+    if (n <= 0) { DrawEmptyState(ctx, hdc, W, H, nowTick); return; }
+
+    int vs, vc;
+    GetView(&ctx->ch, n, &vs, &vc);
+    if (vc <= 0) return;
+
+    DrawHeader(ctx, hdc, W, stale, staleSecs, vs, vc);
+
+    // The stamp font follows the surface height on the desktop; built here
+    // (was inside the stamp block), so the engine only borrows a handle.
+    if (g_desktopMode) EnsurePillFont(ctx, H);
+
+    ChartData in;
+    in.candles = ctx->candles;   in.count = n;
+    in.intervalMs = ctx->intervalMs;
+    in.histDone = ctx->histDone; in.frontShift = ctx->frontShift;
+    in.desktop = g_desktopMode;
+    in.alerts = ctx->alerts[ctx->symIdx]; in.alertCount = ctx->alertCount[ctx->symIdx];
+    in.alertHot = ctx->alertHot; in.axisHotY = ctx->axisHotY;
+    in.alertFresh = ctx->alertFresh;
+    in.alertFlashLevel = ctx->alertFlashLevel; in.alertFlashF = ctx->alertFlashF;
+
+    ChartStyle sty;
+    sty.fontSmall = ctx->hFontSmall; sty.fontAxis = ctx->hFontAxis; sty.fontPill = ctx->hFontPill;
+    sty.penGrid = ctx->penGrid;      sty.penCross = ctx->penCross;
+    sty.penLastUp = ctx->penLastUp;  sty.penLastDown = ctx->penLastDown;
+    sty.brBg = ctx->brBg; sty.brBox = ctx->brBox; sty.brBoxEdge = ctx->brBoxEdge;
+    sty.brVolUp = ctx->brVolUp; sty.brVolDown = ctx->brVolDown;
+
+    ChartDrawBody(hdc, W, H, &ctx->ch, &in, &sty);
+}
+
 static void PaintPopup(AppContext* ctx, HWND hwnd) {
     PAINTSTRUCT ps;
     HDC hdcDst = BeginPaint(hwnd, &ps);
@@ -4205,7 +2526,7 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     HDC hdcMem = ctx->bbDC;
 
     // Fast path: if ALL of the dirty area is inside the button row, we need
-    // neither DrawChart nor DrawOverlay. A hover change invalidates exactly
+    // neither DrawChartFrame nor DrawOverlay. A hover change invalidates exactly
     // that rectangle; without this branch it would cost a full repaint, and
     // the incremental invalidation would only save the final blit.
     //
@@ -4243,10 +2564,10 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
     // The thread can merge in new candles at any time; the lock keeps
     // the buffer stable through the whole repaint (~1.8 ms).
     EnterCriticalSection(&ctx->lock);
-    DrawChart(ctx, hdcMem, W, H);
+    DrawChartFrame(ctx, hdcMem, W, H);
     LeaveCriticalSection(&ctx->lock);
 
-    // The buttons are drawn HERE, not in DrawChart. DrawChart returns early
+    // The buttons are drawn HERE, not in DrawChartFrame, which returns early
     // when the buffer is empty - that is, while it says "Loading data from
     // Binance..." and during an entire disconnect. Had the drawing been there,
     // the cross would vanish exactly when the user wants to close the panel.
@@ -4265,7 +2586,7 @@ static void PaintPopup(AppContext* ctx, HWND hwnd) {
 
     // The overlay is drawn OUTSIDE the lock: everything it reads (overlayF,
     // overlayHot, symIdx, ivIdx) is UI-owned. And it must be here, not in
-    // DrawChart, which returns early when the buffer is empty - exactly the
+    // DrawChartFrame, which returns early when the buffer is empty - exactly the
     // state right after a config change.
     DrawOverlay(ctx, hdcMem, W, H);
 
@@ -4321,15 +2642,15 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     else       { ctx->ivIdx = idx; ctx->intervalMs = INTERVALS[idx].ms; }
     ctx->configGen++;
     ctx->candleCount = 0;
-    ctx->viewStart   = 0;
-    ctx->viewCount   = 0;
-    ctx->followLive  = TRUE;
+    ctx->ch.viewStart   = 0;
+    ctx->ch.viewCount   = 0;
+    ctx->ch.followLive  = TRUE;
     ctx->lastPrice   = 0.0;
     ctx->histPending = FALSE;   // new config: history starts over
     ctx->histDone    = FALSE;
     LeaveCriticalSection(&ctx->lock);
 
-    ctx->hoverIdx = -1;
+    ctx->ch.hoverIdx = -1;
     // Phase 23: alertHot is an index into the PREVIOUS symbol's alerts, and
     // the afterglow sits at the previous symbol's price level.
     ctx->alertHot    = -1;
@@ -4337,7 +2658,7 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     ctx->alertFresh  = 0.0;
     ctx->alertFlashF = 0.0;
     ctx->wmValid  = FALSE;   // the watermark shows the previous symbol/interval
-    ctx->dispValid = FALSE;  // new buffer: nothing to ease from
+    ctx->ch.dispValid = FALSE;  // new buffer: nothing to ease from
     UpdatePopupTitle(ctx);   // the title bar and the taskbar must follow along
     // SetEvent sits outside the lock. It is not PostMessage, but the same rule
     // applies for the same reason: do not hold the lock across anything that
@@ -4362,7 +2683,7 @@ static void SetShowVolume(AppContext* ctx, BOOL on) {
         StartAnim(ctx->hPopup);
         InvalidateRect(ctx->hPopup, NULL, FALSE);
     } else {
-        ctx->dispVolF = on ? 1.0 : 0.0;
+        ctx->ch.dispVolF = on ? 1.0 : 0.0;
     }
 }
 
@@ -4379,7 +2700,7 @@ static void SetShowIndicators(AppContext* ctx, BOOL on) {
         StartAnim(ctx->hPopup);
         InvalidateRect(ctx->hPopup, NULL, FALSE);
     } else {
-        ctx->dispIndF = on ? 1.0 : 0.0;
+        ctx->ch.dispIndF = on ? 1.0 : 0.0;
     }
 }
 
@@ -4496,16 +2817,16 @@ static void CheckAlerts(AppContext* ctx, double price) {
 // Its own function because WM_LBUTTONDBLCLK also lands here (pitfall 38):
 // a fast double-click is set + remove, not set + reset the view.
 static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
-    int hit = AlertAxisHit(&g_Ctx, g, my);
+    int hit = AlertAxisHit(&g_Ctx.ch, g, g_Ctx.alerts[g_Ctx.symIdx], g_Ctx.alertCount[g_Ctx.symIdx], my);
     g_Ctx.alertFresh = 0.0;
     if (hit >= 0) {
         AlertRemove(&g_Ctx, hit);
-    } else if (AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx, g, my))) {
+    } else if (AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx.ch, g, my))) {
         int s = g_Ctx.symIdx;
         g_Ctx.alertFresh = g_Ctx.alerts[s][g_Ctx.alertCount[s] - 1];
     }
     g_Ctx.axisHotY = my;
-    g_Ctx.alertHot = AlertAxisHit(&g_Ctx, g, my);
+    g_Ctx.alertHot = AlertAxisHit(&g_Ctx.ch, g, g_Ctx.alerts[g_Ctx.symIdx], g_Ctx.alertCount[g_Ctx.symIdx], my);
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -4520,7 +2841,7 @@ static void OnToolbarClick(HWND hwnd, int th) {
     if (th == TBAR_SYM) {
         g_Ctx.overlayOpen = TRUE;
         g_Ctx.overlayHot  = -1;
-        g_Ctx.hoverIdx    = -1;
+        g_Ctx.ch.hoverIdx    = -1;
         g_Ctx.tbHot       = -1;   // no pill lights up while the overlay owns the mouse
         StartAnim(hwnd);
         InvalidateRect(hwnd, NULL, FALSE);
@@ -4541,12 +2862,12 @@ static void OnToolbarClick(HWND hwnd, int th) {
 // (Ctrl+0).
 static void ResetView(AppContext* ctx) {
     EnterCriticalSection(&ctx->lock);
-    ctx->viewCount  = 0;
-    ctx->followLive = TRUE;
+    ctx->ch.viewCount  = 0;
+    ctx->ch.followLive = TRUE;
     if (ctx->candleCount > 0) {
         int vc = (ctx->candleCount < DEFAULT_VIEW) ? ctx->candleCount : DEFAULT_VIEW;
-        ctx->viewCount = vc;
-        ctx->viewStart = ctx->candleCount - vc;
+        ctx->ch.viewCount = vc;
+        ctx->ch.viewStart = ctx->candleCount - vc;
     }
     LeaveCriticalSection(&ctx->lock);
 }
@@ -4556,65 +2877,21 @@ static void ResetView(AppContext* ctx) {
 static BOOL ViewIsDefault(AppContext* ctx) {
     EnterCriticalSection(&ctx->lock);
     int n = ctx->candleCount, vs, vc;
-    GetView(ctx, &vs, &vc);
+    GetView(&ctx->ch, ctx->candleCount, &vs, &vc);
     int want = (n < DEFAULT_VIEW) ? n : DEFAULT_VIEW;
     BOOL def = (n == 0) || (vc == want && vs + vc >= n);
     LeaveCriticalSection(&ctx->lock);
     return def;
 }
 
-// Panning and zoom of the TARGET VIEW (phase 20). Pulled out of
-// WM_MOUSEWHEEL, so wheel and keyboard share one calculation, the way the
-// buttons and the shortcuts share OnButtonClick. Both are called under the
-// lock, both clamp with ClampView and set followLive, and both report whether
-// the view is against the wall afterwards (viewStart == 0) - then the caller
-// will ask for history (phase 18). The display (disp*) is not touched here:
-// it eases toward the target in WM_TIMER as before.
-//
-// PanView: delta candles, positive = forward in time.
-static BOOL PanView(AppContext* ctx, int delta) {
-    int vs, vc;
-    GetView(ctx, &vs, &vc);
-    ctx->viewStart = vs + delta;
-    ctx->viewCount = vc;
-    ClampView(ctx);
-    ctx->followLive = (ctx->viewStart + ctx->viewCount >= ctx->candleCount);
-    return (ctx->viewStart == 0);
-}
 
-// ZoomView: notches > 0 zooms in, < 0 out, ZOOM_STEP per notch, around an
-// anchor given as a fraction [0, 1] of the view - the pointer's position for
-// the wheel, the middle for the keys.
-static BOOL ZoomView(AppContext* ctx, double frac, int notches) {
-    int n = ctx->candleCount;
-    int vs, vc;
-    GetView(ctx, &vs, &vc);
-    if (frac < 0.0) frac = 0.0;
-    if (frac > 1.0) frac = 1.0;
-
-    double anchor = (double)vs + frac * (double)vc;
-
-    double f = 1.0;
-    for (int k = 0; k < notches; ++k)  f *= ZOOM_STEP;
-    for (int k = 0; k > notches; --k)  f /= ZOOM_STEP;
-
-    int newCount = (int)((double)vc / f + 0.5);
-    if (newCount < MIN_VIEW) newCount = MIN_VIEW;
-    if (newCount > n)        newCount = n;
-
-    ctx->viewStart = (int)(anchor - frac * (double)newCount + 0.5);
-    ctx->viewCount = newCount;
-    ClampView(ctx);
-    ctx->followLive = (ctx->viewStart + ctx->viewCount >= ctx->candleCount);
-    return (ctx->viewStart == 0);
-}
 
 // Hides the panel to the notification area - or, in a duplicate, exits the
 // process. A duplicate has no main-instance role to return to, and a tail of
 // hidden tray icons is not a feature. The exit goes through the tray menu's
 // own path, so the icon is removed the same way in both cases.
 static void HidePanel(HWND hwnd) {
-    g_Ctx.hoverIdx = -1;
+    g_Ctx.ch.hoverIdx = -1;
     g_Ctx.btnHot   = -1;
     g_Ctx.tbHot    = -1;
     g_Ctx.alertHot = -1;
@@ -4935,7 +3212,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom);
+            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
 
             // Button hover. Must come after the TrackMouseEvent arming above
             // (pitfall 13) and before the overlay and panning branches, which
@@ -4992,10 +3269,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // line runs straight across the chart, like the crosshair.
             {
                 int axY = -1, aHot = -1;
-                if (!g_Ctx.overlayOpen && !g_Ctx.panning && g_Ctx.dispValid &&
+                if (!g_Ctx.overlayOpen && !g_Ctx.panning && g_Ctx.ch.dispValid &&
                     mx > g.edge && my >= g.top && my <= g.bottom) {
                     axY  = my;
-                    aHot = AlertAxisHit(&g_Ctx, &g, my);
+                    aHot = AlertAxisHit(&g_Ctx.ch, &g, g_Ctx.alerts[g_Ctx.symIdx], g_Ctx.alertCount[g_Ctx.symIdx], my);
                 }
                 // The cursor has left the newly set tag: from now on it is
                 // a tag like all the others, and turns red next time.
@@ -5033,37 +3310,37 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // backfill between the previous timer tick and this mouse
                 // move would otherwise give one frame with a jump of k
                 // candles (phase 18).
-                ApplyFrontShift(&g_Ctx);
+                ApplyFrontShift(&g_Ctx.ch, g_Ctx.frontShift);
                 int vs2, vc2;
-                GetView(&g_Ctx, &vs2, &vc2);
+                GetView(&g_Ctx.ch, g_Ctx.candleCount, &vs2, &vc2);
                 if (vc2 > 0 && g.cw > 0) {
                     double slot = (double)g.cw / (double)vc2;
                     int shift = (int)((double)(mx - g_Ctx.panAnchorX) / slot);
-                    int want  = g_Ctx.panAnchorView - shift;        // drag right = backward
-                    g_Ctx.viewStart = want;
-                    ClampView(&g_Ctx);
+                    int want  = g_Ctx.ch.panAnchorView - shift;        // drag right = backward
+                    g_Ctx.ch.viewStart = want;
+                    ClampView(&g_Ctx.ch, g_Ctx.candleCount);
                     // At the wall the finger slips: the anchor is moved here,
                     // so the overshoot is not remembered. Without this the
                     // drag after a backfill (phase 18) would jump by exactly
                     // what the user dragged past the wall before the candles
                     // arrived, and a drag back from the wall would stand
                     // still for just as long.
-                    if (g_Ctx.viewStart != want) {
-                        g_Ctx.panAnchorView = g_Ctx.viewStart;
+                    if (g_Ctx.ch.viewStart != want) {
+                        g_Ctx.ch.panAnchorView = g_Ctx.ch.viewStart;
                         g_Ctx.panAnchorX    = mx;
                     }
-                    g_Ctx.followLive =
-                        (g_Ctx.viewStart + g_Ctx.viewCount >= g_Ctx.candleCount);
-                    atWall = (g_Ctx.viewStart == 0);
+                    g_Ctx.ch.followLive =
+                        (g_Ctx.ch.viewStart + g_Ctx.ch.viewCount >= g_Ctx.candleCount);
+                    atWall = (g_Ctx.ch.viewStart == 0);
                     // Drag panning is NOT eased in X. The finger and the
                     // chart must stay together; an eased drag feels sluggish,
                     // not smooth. The Y axis is still eased - it should glide
                     // when new highs and lows enter the view.
-                    g_Ctx.dispStart = (double)g_Ctx.viewStart;
-                    g_Ctx.dispCount = (double)((g_Ctx.viewCount > 0)
-                                               ? g_Ctx.viewCount : g_Ctx.candleCount);
-                    g_Ctx.hoverIdx = HitCandle(&g_Ctx, &g, mx, my);
-                    g_Ctx.hoverY   = my;
+                    g_Ctx.ch.dispStart = (double)g_Ctx.ch.viewStart;
+                    g_Ctx.ch.dispCount = (double)((g_Ctx.ch.viewCount > 0)
+                                               ? g_Ctx.ch.viewCount : g_Ctx.candleCount);
+                    g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, mx, my);
+                    g_Ctx.ch.hoverY   = my;
                 }
                 LeaveCriticalSection(&g_Ctx.lock);
                 if (atWall) RequestHistory(&g_Ctx);   // phase 18
@@ -5073,12 +3350,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
 
             EnterCriticalSection(&g_Ctx.lock);
-            int idx = HitCandle(&g_Ctx, &g, mx, my);
+            int idx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, mx, my);
             LeaveCriticalSection(&g_Ctx.lock);
 
-            if (idx != g_Ctx.hoverIdx || (idx >= 0 && my != g_Ctx.hoverY)) {
-                g_Ctx.hoverIdx = idx;
-                g_Ctx.hoverY   = my;
+            if (idx != g_Ctx.ch.hoverIdx || (idx >= 0 && my != g_Ctx.ch.hoverY)) {
+                g_Ctx.ch.hoverIdx = idx;
+                g_Ctx.ch.hoverY   = my;
                 InvalidateRect(hwnd, NULL, FALSE);
             }
             return 0;
@@ -5093,7 +3370,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom);
+            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
             if (g.cw <= 0) return 0;
 
             BOOL ctrl   = (GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0;
@@ -5105,16 +3382,16 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (!ctrl) {
                     // Without Ctrl: pan in time. Wheel up = backward.
                     int vs, vc;
-                    GetView(&g_Ctx, &vs, &vc);
+                    GetView(&g_Ctx.ch, g_Ctx.candleCount, &vs, &vc);
                     int step = vc / 8;
                     if (step < 1) step = 1;
-                    atWall = PanView(&g_Ctx, -notches * step);
+                    atWall = PanView(&g_Ctx.ch, g_Ctx.candleCount, -notches * step);
                 } else {
                     // With Ctrl: zoom about the point under the cursor
                     double frac = (double)(pt.x - g.left) / (double)g.cw;
-                    atWall = ZoomView(&g_Ctx, frac, notches);
+                    atWall = ZoomView(&g_Ctx.ch, g_Ctx.candleCount, frac, notches);
                 }
-                g_Ctx.hoverIdx = HitCandle(&g_Ctx, &g, pt.x, pt.y);
+                g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, pt.x, pt.y);
             }
             LeaveCriticalSection(&g_Ctx.lock);
 
@@ -5128,7 +3405,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         case WM_MOUSELEAVE:
             g_Ctx.trackingMouse = FALSE;
-            g_Ctx.hoverIdx      = -1;
+            g_Ctx.ch.hoverIdx      = -1;
             g_Ctx.overlayHot    = -1;   // otherwise a row stays highlighted
             // Also fires when the cursor goes from a button (HTCLIENT) out
             // onto free header area (HTCAPTION): it leaves the client area
@@ -5151,7 +3428,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             LRESULT r = -1;
             EnterCriticalSection(&g_Ctx.lock);
             int pvs, pvc;
-            GetView(&g_Ctx, &pvs, &pvc);
+            GetView(&g_Ctx.ch, g_Ctx.candleCount, &pvs, &pvc);
             switch (wParam) {
                 case 0:  r = g_Ctx.candleCount; break;
                 case 1:  r = pvs; break;
@@ -5163,10 +3440,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                              ? (LRESULT)(g_Ctx.candles[0].openTime / 1000) : 0; break;
                 case 7:  r = (pvs < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[pvs].openTime / 1000) : 0; break;
-                case 8:  r = (LRESULT)(g_Ctx.dispStart * 1000.0); break;   // thousandths of a candle
+                case 8:  r = (LRESULT)(g_Ctx.ch.dispStart * 1000.0); break;   // thousandths of a candle
                 case 9:  r = g_Ctx.netFailures; break;
-                case 10: r = g_Ctx.followLive; break;
-                case 11: r = g_Ctx.hoverIdx; break;
+                case 10: r = g_Ctx.ch.followLive; break;
+                case 11: r = g_Ctx.ch.hoverIdx; break;
                 case 12: r = g_Ctx.panning; break;   // phase 20
                 case 13: r = (GetCapture() == hwnd); break;   // phase 20, own thread
                 // Phase 21. lParam is the candle index. The volume is
@@ -5182,7 +3459,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 18: r = ShowVolNow(&g_Ctx); break;   // the mode's choice (phase 26)
                 case 19: r = g_Ctx.tbHot; break;
                 case 20: r = g_Ctx.overlayOpen; break;
-                case 21: r = (LRESULT)(g_Ctx.dispVolF * 1000.0); break;
+                case 21: r = (LRESULT)(g_Ctx.ch.dispVolF * 1000.0); break;
                 // Phase 23: price alerts. Levels and prices are multiplied by
                 // 100 for the same reason as the volume; BTC x 100 is seven
                 // digits. 23 carries the sign (the side), lParam is the slot.
@@ -5198,8 +3475,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 28: r = (LRESULT)(g_Ctx.alertFlashF * 1000.0); break;
                 case 29: r = g_Ctx.alertNotifyOk; break;
                 case 30: r = (LRESULT)floor(g_Ctx.lastPrice * 100.0 + 0.5); break;
-                case 31: r = (LRESULT)floor(g_Ctx.dispMin * 100.0 + 0.5); break;
-                case 32: r = (LRESULT)floor(g_Ctx.dispMax * 100.0 + 0.5); break;
+                case 31: r = (LRESULT)floor(g_Ctx.ch.dispMin * 100.0 + 0.5); break;
+                case 32: r = (LRESULT)floor(g_Ctx.ch.dispMax * 100.0 + 0.5); break;
                 case 33: r = (LRESULT)floor(g_Ctx.alertFresh * 100.0 + 0.5); break;
                 // Phase 25: moving averages. 36/37 are SMA/EMA at the candle
                 // index in lParam, x100, -1 when the average is not defined
@@ -5207,7 +3484,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // averages itself. 39 is the time the two lines took in the
                 // last repaint (us).
                 case 34: r = ShowIndNow(&g_Ctx); break;
-                case 35: r = (LRESULT)(g_Ctx.dispIndF * 1000.0); break;
+                case 35: r = (LRESULT)(g_Ctx.ch.dispIndF * 1000.0); break;
                 case 36: case 37: {
                     double iv = 0.0;
                     BOOL isE = (wParam == 37);
@@ -5217,7 +3494,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         r = (LRESULT)floor(iv * 100.0 + 0.5);
                     break;
                 }
-                case 39: r = (LRESULT)g_probeIndUs; break;
+                case 39: r = (LRESULT)g_Ctx.ch.probeIndUs; break;
                 // Phase 26: the height the stamp font is built for (desktop mode).
                 case 40: r = g_Ctx.pillFontH; break;
                 // 104 (phase 34): WRITING. Sets the hover as a mouse move at
@@ -5227,11 +3504,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 104: {
                     RECT rcH;
                     GetClientRect(hwnd, &rcH);
-                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom);
-                    g_Ctx.hoverIdx = HitCandle(&g_Ctx, &gH, LOWORD(lParam), HIWORD(lParam));
-                    g_Ctx.hoverY   = HIWORD(lParam);
+                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom, g_desktopMode);
+                    g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gH, LOWORD(lParam), HIWORD(lParam));
+                    g_Ctx.ch.hoverY   = HIWORD(lParam);
                     InvalidateRect(hwnd, NULL, FALSE);
-                    r = g_Ctx.hoverIdx;
+                    r = g_Ctx.ch.hoverIdx;
                     break;
                 }
                 // Phase 27: today's session. 41 is VWAP at the candle index
@@ -5262,7 +3539,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                     break;
                 }
-                case 45: r = (LRESULT)g_probeSessUs; break;
+                case 45: r = (LRESULT)g_Ctx.ch.probeSessUs; break;
                 // Phase 28: yesterday. 51/52/53 are the previous UTC day's
                 // high, low and close x100, -1 when the day is not wholly in
                 // the buffer. 55 is yesterday's first candle (-1 = does not
@@ -5289,10 +3566,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 54: r = ShowIndNow(&g_Ctx) &&
                              SessionsNeedHistory(g_Ctx.candles, g_Ctx.candleCount,
                                                  g_Ctx.intervalMs, g_Ctx.histDone); break;
-                case 56: r = (LRESULT)g_probePrevUs; break;
-                case 57: r = g_probeLblMask; break;
-                case 58: r = g_probeCrossTag; break;
-                case 59: r = (LRESULT)g_probeLblUs; break;
+                case 56: r = (LRESULT)g_Ctx.ch.probePrevUs; break;
+                case 57: r = g_Ctx.ch.probeLblMask; break;
+                case 58: r = g_Ctx.ch.probeCrossTag; break;
+                case 59: r = (LRESULT)g_Ctx.ch.probeLblUs; break;
                 case 47: r = ((int)lParam >= 0 && (int)lParam < g_Ctx.candleCount)
                              ? (LRESULT)(g_Ctx.candles[(int)lParam].openTime / 1000) : -1; break;
                 case 48: {
@@ -5354,11 +3631,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // afterglow - the last color steps above CLR_BG are not visible.
                 {
                     double ifT = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
-                    if (g_Ctx.dispIndF != ifT) {
-                        g_Ctx.dispIndF = AnimStep(g_Ctx.dispIndF, ifT, dt,
+                    if (g_Ctx.ch.dispIndF != ifT) {
+                        g_Ctx.ch.dispIndF = AnimStep(g_Ctx.ch.dispIndF, ifT, dt,
                                                   IND_TAU_FADE, 0.02);
                         redraw = TRUE;
-                        if (g_Ctx.dispIndF != ifT) settled = FALSE;
+                        if (g_Ctx.ch.dispIndF != ifT) settled = FALSE;
                     }
                 }
 
@@ -5370,17 +3647,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 {
                     RECT rcE;
                     GetClientRect(hwnd, &rcE);
-                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom);
+                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom, g_desktopMode);
 
                     int tvs = 0, tvc = 0, tn = 0;
                     double tMin = 0.0, tMax = 1.0, tVol = 0.0;
                     EnterCriticalSection(&g_Ctx.lock);
-                    ApplyFrontShift(&g_Ctx);
+                    ApplyFrontShift(&g_Ctx.ch, g_Ctx.frontShift);
                     tn = g_Ctx.candleCount;
-                    GetView(&g_Ctx, &tvs, &tvc);
+                    GetView(&g_Ctx.ch, g_Ctx.candleCount, &tvs, &tvc);
                     if (tn > 0 && tvc > 0) {
-                        PriceRange(&g_Ctx, tvs, tvc, &tMin, &tMax);
-                        tVol = VolumeMax(&g_Ctx, tvs, tvc);   // phase 21
+                        PriceRange(g_Ctx.candles, tvs, tvc, &tMin, &tMax);
+                        tVol = VolumeMax(g_Ctx.candles, tvs, tvc);   // phase 21
                     }
                     LeaveCriticalSection(&g_Ctx.lock);
 
@@ -5390,19 +3667,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     // quarter pixel of the band height, as for the others.
                     {
                         double vfT = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
-                        if (g_Ctx.dispVolF != vfT) {
+                        if (g_Ctx.ch.dispVolF != vfT) {
                             double bandPx = (double)gE.ch * VOL_FRAC;
                             double snapF  = (bandPx > 1.0) ? SNAP_PX / bandPx : 1.0;
-                            g_Ctx.dispVolF = AnimStep(g_Ctx.dispVolF, vfT, dt,
+                            g_Ctx.ch.dispVolF = AnimStep(g_Ctx.ch.dispVolF, vfT, dt,
                                                       ANIM_TAU_VIEW, snapF);
                             redraw = TRUE;
-                            if (g_Ctx.dispVolF != vfT) settled = FALSE;
+                            if (g_Ctx.ch.dispVolF != vfT) settled = FALSE;
                         }
                     }
 
-                    if (tn > 0 && tvc > 0 && g_Ctx.dispValid &&
+                    if (tn > 0 && tvc > 0 && g_Ctx.ch.dispValid &&
                         gE.cw > 0 && gE.ch > 0) {
-                        double dc = (g_Ctx.dispCount > 1.0) ? g_Ctx.dispCount : 1.0;
+                        double dc = (g_Ctx.ch.dispCount > 1.0) ? g_Ctx.ch.dispCount : 1.0;
                         double snapX = SNAP_PX * dc / (double)gE.cw;
                         double snapY = SNAP_PX * (tMax - tMin) / (double)gE.ch;
                         if (snapX <= 0.0) snapX = 1e-9;
@@ -5416,11 +3693,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         if (snapV <= 0.0) snapV = 1e-9;
 
                         struct { double* v; double t; double snap; } eases[5] = {
-                            { &g_Ctx.dispStart,  (double)tvs, snapX },
-                            { &g_Ctx.dispCount,  (double)tvc, snapX },
-                            { &g_Ctx.dispMin,    tMin,        snapY },
-                            { &g_Ctx.dispMax,    tMax,        snapY },
-                            { &g_Ctx.dispVolMax, tVol,        snapV },
+                            { &g_Ctx.ch.dispStart,  (double)tvs, snapX },
+                            { &g_Ctx.ch.dispCount,  (double)tvc, snapX },
+                            { &g_Ctx.ch.dispMin,    tMin,        snapY },
+                            { &g_Ctx.ch.dispMax,    tMax,        snapY },
+                            { &g_Ctx.ch.dispVolMax, tVol,        snapV },
                         };
                         for (int e = 0; e < 5; ++e) {
                             if (*eases[e].v == eases[e].t) continue;
@@ -5476,7 +3753,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (!g_Ctx.overlayOpen) {
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
-                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom);
+                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom, g_desktopMode);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
                 // [g.left, edge]: the chart and the headroom. Up to and
                 // including phase 22 the area went all the way to W, with the
@@ -5487,8 +3764,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (mx >= gd.left && mx <= gd.edge && my >= gd.top && my <= gd.bottom) {
                     ResetView(&g_Ctx);
                     EnterCriticalSection(&g_Ctx.lock);
-                    g_Ctx.hoverIdx = HitCandle(&g_Ctx, &gd, mx, my);
-                    g_Ctx.hoverY   = my;
+                    g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gd, mx, my);
+                    g_Ctx.ch.hoverY   = my;
                     LeaveCriticalSection(&g_Ctx.lock);
                     StartAnim(hwnd);
                     InvalidateRect(hwnd, NULL, FALSE);
@@ -5540,10 +3817,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
             }
 
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom);
+            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
             // The price column (phase 23): set or remove an alert. Same
             // area as the hover block in WM_MOUSEMOVE, and same data requirement.
-            if (g_Ctx.dispValid && dx > gg.edge && dy >= gg.top && dy <= gg.bottom) {
+            if (g_Ctx.ch.dispValid && dx > gg.edge && dy >= gg.top && dy <= gg.bottom) {
                 OnAxisClick(hwnd, &gg, dy);
                 return 0;
             }
@@ -5552,14 +3829,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // even if the pointer leaves the window along the way.
                 int vs, vc;
                 EnterCriticalSection(&g_Ctx.lock);
-                GetView(&g_Ctx, &vs, &vc);
-                g_Ctx.viewCount     = vc;
+                GetView(&g_Ctx.ch, g_Ctx.candleCount, &vs, &vc);
+                g_Ctx.ch.viewCount     = vc;
                 LeaveCriticalSection(&g_Ctx.lock);
                 g_Ctx.panning       = TRUE;
                 g_Ctx.alertHot      = -1;   // phase 23: the drag owns the mouse
                 g_Ctx.axisHotY      = -1;
                 g_Ctx.panAnchorX    = dx;
-                g_Ctx.panAnchorView = vs;
+                g_Ctx.ch.panAnchorView = vs;
                 SetCapture(hwnd);
                 // WM_SETCURSOR only fires on the next mouse move. Without
                 // this call the first frame of the drag still shows the arrow.
@@ -5572,13 +3849,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_RBUTTONUP: {
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom);
+            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode);
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             if (!g_Ctx.overlayOpen &&
                 mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
                 g_Ctx.overlayOpen = TRUE;
                 g_Ctx.overlayHot  = -1;
-                g_Ctx.hoverIdx    = -1;   // the crosshair must not remain underneath
+                g_Ctx.ch.hoverIdx    = -1;   // the crosshair must not remain underneath
                 StartAnim(hwnd);
                 InvalidateRect(hwnd, NULL, FALSE);
             }
@@ -5682,17 +3959,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // same number shown in the label on the axis, rounded as a
                 // click in the column would. Without a crosshair there is no
                 // price to point at, and the key does nothing. hoverY is
-                // clamped as in DrawChart: the crosshair is never drawn outside
+                // clamped as in ChartDrawBody: the crosshair is never drawn outside
                 // [top, bottom], so the alert must not end up there either.
                 if (!ctrl && wParam == 'A') {
-                    if (g_Ctx.hoverIdx >= 0 && g_Ctx.dispValid) {
+                    if (g_Ctx.ch.hoverIdx >= 0 && g_Ctx.ch.dispValid) {
                         RECT rcA;
                         GetClientRect(hwnd, &rcA);
-                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom);
-                        int hy = g_Ctx.hoverY;
+                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom, g_desktopMode);
+                        int hy = g_Ctx.ch.hoverY;
                         if (hy < ga.top)    hy = ga.top;
                         if (hy > ga.bottom) hy = ga.bottom;
-                        AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx, &ga, hy));
+                        AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx.ch, &ga, hy));
                     }
                     return 0;
                 }
@@ -5713,10 +3990,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     EnterCriticalSection(&g_Ctx.lock);
                     if (g_Ctx.candleCount > 0) {
                         if (zoom != 0) {
-                            atWall = ZoomView(&g_Ctx, 0.5, zoom);
+                            atWall = ZoomView(&g_Ctx.ch, g_Ctx.candleCount, 0.5, zoom);
                         } else {
                             int vs, vc;
-                            GetView(&g_Ctx, &vs, &vc);
+                            GetView(&g_Ctx.ch, g_Ctx.candleCount, &vs, &vc);
                             int step = vc / 8;
                             if (step < 1) step = 1;
                             int delta = 0;
@@ -5725,9 +4002,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                             else if (pan == 2)         delta = vc;
                             else if (pan == -3)        delta = -g_Ctx.candleCount;
                             else                       delta = g_Ctx.candleCount;
-                            atWall = PanView(&g_Ctx, delta);
+                            atWall = PanView(&g_Ctx.ch, g_Ctx.candleCount, delta);
                         }
-                        g_Ctx.hoverIdx = -1;
+                        g_Ctx.ch.hoverIdx = -1;
                     }
                     LeaveCriticalSection(&g_Ctx.lock);
                     if (atWall) RequestHistory(&g_Ctx);
@@ -5752,7 +4029,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if ((wParam == 'R' && !ctrl && !g_Ctx.overlayOpen) ||
                 (wParam == VK_ESCAPE && !ViewIsDefault(&g_Ctx))) {
                 ResetView(&g_Ctx);
-                g_Ctx.hoverIdx = -1;
+                g_Ctx.ch.hoverIdx = -1;
                 StartAnim(hwnd);
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
@@ -5952,7 +4229,7 @@ static void RefitDesktopSurface(void) {
 static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
         if (!IsIconic(ctx->hPopup) && GetForegroundWindow() == ctx->hPopup) {
-            ctx->hoverIdx = -1;
+            ctx->ch.hoverIdx = -1;
             ctx->overlayOpen = FALSE;
             ctx->overlayF    = 0.0;
             ctx->overlayHot  = -1;
@@ -6034,7 +4311,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ResetView(ctx);   // the view is set again; the buffer is kept
 
     ctx->panning   = FALSE;
-    ctx->hoverIdx  = -1;
+    ctx->ch.hoverIdx  = -1;
     ctx->overlayOpen = FALSE;   // the overlay must never be open on opening
     ctx->overlayF    = 0.0;
     ctx->overlayHot  = -1;
@@ -6047,7 +4324,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     ctx->btnHot      = -1;
     ctx->alertHot    = -1;      // phase 23, same reason
     ctx->axisHotY    = -1;
-    ctx->dispValid   = FALSE;   // the panel opens finished, does not glide into place
+    ctx->ch.dispValid   = FALSE;   // the panel opens finished, does not glide into place
 
     UpdatePopupTitle(ctx);
     if (g_desktopMode) {
@@ -6131,8 +4408,8 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     // The overlays follow the mode (phase 26). The new surface does not
     // exist yet, so the display snaps - the same rule as SetShowVolume when
     // nothing is visible.
-    ctx->dispVolF = ShowVolNow(ctx) ? 1.0 : 0.0;
-    ctx->dispIndF = ShowIndNow(ctx) ? 1.0 : 0.0;
+    ctx->ch.dispVolF = ShowVolNow(ctx) ? 1.0 : 0.0;
+    ctx->ch.dispIndF = ShowIndNow(ctx) ? 1.0 : 0.0;
 
     TogglePopup(ctx, hInst);
 }
@@ -6534,9 +4811,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // collide).
 
     memset(&g_Ctx, 0, sizeof(AppContext));
-    g_Ctx.hoverIdx = -1;   // 0 from memset would mean "hover on the first candle"
+    g_Ctx.ch.hoverIdx = -1;   // 0 from memset would mean "hover on the first candle"
     g_Ctx.overlayHot = -1; // same reason: 0 would mean "first row highlighted"
-    g_Ctx.dispValid  = FALSE; // snap on the first frame
+    g_Ctx.ch.dispValid  = FALSE; // snap on the first frame
 
     g_Ctx.hSession = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -6610,9 +4887,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.alertHot    = -1;     // phase 23: 0 would mean "first alert under the pointer"
     g_Ctx.axisHotY    = -1;
     g_Ctx.showVol     = TRUE;   // phase 22; LoadConfig can turn it off
-    g_Ctx.dispVolF    = 1.0;
+    g_Ctx.ch.dispVolF    = 1.0;
     g_Ctx.showInd     = TRUE;   // phase 25; LoadConfig can turn it off
-    g_Ctx.dispIndF    = 1.0;
+    g_Ctx.ch.dispIndF    = 1.0;
     // Dashed, not dotted: keeps the last-price line visually distinct from
     // both the grid (solid, muted) and the crosshair (dotted).
     g_Ctx.penLastUp   = CreatePen(PS_DASH, 1, CLR_UP);
@@ -6667,8 +4944,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (!g_desktopMode && !g_isDuplicate) g_desktopMode = LoadDesktopMode();
     // No animation at startup (phases 22 and 25). Here, and not right after
     // LoadConfig: which choice applies depends on the mode (phase 26).
-    g_Ctx.dispVolF = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
-    g_Ctx.dispIndF = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
+    g_Ctx.ch.dispVolF = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
+    g_Ctx.ch.dispIndF = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
     // The price alerts (phase 23). After the --dup parsing: LoadAlerts skips
     // duplicates, and g_isDuplicate is known only here. Before the thread:
     // the first price must be checked against the alerts from the last run.
