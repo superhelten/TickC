@@ -1,6 +1,6 @@
 # TickC — work log
 
-Status as of 2026-09-22. Written for agents who continue work on `tickc.c`
+Status as of 2026-09-24. Written for agents who continue work on `tickc.c`
 (`ticker.c` up to and including phase 29).
 Phase 1 is done. Phase 2 part A (animation timer, backoff, stale indicator),
 part B (symbol/interval, overlay, watermark, the registry) and part C (last-price
@@ -80,11 +80,17 @@ the production exe is byte-identical apart from the link timestamp.
 **Phase 33** translates this work log and renames it from `ARBEIDSLOGG.md`.
 **Phase 34** moves the chart engine into `chart.c` / `chart.h`, pixel-identical,
 and gives the test build recorded responses and golden captures.
+Phases 35-45 are in their own sections below.
+**Phase 46** keeps one main instance per exe - a second start shows the
+first one's panel, and a plain start opens the panel while the start at
+sign-in (`--autostart`) stays quiet - shows an offline icon when there is
+no network at startup, follows the Windows proxy, and gives the ghost tag a
+place in the price column on the row the alert will land on.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
-The code is **two files** from phase 34: `tickc.c` (the app, ~5000 lines) and
-`chart.c` behind `chart.h` (the chart engine, ~1650 lines). Next to them is
+The code is **two files** from phase 34: `tickc.c` (the app, ~6550 lines) and
+`chart.c` behind `chart.h` (the chart engine, ~2450 lines). Next to them is
 `tickc.manifest`, which the build embeds (phase 9). No external dependencies
 beyond Win32 and WinHTTP.
 
@@ -3859,10 +3865,190 @@ y >= 565 at 1280x720 (the missing line 4, the pane, the time axis) and in
 the hover box's time row; the header is untouched. **Exe 230 912 →
 232 960 bytes (+2 048).**
 
+### Phase 46 — startup, tray and network, and the price column
+
+Branch `phase-46`, merged with `--no-ff`. The rest of phase 44's deep
+review: the app's startup, tray and network findings, and the engine's
+(the ghost tag, the legend, the volume tag, the level labels). Two agents worked side by side, split by file
+as in phase 45, and a third ran both halves together, fixed one thing the
+engine agent found on the app's side, and wrote this section.
+
+**The app.**
+- **One main instance, and a start that shows something.** A plain start
+  showed only a tray icon, often in the overflow, so users started it
+  again. Each start was another main instance, with its own worker, icon
+  and registry writes, and a second surface in desktop mode. Phase 8 had
+  removed the old mutex because it stopped `[ + ]`. Now non-duplicates take
+  `Local\TickC.MainInstance`. A second start finds the first one's hidden
+  window by class and title (`TickC`; a duplicate's is `TickC duplicate`),
+  gives it the right to take the foreground, posts `WM_APP_SHOW` and ends
+  before it has created anything. The first instance shows or raises its
+  panel (never toggles it); in desktop mode a balloon says where the menu
+  is. A start by hand shows the panel. The start at sign-in carries
+  `--autostart` in the Run value and stays in the notification area. A Run
+  value without the flag, from an earlier phase, gets it at the next start
+  and still counts as ours for the menu's toggle. Duplicates start as
+  before. The test build's mutex name and window title carry a hash of its
+  exe path, so no test ever meets the user's TickC.
+- **No network at startup gave no offline state.** The icon stood at "..."
+  and the tooltip at "Connecting to Binance..." for good: `UpdateIcon`
+  needs a price, and "stale" needs a first success. With no price and a
+  failed fetch the icon now shows the dots in the stale price's dimmed
+  green, and the tooltip reads "no connection to Binance - retrying". The
+  empty chart's "retrying in Ns" counts down every second instead of
+  standing still for the whole backoff.
+- **The Windows proxy was ignored.** `DEFAULT_PROXY` reads only `netsh
+  winhttp`. The session is now opened with `AUTOMATIC_PROXY` (8.1+) and
+  falls back to the old type. No measurable cost here, with "Automatically
+  detect settings" on: the first live price in 295/281/294 ms against
+  349/296/298 ms.
+- **The quote line showed yesterday's day after reopening**, for up to
+  15 s. The day was fetched every fifth cycle, and the count stands still
+  while the panel is hidden. Showing the panel now asks for the day in the
+  same cycle. Statistics from another UTC day are not drawn, and the next
+  cycle fetches today's.
+- **A failing history stopped the live candles** and raised the backoff.
+  The candles are now fetched every cycle, and the history retries on a
+  backoff of its own.
+- **Tray.** The icon is removed when the main window is destroyed from
+  outside (taskkill without /F, an installer), not only on Quit. A tray
+  click less than 500 ms after the panel lost activation counts as a click
+  on a panel in front, and hides it. That follows the review's reading of
+  a real click (the taskbar takes the foreground on the way down), which
+  posted clicks cannot show. The tray menu gets `TPM_RIGHTBUTTON` and the
+  documented `WM_NULL` after `TrackPopupMenu`.
+- **Desktop mode without Explorer** retried every 250 ms forever. Now it
+  makes 8 fast tries, then doubles the delay up to 10 s, and goes fast
+  again when Explorer announces itself.
+- **A pointer that rounds to an alert is on that alert** (found by the
+  engine agent, fixed in the integration). Zoomed far in on a small
+  symbol, one cent is ~50 px, and a pointer 9-15 px from an alert tag
+  rounds to the alert's own level. The ghost, now on the rounded price's
+  row (below), stood amber on the alert's row, and a click was refused as
+  a duplicate: a preview of an alert that could not be set. `AxisAlertAt`
+  takes the tag under the pointer first (phase 23), then an alert at the
+  rounded price, with the same half-cent rule `AlertAdd` refuses a
+  duplicate with (`AlertAtLevel`, one place for both). Hover and click go
+  through it, so the tag turns red, the ghost goes, and the click removes
+  the alert. At BTC's scale a rounding step is under one pixel, and
+  nothing changes.
+
+**The engine.**
+- **The ghost has a place in the price column's rank** (review F2). It had
+  none: 9-15 px from an alert it covered half of the alert's number, and
+  within 16 px of the stamp the stamp cut the ghost's number. The ghost
+  now takes the crosshair tag's place (the two never exist at the same
+  time) and goes ahead of the stamp. It is the price a click would set and
+  is shown nowhere else, while the last price is also in the quote line.
+  Phase 29's reason, that the hover box carries the crosshair's numbers,
+  points the other way here. An alert near it, or the stamp, keeps its
+  surface and loses its number, only while the pointer is in the column.
+  Over a pane the tag keeps to the price pane's rows, as the crosshair tag
+  does since phase 44.
+- **The ghost stands on the alert's row** (F7): the row of the rounded
+  price, `AlertY(AlertPriceAtY(y))`, not the pointer's. On a small symbol
+  zoomed in, the preview was up to half a cent - ~25 px - away from where
+  the alert landed.
+- **The legend is opaque over alert lines** (F8), and over the ghost's and
+  the afterglow's, as it was over the level lines. Phase 45's background
+  box was the volume legend's; the price legend still let alert lines
+  through.
+- **No volume tag above the pane's scale** (F6). The last candle panned out
+  of view and louder than every visible one pinned its tag to the pane's
+  top, where no bar is. The stamp's rule: not drawn.
+- **Level names give way to the candles** (U7). The label sits at the
+  line's left end, today's first candle, and on a young day that is among
+  the newest: LOD sat on the candles that made the low, and wicks ran
+  through PDC at 1h. A label goes below its line when candles or another
+  level's line are above it, and is not drawn when both sides are taken;
+  the axis tag carries the level. A background box was rejected because it
+  would wipe out the candles.
+
+Probe fields, main window: 117 the last tray decision (0 none, 1 hid a
+panel in front, 2 hid one that lost activation just before, 3 raised, 4
+showed or created), 118 hand-overs received, 119 the icon state (0
+connecting, 1 live, 2 stale, 3 offline without a price), 120 successful
+day fetches, 121 the WinHTTP access type, 122 `EmbedRetryMs(lParam)`, 123
+`netFailures`, and 124 WRITING: the held day one UTC day back and a
+synchronous repaint. Panel: 78 the empty chart's text (0 none, 1 loading,
+2 no connection), 79 its countdown in s (-1 none). The test key gets a
+`ProbeTrayRemoved` DWORD when the icon is removed.
+
+**Verified.** `chart_golden`: six new cases and five pixel checks (the
+ghost's rank against an alert, the stamp and the volume pane; the ghost's
+row; the legend over an alert line; the volume tag with an in-view
+control; every level label in every panel case free of candle pixels and
+other level lines). **Red** against the engine's commit 1: 31 fail (every
+fix; 26 of them label strikes in 20 cases), and the controls pass; the
+pane-edge check was red against the first fix commit. 26 older goldens
+changed, each looked at: 21 only in the labels (plus the ghost one row up
+in the two 15m alert cases), and the new ones. Contrast unchanged (37
+pairs, lowest 4.60:1). 42/42 twice. `shot_p46.ps1` (36 checks, hidden
+desktop): a plain start showing the panel; a second start ending and
+showing the first one's hidden panel; a second `--autostart` start ending
+quietly; a `--dup` still running beside the main instance; the Run value's
+upgrade and toggle; the retry arithmetic (field 122) and the access type;
+an external `WM_CLOSE` removing the icon; a posted `WA_INACTIVE` 150 ms
+before a tray click hiding the panel, and 900 ms before one raising it;
+the day fetched on reopening and after a day change (hook 124); live
+candles under a failing history (a fixture with one unsound candle); the
+offline icon and countdown with an empty fixture folder, and the icon back
+on the price when the files arrive. **Red** against the app's commit 1: 21
+fail (every fix) and the 15 controls pass. `shot_arow46.ps1` (7 checks,
+fixtures squeezed around $100 so the 1m view spans 7 cents, ~76 px a
+cent): the pointer 38 px from a tag it has just set is on it (`alertHot`),
+and a click 12 px from the tag's centre removes it; controls: a click on
+the tag removes, one 90 px away sets a second alert. **Red** against the
+merged build before the fix: 2 fail, the 5 controls pass. Both halves
+together, at the final commit: `chart_golden` 42/42 twice, `shot_p46` 36/36
+twice, `shot_arow46` 7/7 twice, and the earlier scripts (`shot_fix44`,
+`shot_ui45`, `shot_vol`, `shot_range`, `shot_theme`, `shot_quote`,
+`shot_rsi`, `shot_dpi`) pass on the hidden desktop. `golden.ps1 -Hidden`
+against phase 45: four captures identical; `p1280_1h`, `p1280_1h_hover`
+and `p560_15m` differ by 132 px each, all LOD moving below its line
+(looked at), identical to the engine agent's captures; the header is
+untouched. Built alone, the app's half is identical to phase 45 in all
+seven. Not exercised: a real tray click, a real proxy, desktop mode and
+its second-start balloon, the ghost and the volume tag under a real
+pointer (reviewed, not tested). **Exe 232 960 → 237 568 bytes (+4 608)**;
+alone, the app's half was +3 072 and the engine's +1 024, and the
+integration fix costs nothing.
+
 ---
 
 ## Known limitations
 
+- **A tray click within 500 ms after the panel lost activation hides it**
+  (phase 46), also when the click was meant to bring it back; the next
+  click shows it. The rule follows the review's reading of a real click
+  (the taskbar takes the foreground first); real tray clicks were not
+  tested, only posted ones.
+- **A second start in desktop mode shows a balloon, not the panel**
+  (phase 46), untested (the hidden test desktop has no tray), and "Do not
+  disturb" can hold it back. `--desktop-mode` on a second start is
+  ignored: the first instance keeps its mode.
+- **An elevated first instance is not found by a normal second start**
+  (phase 46). `CreateMutexW` fails with `ERROR_ACCESS_DENIED`, the second
+  start runs as another main instance, and UIPI would block the hand-over
+  anyway. Reviewed, not fixed. A start during a quitting instance's
+  shutdown wait (up to 10 s) becomes the new main instance.
+- **The offline icon comes with the first failed fetch before any price**
+  (phase 46): at sign-in before the network is up, ~6 s of dots. A failed
+  fetch right after a symbol switch (no price yet for the new symbol)
+  shows the dots too, not the previous symbol's price.
+- **Proxy credentials are not handled** (phase 46). The session follows the
+  Windows proxy settings; a proxy that answers 407 is a failed fetch. No
+  real proxy was tried.
+- **Near the ghost the stamp and alert tags lose their numbers** (phase 46).
+  Within 16 px of the ghost tag, with the pointer in the price column, the
+  stamp and an alert tag keep their surface and drop the number. Zoomed far
+  in, the ghost moves in rounding steps (one cent can be ~50 px), and a
+  just-set tag stays amber while the pointer is anywhere in its rounding
+  step. On the price pane's last two rows over a pane the ghost has a line
+  and no tag. The ghost and the volume tag were checked in the engine's
+  tests, not under a real pointer.
+- **The volume tag blinks out** while a loud new candle's scale eases up
+  (phase 46): above the pane's scale it is not drawn, the stamp's rule.
 - **The one-time scaling of old geometry is untested** (phase 37). It
   reads `GetDpiForSystem`, which changes only at the next sign-in; the
   scale changes in the tests were per-monitor and immediate. The panel
@@ -3948,8 +4134,7 @@ the hover box's time row; the header is untouched. **Exe 230 912 →
   ticker price is tested, and the two can lie a few cents apart.
 - **A duplicate has its own, transient alerts** (phase 23): it does not read
   or write the registry, but alerts set in it fire from its own tray icon and
-  die with the panel. Two *main instances* started by hand both fire the
-  same alert.
+  die with the panel.
 - **The balloon can be held back by "Do not disturb"**, and the sound is the
   system sound "Asterisk" — if it is turned off in Windows, the alert is
   silent. The afterglow shows only when the panel is visible at the moment
@@ -3989,11 +4174,6 @@ the hover box's time row; the header is untouched. **Exe 230 912 →
   instance writes the choice the moment it is made. A duplicate never writes.
 - **The toolbar has no keyboard focus marker.** The pills are reached with
   `V` and `1`…`6`, not with `Tab`.
-- **Several instances share the registry.** Duplicates write nothing, but if
-  several *main instances* are started by hand (`ticker.exe` twice), the one
-  closed last wins. Each instance also has its own tray icon — a duplicate
-  disappears when its panel closes, a main instance stays until
-  "Quit".
 - **A duplicate hidden from its own tray icon stays hidden** (a tray click
   on an active panel hides it, as for the main instance). It is closed with
   the close cross, `ESC` or the tray menu.
@@ -4070,10 +4250,12 @@ the hover box's time row; the header is untouched. **Exe 230 912 →
   and the distance is information; the axis tag and the label (phase 29) of
   the lower-ranked one give way, so that line stands without a name until
   the levels separate.
-- **The labels are transparent text over the candles** (phase 29). At
-  today's first candle a wick can run through a letter (seen: "PDH" at 15m).
-  An opaque surface would wipe out the candles underneath; the text is three
-  capital letters and can take it.
+- **A level label struck on both sides is not drawn** (phase 46). The
+  label goes above its line, or below it when candles or another level's
+  line are above; when both are taken it is left out and the axis tag
+  carries the level. On a young day the PD* labels drop more often, and
+  HOD can lose its name to PDH. An opaque surface behind the text was
+  rejected (it would wipe out the candles).
 - **The crosshair tag is not shown within 16 px of the last-price stamp**
   (phase 29). The crosshair line and the hover box stay; the number on the
   axis is then the stamp's.
@@ -4736,21 +4918,74 @@ the hover box's time row; the header is untouched. **Exe 230 912 →
     are not lost; for a control whose second press undoes the first (a
     range cell ends its range, the gear closes its menu) that turns a
     double-click into nothing, or into the opposite. Decide per control.
+112. **A single-instance mutex turns a leftover test process into a trap.**
+    From phase 46 every later start of the same exe hands over to it and
+    exits, and `Get-Process -Id` on the new start returns a dead process.
+    Kill leftovers of the exact exe path before a run. The test build's
+    mutex name carries a hash of the exe path, so two different test exes
+    and the user's TickC never meet.
+113. **`golden.ps1` deletes `HKCU\Software\TickerTest`.** Run while another
+    test process is alive - another agent's, or a leftover (112) - it pulls
+    the settings from under it. One test run at a time on the key.
+114. **Hidden is the default, and a runner is not the safety net.** In
+    phase 46 a regression runner started `shot_theme`, `shot_rsi` and
+    `shot_dpi` without `-Hidden`: test panels stood on the user's screen for
+    three to four minutes, and `shot_theme`'s mode switch put a desktop
+    surface on the wallpaper. Every script in the scratchpad now has
+    `[switch]$Hidden = $true`, and the scripts without the switch run only
+    on the hidden desktop. A new script is hidden by default too; what
+    cannot run hidden (desktop mode) is skipped and said so.
+115. **From phase 46 a plain start opens the panel.** The old scripts
+    start with no arguments and then post a tray click to open it. On the
+    hidden desktop that click only raises the open panel (measured, so they
+    still pass); on the real desktop it would hide it. `--autostart` is the
+    old quiet start.
+116. **A golden difference after two agents' commits belongs to one of
+    them.** Build each half against the other's previous version (the
+    app's `tickc.c` with the engine at phase 45, and the reverse) before
+    explaining it; in phase 46 the app's half alone was identical in all
+    seven captures, which placed the 132 px in the engine's labels.
+117. **A counter-based "at once" test needs the counter's phase.** The day
+    was fetched every fifth cycle (`dayCycle` 0-4, local to the thread),
+    so a naive "reopen, then the day is fetched" passed one run in five on
+    the old build. Act right after an observed day fetch.
+118. **The quote line depends on the clock.** From phase 46 `DrawHeader`
+    draws the day's fields only for the current UTC day, so a capture that
+    straddles 00:00 UTC loses Chg, Op, Hi, Lo and Vol for one cycle. A run
+    within a minute of UTC midnight is not evidence (the family of 89).
+119. **Group text pixels no taller than one text line in a pixel check.**
+    LOD above its line and PDL below its own merged into one 29 px box, and
+    the check measured that box instead of two labels.
+120. **Moving text off one collider can put it on another.** A label moved
+    below its line to clear the candles can land on another level's line.
+    Test the new place against everything drawn there, and look at the
+    pictures.
+121. **With a shared working copy, build red runs from `git show
+    <commit>:file`** into the scratchpad. Never stash or check out files
+    another agent is editing.
+122. **A posted `WM_MOUSEMOVE` into the price column cannot be read back.**
+    `axisHotY` and `alertHot` read -1 right after it: the hover is cleared,
+    most likely by `WM_MOUSELEAVE` (the real pointer is not in the
+    window), before the probe gets there. Probe field 104 sets the
+    crosshair, not the column's hover. Read `alertHot` (field 26) right
+    after a click instead: `OnAxisClick` recomputes the hover with the same
+    function as `WM_MOUSEMOVE`. A zoomed-far-in view needs no zoom at all:
+    fixtures squeezed around one price (`mk_flat46.py`) give ~76 px a cent.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak39` and `chart.c.bak39` are left** (2026-09-24). From
+**Only `tickc.c.bak40` and `chart.c.bak40` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 45 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 46 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak38` (phases 34–44) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak39` (phases 34–45) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44) and `.bak39` (phase 45). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45) and `.bak40` (phase 46). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

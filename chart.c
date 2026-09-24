@@ -1200,6 +1200,37 @@ void ChartDrawBackground(HDC hdc, int W, int H, HDC wmDC, HBRUSH brBg) {
     SetBkMode(hdc, TRANSPARENT);
 }
 
+// Phase 46: does a candle drawn in [i0, i1) put a pixel inside rc? The same
+// x and y as the candle loop in ChartDrawBody (pitfall 14): the wick is the
+// column cx, rows [yHigh, yLow) - LineTo leaves out its end point - and the
+// body [cx - bodyW / 2, + bodyW) x [yTop, yBot). Only the candles whose body
+// can reach rc's columns are read, a handful for a three-letter label.
+static BOOL CandlesHitRect(const Candle* candles, int i0, int i1, int left, int top, int ch,
+                           double dStart, double slot, int bodyW, double maxP, double range,
+                           const RECT* rc) {
+    if (slot <= 0.0) return FALSE;
+    int a = (int)floor(dStart + (double)(rc->left - left - bodyW) / slot) - 1;
+    int b = (int)ceil(dStart + (double)(rc->right - left + bodyW) / slot) + 1;
+    if (a < i0) a = i0;
+    if (b > i1) b = i1;
+    for (int i = a; i < b; ++i) {
+        const Candle* c = &candles[i];
+        int cx = left + (int)(((double)i - dStart + 0.5) * slot);
+        int x0 = cx - bodyW / 2, x1 = x0 + bodyW;
+        if (x1 <= rc->left || x0 >= rc->right) continue;
+        int yHigh  = top + (int)(((maxP - c->high)  / range) * ch);
+        int yLow   = top + (int)(((maxP - c->low)   / range) * ch);
+        int yOpen  = top + (int)(((maxP - c->open)  / range) * ch);
+        int yClose = top + (int)(((maxP - c->close) / range) * ch);
+        int yTop = (yOpen < yClose) ? yOpen : yClose;
+        int yBot = (yOpen < yClose) ? yClose : yOpen;
+        if (yBot - yTop < 1) yBot = yTop + 1;
+        if (cx >= rc->left && cx < rc->right && yHigh < rc->bottom && yLow > rc->top) return TRUE;
+        if (yTop < rc->bottom && yBot > rc->top) return TRUE;
+    }
+    return FALSE;
+}
+
 // The chart body: everything from the chart geometry down. The header and the
 // status text are the app's (DrawHeader / DrawEmptyState in tickc.c), the
 // background is ChartDrawBackground. Reads the DISPLAY in st, the data in in,
@@ -1606,12 +1637,20 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // top is the view's largest volume, and the legend reads the rest.
     int yVolV = INT_MIN, yVolCross = INT_MIN;
     const Candle* lastV = &in->candles[n - 1];
+    // Phase 46: a volume above the pane's scale gets no tag - the stamp's
+    // rule, "a stamp clamped to the edge places the price where it is not".
+    // That is the last candle panned out of view and louder than every
+    // visible one (the scale is the view's): the tag was pinned to the
+    // pane's top, where no bar is. As the stamp during the Y easing, it can
+    // also blink out for the moment a loud new candle's scale eases up. The
+    // clamps that stay are the tag's own half height at the top and bottom.
     if (volPane && volT > 0 && st->dispVolMax > 0.0 && vbH > 0) {
         int hv = (int)(lastV->volume / st->dispVolMax * (double)vbH * st->dispVolF + 0.5);
-        if (hv > vbH) hv = vbH;
-        yVolV = vb + 1 - hv;
-        if (yVolV < vt + tagHalf) yVolV = vt + tagHalf;
-        if (yVolV > vb - tagHalf) yVolV = vb - tagHalf;
+        if (hv <= vbH) {
+            yVolV = vb + 1 - hv;
+            if (yVolV < vt + tagHalf) yVolV = vt + tagHalf;
+            if (yVolV > vb - tagHalf) yVolV = vb - tagHalf;
+        }
     }
     if (hoverInVol && st->hoverIdx >= 0 && st->hoverIdx < n) {
         double hrV = (double)st->hoverIdx - dStart;
@@ -1646,6 +1685,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // edge to edge.
     int yPill = INT_MIN;
     int yCross = INT_MIN;   // the crosshair tag's row when it is to be drawn (phase 29)
+    int yGhost = INT_MIN;       // the ghost tag's row when it is drawn (phase 46)
+    int yGhostLine = INT_MIN;   // the ghost line's row when there is a ghost
     if (!in->desktop) {
         {
             double lp = in->candles[n - 1].close;
@@ -1684,9 +1725,39 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             int y = AlertY(st, &g, fabs(in->alerts[a]));
             if (y >= top && y <= bottom) yTag[nTag++] = y;
         }
-        BOOL ghost = (in->axisHotY >= top && in->axisHotY <= bottom &&
-                      (in->alertHot < 0 || in->alertHot >= nA));
-        if (ghost) yTag[nTag++] = in->axisHotY;
+        // Phase 46: the ghost stands on the row the alert will be drawn on -
+        // the row of the ROUNDED price (AlertPriceAtY), not the pointer's.
+        // At BTC they are the same row or the next; on a small symbol zoomed
+        // in, one cent can be 50 px, and the line previewed a level that was
+        // then drawn somewhere else. A rounded row outside the pane is where
+        // the alert would not be drawn either: no ghost.
+        // Its rank: the ghost and the crosshair tag never exist at the same
+        // time (the pointer in the column gives hoverIdx = -1), and the ghost
+        // takes the crosshair tag's place - an alert under 16 px from it
+        // keeps its surface and loses its number, the labels and level tags
+        // give way. But it goes AHEAD of the stamp: it is the price a click
+        // would set, shown nowhere else, while the last price stands in the
+        // header's quote line. Phase 29 let the stamp win over the crosshair
+        // tag because the hover box carries that one's numbers; here the
+        // same reasoning points the other way. So within 16 px the ghost is
+        // drawn after the stamp, and the stamp keeps its surface without its
+        // number, as a covered alert tag does. Only while the pointer is in
+        // the column.
+        // Drawn after the stamp, the tag is also drawn after the panes'
+        // value tags; like the crosshair tag (phase 44) it stays in the
+        // price pane's rows when a pane follows, and on the last two rows
+        // only the line is drawn (yGhostLine).
+        if (in->axisHotY >= top && in->axisHotY <= bottom &&
+            (in->alertHot < 0 || in->alertHot >= nA)) {
+            int yr = AlertY(st, &g, AlertPriceAtY(st, &g, in->axisHotY));
+            if (yr >= top && yr <= bottom) {
+                int nextTopG = volPane ? vt : bt;   // bt == bottom without a band
+                yGhostLine = yr;
+                if (!(volPane || bandOn) || yr + tagHalf <= nextTopG) yGhost = yr;
+            }
+        }
+        BOOL ghost = (yGhostLine != INT_MIN);
+        if (yGhost != INT_MIN) yTag[nTag++] = yGhost;
 
         // The tags for today's high and low (phase 27) sit in the same column
         // and rank lowest: a tag under 16 px from the stamp, an alert, the
@@ -1738,8 +1809,11 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // lengthwise. Same rule as the labels: a clipped number is worse
             // than no number (seen in PrintWindow: "81034.00" halfway under
             // the stamp). The surface is drawn, the text is not.
+            // Phase 46: and the ghost tag, drawn later, in the crosshair
+            // tag's rank.
             BOOL covered = (yPill != INT_MIN && abs(y - yPill) < tagH) ||
-                           (yCross != INT_MIN && abs(y - yCross) < tagH);
+                           (yCross != INT_MIN && abs(y - yCross) < tagH) ||
+                           (yGhost != INT_MIN && abs(y - yGhost) < tagH);
             for (int b = a + 1; b < nA && !covered; ++b) {
                 int yb = AlertY(st, &g, fabs(in->alerts[b]));
                 if (yb >= top && yb <= bottom && abs(y - yb) < tagH) covered = TRUE;
@@ -1770,27 +1844,16 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             DrawTextW(hdc, buf, -1, &rcST, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
 
-        // The ghost tag: the pointer is in the price column on an empty spot,
-        // and a click SETS an alert here. Framed, not filled, with the line
-        // across the chart, so the user sees which candles the level cuts
-        // before the click. If all slots are used, it is gray, and the click
-        // does nothing. The price is the ROUNDED one - the one actually set.
+        // The ghost: the pointer is in the price column on an empty spot,
+        // and a click SETS an alert here. Its line across the chart, so the
+        // user sees which candles the level cuts before the click - on the
+        // row the alert will stand on (phase 46, yGhost). The framed tag is
+        // drawn after the stamp, which it ranks ahead of (see there).
         if (ghost) {
-            int y = in->axisHotY;
-            BOOL full = (nA >= ALERT_MAX);
-            COLORREF gc = full ? sty->clr.dim : sty->clr.alertText;
             SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, full ? sty->clr.cross : sty->clr.alertLine);
-            MoveToEx(hdc, left, y, NULL);
-            LineTo(hdc, edge, y);
-            RECT rcG = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
-            FillRect(hdc, &rcG, sty->brBox);
-            SetDCBrushColor(hdc, gc);
-            FrameRect(hdc, &rcG, (HBRUSH)GetStockObject(DC_BRUSH));
-            FormatTagPrice(hdc, AlertPriceAtY(st, &g, y), range, axR - axL, buf, 64);
-            SetTextColor(hdc, gc);
-            RECT rcGT = { axL, y - tagHalf, axR, y + tagHalf };
-            DrawTextW(hdc, buf, -1, &rcGT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            SetDCPenColor(hdc, (nA >= ALERT_MAX) ? sty->clr.cross : sty->clr.alertLine);
+            MoveToEx(hdc, left, yGhostLine, NULL);
+            LineTo(hdc, edge, yGhostLine);
         }
         SetTextColor(hdc, sty->clr.axis);   // the time axis below inherits the color
     }
@@ -1994,9 +2057,22 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // (seen in a capture at 560x300). Then - and only then - the text
             // gets an opaque background, so the numbers stay whole and the
             // line continues behind them.
+            // Phase 46: the same for every horizontal drawn before this - the
+            // alert lines, the ghost's and the afterglow. They are drawn
+            // from left to edge, and an alert set near the top ran through
+            // the numbers.
             BOOL struck = FALSE;
             for (int q = 0; q < LVL_COUNT; ++q)
                 if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
+            for (int a = 0; a < in->alertCount && !struck; ++a) {
+                int ya = AlertY(st, &g, fabs(in->alerts[a]));
+                if (ya >= top && ya <= bottom && ya >= ly - 1 && ya <= ly + szAll.cy) struck = TRUE;
+            }
+            if (yGhostLine != INT_MIN && yGhostLine >= ly - 1 && yGhostLine <= ly + szAll.cy) struck = TRUE;
+            if (in->alertFlashF > 0.0) {
+                int yf = AlertY(st, &g, in->alertFlashLevel);
+                if (yf >= top && yf <= bottom && yf >= ly - 1 && yf <= ly + szAll.cy) struck = TRUE;
+            }
             if (struck) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.sma, indT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
@@ -2040,9 +2116,39 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 if (yLine[q] == INT_MIN) continue;
                 SIZE szN = { 0, 0 };
                 GetTextExtentPoint32W(hdc, LVL_NAME[q], 3, &szN);
-                RECT rcN = { lvlXs + PX(4), yLine[q] - PX(2) - szN.cy, lvlXs + PX(4) + szN.cx, yLine[q] - PX(2) };
-                if (rcN.top < top) { rcN.top = yLine[q] + PX(3); rcN.bottom = rcN.top + szN.cy; }
-                if (rcN.bottom > bottom || rcN.right > right) continue;
+                // Phase 46: the label gives way to the candles. The line's
+                // left end is today's first candle, and on a young day that
+                // is among the newest, by the axis: LOD sat above its line
+                // on the candles that made the low, and a wick ran through
+                // the letters (the review's U7, seen at 15m and 1h). A
+                // background box would wipe out the candles, which are what
+                // is read; so the label goes below its line when the candles
+                // are above it, and when they are on both sides it is not
+                // drawn - the axis tag carries the level. HOD above and LOD
+                // below can never meet today's candles.
+                // Another level's line through the letters is the same
+                // strike (seen when LOD went below its line onto PDL's), so
+                // a side with one on its rows is not taken either.
+                // The rank test against the legend and the labels ahead
+                // decides after the side, as before: a label is not pushed
+                // to the other side by another label.
+                RECT rcN = { 0, 0, 0, 0 };
+                BOOL sideOk = FALSE;
+                for (int side = 0; side < 2 && !sideOk; ++side) {
+                    int yT = (side == 0) ? yLine[q] - PX(2) - szN.cy : yLine[q] + PX(3);
+                    RECT rc = { lvlXs + PX(4), yT, lvlXs + PX(4) + szN.cx, yT + szN.cy };
+                    if (rc.top < top || rc.bottom > bottom || rc.right > right) continue;
+                    BOOL lined = FALSE;
+                    for (int p = 0; p < LVL_COUNT; ++p)
+                        if (p != q && yLine[p] != INT_MIN && yLine[p] >= rc.top - 1 && yLine[p] <= rc.bottom)
+                            lined = TRUE;
+                    if (lined) continue;
+                    if (CandlesHitRect(in->candles, i0, i1, left, top, ch, dStart, slot, bodyW,
+                                       maxP, range, &rc)) continue;
+                    rcN = rc;
+                    sideOk = TRUE;
+                }
+                if (!sideOk) continue;
                 BOOL hit = FALSE;
                 for (int t = 0; t < nPlaced && !hit; ++t) {
                     RECT tmp;
@@ -2147,11 +2253,38 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 // Dark text on the saturated surface - CLR_TEXT would drown.
                 // The surface is layered with LWA_ALPHA 255, not a color key,
                 // so CLR_BG is a color here and not a hole to the wallpaper.
-                SetTextColor(hdc, sty->clr.bg);
-                RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
-                DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                // Phase 46: not under 16 px from the ghost, which is drawn on
+                // top of the stamp below - a strip of the number would stick
+                // out of it. The surface stays, and the price is in the
+                // header's quote line.
+                if (yGhost == INT_MIN || abs(yLast - yGhost) >= tagH) {
+                    SetTextColor(hdc, sty->clr.bg);
+                    RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
+                    DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+                }
             }
         }
+    }
+
+    // --- The ghost tag (phase 23; drawn here from phase 46) ---
+    // Framed, not filled. If all slots are used, it is gray, and the click
+    // does nothing. The price is the ROUNDED one - the one actually set, on
+    // the row it will be drawn on. After the stamp, which gives way to it
+    // (see yGhost): a click is about to set this price, and it is shown
+    // nowhere else.
+    if (yGhost != INT_MIN) {
+        int y = yGhost;
+        BOOL full = (in->alertCount >= ALERT_MAX);
+        COLORREF gc = full ? sty->clr.dim : sty->clr.alertText;
+        RECT rcG = { edge + 1, y - tagHalf, axR + PX(3), y + tagHalf };
+        FillRect(hdc, &rcG, sty->brBox);
+        SetDCBrushColor(hdc, gc);
+        FrameRect(hdc, &rcG, (HBRUSH)GetStockObject(DC_BRUSH));
+        SelectObject(hdc, sty->fontAxis);
+        FormatTagPrice(hdc, AlertPriceAtY(st, &g, in->axisHotY), range, axR - axL, buf, 64);
+        SetTextColor(hdc, gc);
+        RECT rcGT = { axL, y - tagHalf, axR, y + tagHalf };
+        DrawTextW(hdc, buf, -1, &rcGT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
     // --- Crosshair + hover box ---

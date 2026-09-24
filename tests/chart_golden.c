@@ -55,6 +55,17 @@ typedef struct {
     int  dpi;         // 96 = 100 %, 144 = 150 %, 192 = 200 % (phase 36)
     BOOL light;       // ChartThemeLight instead of the default dark (phase 38)
     BOOL rsi;         // the RSI band on (phase 39)
+    // Phase 46, all zero in the older rows. base: the first candle's price
+    // (0 = 63000); a small one makes the view's dollars per pixel small, as
+    // SOL zoomed in. ghost: where the pointer stands in the price column -
+    // 0 as `alerts` puts it, 1 ghostDy px from alert 0's row, 2 ghostDy px
+    // from the stamp's row, 3 the first row from a third down whose rounded
+    // price lies 3 px or more away, 4 no ghost and alert 0 on the legend's
+    // middle row, 5 ghostDy px from the price pane's bottom row. loudLast:
+    // the last candle has 50 times its volume.
+    double base;
+    int  ghost, ghostDy;
+    BOOL loudLast;
 } Case;
 
 // The desktop stamp is sized from H (DeskPillFontH); 1920x1080 and a 3840x1600
@@ -117,6 +128,21 @@ static const Case CASES[] = {
     // below.
     { "vol_1h_gap_hover",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 568, FALSE,  96, FALSE, FALSE },
     { "vol_rsi_15m_290_hover",   560, 290, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0, 280, 107, FALSE,  96, FALSE, TRUE },
+    // Phase 46: the axis column's rank and the rows. The pointer in the price
+    // column 12 px under an alert (outside its 8 px hit zone) and 10 px over
+    // the stamp; a 15 dollar symbol with 12 candles, where one cent is ~50 px
+    // and the rounded price's row lies far from the pointer's; an alert on
+    // the legend's row; and the view panned back from a last candle louder
+    // than every visible one.
+    { "ghost_near_alert",       1280, 720, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE, FALSE, 0.0, 1,  12 },
+    { "ghost_near_stamp",       1280, 720, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE, FALSE, 0.0, 2, -10 },
+    { "ghost_row_zoomed",        560, 300, FALSE, MIN_MS,        12, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 15.0, 3,  0 },
+    { "legend_alert_row",       1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE, FALSE, 0.0, 4,  0 },
+    { "vol_loud_last_panned",   1280, 720, FALSE, HOUR_MS,      360, FALSE,  60, 90, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, TRUE },
+    // The pointer on the price pane's bottom row over the volume pane, whose
+    // value tag stands at its top (the last candle is the loudest): the
+    // ghost tag would reach 2 rows into that tag.
+    { "ghost_pane_edge",        1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 5,  0, TRUE },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -129,13 +155,13 @@ static double Rnd(void) {
     return (double)(s_rng >> 8) / 16777216.0;
 }
 
-static void MakeCandles(Candle* c, int n, long long ivMs) {
+static void MakeCandles(Candle* c, int n, long long ivMs, double base) {
     // Per-candle move grows with the interval, so every interval gets a
     // chart that fills the price axis the way real data does.
     double step = (ivMs >= DAY_MS) ? 0.03 : (ivMs >= HOUR_MS) ? 0.008
                 : (ivMs >= 15 * MIN_MS) ? 0.004 : 0.0015;
     s_rng = 0x5EED0000u ^ (unsigned int)(ivMs / MIN_MS);
-    double p = 63000.0;
+    double p = (base > 0.0) ? base : 63000.0;
     long long t0 = T_END_MS - (long long)n * ivMs;
     for (int i = 0; i < n; i++) {
         double o = p;
@@ -150,8 +176,13 @@ static void MakeCandles(Candle* c, int n, long long ivMs) {
 }
 
 // --- One case into a DC ---
-static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
-    MakeCandles(s_candles, k->n, k->ivMs);
+// out (phase 46), when not NULL, gets the state and the data the frame was
+// drawn from, so a unit check can compute rows with the engine's own
+// functions. out->alerts points at s_alerts.
+static double s_alerts[2];
+static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base, ChartState* outSt, ChartData* outIn) {
+    MakeCandles(s_candles, k->n, k->ivMs, k->base);
+    if (k->loudLast) s_candles[k->n - 1].volume *= 50.0;
 
     ChartState st;
     ZeroMemory(&st, sizeof(st));
@@ -173,7 +204,9 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
     }
 
     double last = s_candles[k->n - 1].close;
-    double alerts[2] = { floor(last * 1.003), -floor(last * 0.985) };
+    double* alerts = s_alerts;
+    alerts[0] = floor(last * 1.003);
+    alerts[1] = -floor(last * 0.985);
 
     ChartData in;
     ZeroMemory(&in, sizeof(in));
@@ -195,6 +228,28 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
         in.alertFlashLevel = floor(last * 0.975);   // a fired one, gone from the list
         in.alertFlashF = 0.6;
     }
+    // Phase 46: the pointer's row in the price column, as TickC's mouse move
+    // sets axisHotY (the app draws a ghost only off every alert's hit zone,
+    // and alertHot stays -1 here).
+    if (k->ghost != 0) {
+        ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi, k->rsi, k->volF > 0.0);
+        if (k->ghost == 1) {
+            in.axisHotY = AlertY(&st, &g, fabs(alerts[0])) + ChartPx(k->dpi, k->ghostDy);
+        } else if (k->ghost == 2) {
+            in.axisHotY = AlertY(&st, &g, last) + ChartPx(k->dpi, k->ghostDy);
+        } else if (k->ghost == 3) {
+            int y = g.top + (g.bottom - g.top) / 3;
+            while (y < g.bottom && abs(AlertY(&st, &g, AlertPriceAtY(&st, &g, y)) - y) < 3) y++;
+            in.axisHotY = y;
+        } else if (k->ghost == 5) {
+            in.axisHotY = g.bottom + ChartPx(k->dpi, k->ghostDy);
+        } else if (k->ghost == 4) {
+            // The legend's text starts 4 px under the top and is 15 px tall.
+            alerts[0] = AlertPriceAtY(&st, &g, g.top + ChartPx(k->dpi, 4) + ChartPx(k->dpi, 7));
+            in.axisHotY = -1;
+            in.alertFlashF = 0.0;
+        }
+    }
 
     ChartStyle sty = *base;
     sty.fontPill = k->desktop ? ChartPillFontCreate(k->H) : NULL;
@@ -202,6 +257,8 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
     ChartDrawBody(hdc, k->W, k->H, &st, &in, &sty);
     GdiFlush();
     if (sty.fontPill) DeleteObject(sty.fontPill);
+    if (outSt) *outSt = st;
+    if (outIn) *outIn = in;
 }
 
 // --- Pixels ---
@@ -254,7 +311,7 @@ static int CrossCheck(const Case* k, const ChartStyle* sty, const DWORD* ref) {
     int diff = -1;
     if (dc && bmp) {
         HBITMAP old = (HBITMAP)SelectObject(dc, bmp);
-        DrawCase(dc, k, sty);
+        DrawCase(dc, k, sty, NULL, NULL);
         SelectObject(dc, old);
         BITMAPINFO bi;
         ZeroMemory(&bi, sizeof(bi));
@@ -550,6 +607,274 @@ static int CheckTimeForms(void) {
     return bad;
 }
 
+// --- Phase 46: the axis column's rank, the ghost's row, the legend, the labels ---
+// Pixel checks on the cases' own pictures: each draws a case by name into a
+// DIB section and reads what landed where, with the rows computed by the
+// engine's exported functions (AlertY, AlertPriceAtY, SessionStart ...).
+typedef struct {
+    const Case* k;
+    Surface     s;
+    ChartStyle  sty;
+    ChartState  st;
+    ChartData   in;
+    ChartRect   g;
+    int         tagHalf, axR;
+} Scene;
+
+static const Case* FindCase(const char* name) {
+    for (int i = 0; i < NCASES; i++) if (strcmp(CASES[i].name, name) == 0) return &CASES[i];
+    return NULL;
+}
+
+static BOOL SceneOpen(Scene* sc, const Case* k) {
+    ZeroMemory(sc, sizeof(*sc));
+    sc->k = k;
+    if (!k) return FALSE;
+    if (!ChartStyleCreate(&sc->sty, k->dpi, k->light ? &ChartThemeLight : NULL)) return FALSE;
+    if (!SurfaceOpen(&sc->s, k->W, k->H)) { ChartStyleDestroy(&sc->sty); return FALSE; }
+    DrawCase(sc->s.dc, k, &sc->sty, &sc->st, &sc->in);
+    sc->g = ChartGeometry(k->W, k->H, k->desktop, k->dpi, k->rsi, k->volF > 0.0);
+    sc->tagHalf = ChartPx(k->dpi, 8);
+    sc->axR = k->W - ChartPx(k->dpi, AXIS_PAD_R);
+    return TRUE;
+}
+
+static void SceneClose(Scene* sc) {
+    SurfaceClose(&sc->s);
+    ChartStyleDestroy(&sc->sty);
+}
+
+// The pixel as a COLORREF (the DIB is 00RRGGBB, a COLORREF 00BBGGRR).
+static COLORREF PxAt(const Scene* sc, int x, int y) {
+    DWORD v = sc->s.px[y * sc->s.W + x];
+    return RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+}
+
+// Pixels in [x0, x1) x [y0, y1) that are (same = TRUE) or are not (FALSE) c.
+static int CountPx(const Scene* sc, int x0, int y0, int x1, int y1, COLORREF c, BOOL same) {
+    int n = 0;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > sc->s.W) x1 = sc->s.W;
+    if (y1 > sc->s.H) y1 = sc->s.H;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+            if ((PxAt(sc, x, y) == c) == same) n++;
+    return n;
+}
+
+// F2: the ghost tag - the price a click would set - has a place in the
+// column's rank. 12 px under an alert, the alert keeps its surface and loses
+// its number (the phase 29 rule for the crosshair tag): the strip of the
+// alert tag above the ghost is plain amber. 10 px over the stamp, the ghost
+// is whole (no stamp color inside it) and the strip of the stamp under it
+// carries no cut number (plain up or down).
+static int CheckGhostRank(void) {
+    int bad = 0;
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase("ghost_near_alert"))) { printf("FAIL ghost rank: no scene\n"); return 1; }
+    {
+        int ya = AlertY(&sc.st, &sc.g, fabs(sc.in.alerts[0]));
+        int n = CountPx(&sc, sc.g.edge + 1, ya - sc.tagHalf, sc.axR + ChartPx(sc.k->dpi, 3), ya + 2,
+                        sc.sty.clr.alert, FALSE);
+        if (n) { printf("FAIL ghost rank: %d px of a number in the alert tag's strip above the ghost (alert row %d, pointer %d)\n",
+                        n, ya, sc.in.axisHotY); bad++; }
+        else printf("ok   ghost rank: the alert 12 px above the ghost keeps its surface, no cut number\n");
+    }
+    SceneClose(&sc);
+    if (!SceneOpen(&sc, FindCase("ghost_near_stamp"))) { printf("FAIL ghost rank: no scene\n"); return bad + 1; }
+    {
+        int n = sc.in.count;
+        double last = s_candles[n - 1].close;
+        COLORREF stampC = (last >= s_candles[n - 2].close) ? sc.sty.clr.up : sc.sty.clr.down;
+        int yp = AlertY(&sc.st, &sc.g, last);
+        int yh = sc.in.axisHotY;
+        int yr = AlertY(&sc.st, &sc.g, AlertPriceAtY(&sc.st, &sc.g, yh));   // where the alert would land
+        int yTop = (yh > yr ? yh : yr) - sc.tagHalf, yBot = (yh < yr ? yh : yr) + sc.tagHalf;
+        int x0 = sc.g.edge + 1, x1 = sc.axR + ChartPx(sc.k->dpi, 3);
+        int inGhost = CountPx(&sc, x0, yTop, x1, yBot, stampC, TRUE);
+        int lo = (yh > yr ? yh : yr) + sc.tagHalf;
+        int inStrip = CountPx(&sc, x0, lo, x1, yp + sc.tagHalf, stampC, FALSE);
+        if (inGhost || inStrip) {
+            printf("FAIL ghost rank: ghost 10 px over the stamp - %d px of stamp in the ghost, %d px of text in the stamp's strip (stamp %d, pointer %d)\n",
+                   inGhost, inStrip, yp, yh);
+            bad++;
+        } else printf("ok   ghost rank: the ghost 10 px over the stamp is whole, the stamp's strip has no cut number\n");
+    }
+    SceneClose(&sc);
+    // Drawn after the stamp, the ghost tag also lands after the panes' value
+    // tags. On the price pane's bottom row it would reach 2 rows over the
+    // volume pane's top, into the value tag standing there: the phase 44
+    // rule for the crosshair tag, a tag stays in its pane's rows (the line is
+    // drawn). No ghost frame in the value tag's rows.
+    if (!SceneOpen(&sc, FindCase("ghost_pane_edge"))) { printf("FAIL ghost rank: no scene\n"); return bad + 1; }
+    {
+        int x0 = sc.g.edge + 1, x1 = sc.axR + ChartPx(sc.k->dpi, 3);
+        int n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf, sc.sty.clr.alertText, TRUE);
+        int line = CountPx(&sc, sc.g.left, sc.g.bottom, sc.g.edge, sc.g.bottom + 1, sc.sty.clr.alertLine, TRUE);
+        if (n || line == 0) {
+            printf("FAIL ghost rank: on the pane's edge %d px of ghost frame in the volume tag's rows, line %d px\n", n, line);
+            bad++;
+        } else printf("ok   ghost rank: on the pane's edge the ghost keeps out of the volume tag, its line stays (%d px)\n", line);
+    }
+    SceneClose(&sc);
+    return bad;
+}
+
+// F7: the ghost line previews the row the alert will be drawn on - the row of
+// the ROUNDED price - not the pointer's row. On a 15 dollar symbol with 12
+// candles one cent is ~50 px, and the two rows lie apart.
+static int CheckGhostRow(void) {
+    int bad = 0;
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase("ghost_row_zoomed"))) { printf("FAIL ghost row: no scene\n"); return 1; }
+    int yh = sc.in.axisHotY;
+    int yr = AlertY(&sc.st, &sc.g, AlertPriceAtY(&sc.st, &sc.g, yh));
+    int w = sc.g.edge - sc.g.left;
+    int onR = CountPx(&sc, sc.g.left, yr, sc.g.edge, yr + 1, sc.sty.clr.alertLine, TRUE);
+    int onH = CountPx(&sc, sc.g.left, yh, sc.g.edge, yh + 1, sc.sty.clr.alertLine, TRUE);
+    if (yr == yh || onR < w / 2 || onH > 0) {
+        printf("FAIL ghost row: pointer row %d has %d px of line, the alert's row %d has %d of %d\n",
+               yh, onH, yr, onR, w);
+        bad++;
+    } else printf("ok   ghost row: the line is on the alert's row %d (%d of %d px), not the pointer's %d\n",
+                  yr, onR, w, yh);
+    SceneClose(&sc);
+    return bad;
+}
+
+// F8: an alert line through the indicator legend. The legend is opaque over
+// it, as over the level lines: on the alert's row, under the legend, no line.
+static int CheckLegendAlert(void) {
+    int bad = 0;
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase("legend_alert_row"))) { printf("FAIL legend alert: no scene\n"); return 1; }
+    int ya = AlertY(&sc.st, &sc.g, fabs(sc.in.alerts[0]));
+    int x0 = sc.g.left + ChartPx(sc.k->dpi, 6);
+    int n = CountPx(&sc, x0, ya, x0 + ChartPx(sc.k->dpi, 200), ya + 1, sc.sty.clr.alertLine, TRUE);
+    int beyond = CountPx(&sc, sc.g.right - ChartPx(sc.k->dpi, 200), ya, sc.g.right, ya + 1, sc.sty.clr.alertLine, TRUE);
+    if (n || beyond == 0) {
+        printf("FAIL legend alert: %d px of the alert line (row %d) through the legend, %d px beyond it\n", n, ya, beyond);
+        bad++;
+    } else printf("ok   legend alert: the line (row %d) stops at the legend, %d px of it beyond\n", ya, beyond);
+    SceneClose(&sc);
+    return bad;
+}
+
+// F6: the last candle is out of view and louder than every visible one. Its
+// value tag would be pinned to the pane's top, where no bar is; the stamp's
+// rule says not drawn. Control: the same candle in view, where its bar
+// reaches the top and the tag belongs there.
+static int CheckVolTag(void) {
+    int bad = 0;
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase("vol_loud_last_panned"))) { printf("FAIL volume tag: no scene\n"); return 1; }
+    int x0 = sc.g.edge + 1, x1 = sc.axR + ChartPx(sc.k->dpi, 3);
+    int n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.box, TRUE);
+    if (n) { printf("FAIL volume tag: %d px of a tag at the pane's top for a candle out of view\n", n); bad++; }
+    else printf("ok   volume tag: none for a louder last candle out of view\n");
+    SceneClose(&sc);
+    Case live = *FindCase("vol_loud_last_panned");
+    live.view = 300; live.back = 0;
+    if (!SceneOpen(&sc, &live)) { printf("FAIL volume tag: no scene\n"); return bad + 1; }
+    n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.box, TRUE);
+    if (!n) { printf("FAIL volume tag (control): no tag for the loud last candle in view\n"); bad++; }
+    else printf("ok   volume tag (control): the loud last candle in view keeps its tag (%d px)\n", n);
+    SceneClose(&sc);
+    return bad;
+}
+
+// U7: the level names (HOD, LOD, PDC, PDH, PDL) must not be struck by the
+// candles. In every panel case with the levels at full strength: the label
+// pixels are the exact line colors off the lines' rows; they are grouped
+// into labels, and no candle pixel (exact up or down) may lie inside a
+// label's box, nor another level's line. The level rows come from the
+// engine's session functions.
+static int CheckLevelLabels(void) {
+    int bad = 0, labels = 0, cases = 0;
+    for (int i = 0; i < NCASES; i++) {
+        const Case* k = &CASES[i];
+        if (k->desktop || k->indF < 1.0) continue;
+        Scene sc;
+        if (!SceneOpen(&sc, k)) { printf("FAIL level labels %s: no scene\n", k->name); bad++; continue; }
+        cases++;
+        const ChartRect* g = &sc.g;
+        double range = sc.st.dispMax - sc.st.dispMin;
+        if (range < 1e-9) range = 1.0;
+        int yl[LVL_COUNT], nl = 0;
+        BOOL full = FALSE;
+        int s0 = SessionStart(s_candles, k->n, k->ivMs, k->histDone, &full);
+        if (s0 >= 0 && full) {
+            double p[LVL_COUNT];
+            int np = 2;
+            SessionHiLo(s_candles, s0, k->n, &p[0], &p[1]);
+            int pe = -1;
+            BOOL pf = FALSE;
+            int ps = PrevSession(s_candles, k->n, k->ivMs, k->histDone, &pe, &pf);
+            if (ps >= 0 && pf) {
+                p[2] = s_candles[pe - 1].close;
+                SessionHiLo(s_candles, ps, pe, &p[3], &p[4]);
+                np = 5;
+            }
+            for (int q = 0; q < np; q++)
+                yl[nl++] = g->top + (int)(((sc.st.dispMax - p[q]) / range) * (double)g->ch);
+        }
+        // Label pixels, grouped: a pixel within 12 px across and 16 px down
+        // of a group's box joins it, as long as the box stays one label tall
+        // (the axis font's 15 px cell) - two labels on either side of a line
+        // are two groups, a line through one label is inside one.
+        int maxH = ChartPx(k->dpi, 16);
+        RECT box[16];
+        int nb = 0;
+        for (int y = g->top; y <= g->bottom; y++) {
+            BOOL onLine = FALSE;
+            for (int q = 0; q < nl; q++) if (abs(y - yl[q]) <= 1) onLine = TRUE;
+            if (onLine) continue;
+            for (int x = g->left; x < g->right; x++) {
+                COLORREF c = PxAt(&sc, x, y);
+                if (c != sc.sty.clr.session && c != sc.sty.clr.prev) continue;
+                int b = 0;
+                for (; b < nb; b++)
+                    if (x >= box[b].left - 12 && x < box[b].right + 12 &&
+                        y >= box[b].top - 16 && y < box[b].bottom + 16 &&
+                        y + 1 - box[b].top <= maxH) break;
+                if (b == nb) {
+                    if (nb == 16) continue;
+                    box[nb].left = x; box[nb].right = x + 1; box[nb].top = y; box[nb].bottom = y + 1;
+                    nb++;
+                } else {
+                    if (x < box[b].left) box[b].left = x;
+                    if (x + 1 > box[b].right) box[b].right = x + 1;
+                    if (y + 1 > box[b].bottom) box[b].bottom = y + 1;
+                }
+            }
+        }
+        for (int b = 0; b < nb; b++) {
+            labels++;
+            int hit = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.up, TRUE) +
+                      CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.down, TRUE);
+            if (hit) {
+                printf("FAIL level labels %s: %d candle px inside the label at %d,%d-%d,%d\n", k->name, hit,
+                       box[b].left, box[b].top, box[b].right, box[b].bottom);
+                bad++;
+            }
+            // And no other level's line through it: the label's own line
+            // lies 2 rows under it or 3 over it, outside the box.
+            for (int q = 0; q < nl; q++) {
+                if (yl[q] >= box[b].top - 1 && yl[q] <= box[b].bottom) {
+                    printf("FAIL level labels %s: a level line (row %d) through the label at %d,%d-%d,%d\n",
+                           k->name, yl[q], box[b].left, box[b].top, box[b].right, box[b].bottom);
+                    bad++;
+                    break;
+                }
+            }
+        }
+        SceneClose(&sc);
+    }
+    if (!bad) printf("ok   level labels: %d labels in %d cases, none struck by a candle\n", labels, cases);
+    return bad;
+}
+
 int main(int argc, char** argv) {
     BOOL update = FALSE, bmp = FALSE;
     for (int i = 1; i < argc; i++) {
@@ -571,7 +896,9 @@ int main(int argc, char** argv) {
 
     unsigned long long hashes[NCASES] = { 0 };
     int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor() +
-                        CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms();
+                        CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms() +
+                        CheckGhostRank() + CheckGhostRow() + CheckLegendAlert() + CheckVolTag() +
+                        CheckLevelLabels();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -587,13 +914,13 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        DrawCase(s.dc, k, &sty);
+        DrawCase(s.dc, k, &sty, NULL, NULL);
         unsigned long long h = Fnv(s.px, k->W * k->H);
         hashes[i] = h;
 
         // The same case twice must give the same pixels: catches state that
         // leaks from one frame into the next, or reads of uninitialized memory.
-        DrawCase(s.dc, k, &sty);
+        DrawCase(s.dc, k, &sty, NULL, NULL);
         BOOL stable = (Fnv(s.px, k->W * k->H) == h);
         int cross = CrossCheck(k, &sty, s.px);
 
@@ -638,6 +965,7 @@ int main(int argc, char** argv) {
     }
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
-    if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis, hover time, time forms)\n", contrastFails);
+    if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis, hover time, time forms,\n"
+                              "ghost rank and row, legend alert, volume tag, level labels)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }
