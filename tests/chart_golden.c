@@ -158,6 +158,7 @@ static const Case CASES[] = {
     { "ohlc_light_15m_alerts",  1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
     { "ohlc_dpi144_1h",         1920,1080, FALSE, HOUR_MS,      360, FALSE,  60,  0, 1.0, 1.0,  -1,  -1, FALSE, 144, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
     { "ohlc_desktop_1920x1080", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
+    { "ohlc_desktop_3840x1600", 3840,1600, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
     { "line_1h_1280x720",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
     { "line_1h_hover",          1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
     { "line_light_15m_alerts",  1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
@@ -941,7 +942,7 @@ static void MarksOf(const Scene* sc, Marks* m) {
     m->bodyW = (int)(m->slot * 0.62);
     if (m->bodyW < 1) m->bodyW = 1;
     if (m->bodyW > ChartPx(sc->k->dpi, 18)) m->bodyW = ChartPx(sc->k->dpi, 18);
-    m->w = ChartPx(sc->k->dpi, 1);
+    m->w = sc->k->desktop ? DeskLineW(sc->k->H) : ChartPx(sc->k->dpi, 1);   // phase 49: DeskLineW
     if (m->w > m->bodyW) m->w = m->bodyW;
     m->maxP = sc->st.dispMax;
     m->range = sc->st.dispMax - sc->st.dispMin;
@@ -1210,6 +1211,26 @@ static double LineThick(const char* name) {
     return all ? (double)both / (double)all : -1.0;
 }
 
+// The OHLC bars' strokes follow the same width (DeskLineW). Most of a bar is
+// its vertical high-low stroke: in candle colors, a pixel of a 2 px stroke
+// has a pixel of its color beside it, one of a 1 px stroke only on a tick.
+static double OhlcThick(const char* name) {
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase(name))) return -1.0;
+    const ChartRect* g = &sc.g;
+    int all = 0, beside = 0;
+    for (int y = g->top + 1; y < g->bottom; y++) {
+        for (int x = g->left + 1; x < g->right - 1; x++) {
+            COLORREF c = PxAt(&sc, x, y);
+            if (c != sc.sty.clr.up && c != sc.sty.clr.down) continue;
+            all++;
+            if (PxAt(&sc, x - 1, y) == c || PxAt(&sc, x + 1, y) == c) beside++;
+        }
+    }
+    SceneClose(&sc);
+    return all ? (double)beside / (double)all : -1.0;
+}
+
 static int CheckDeskLine(void) {
     int bad = 0;
     if (DeskLineW(1080) != 1 || DeskLineW(1600) != 2 || DeskLineW(2160) != 3 || DeskLineW(600) != 1) {
@@ -1223,6 +1244,12 @@ static int CheckDeskLine(void) {
                t1, t2);
         bad++;
     } else printf("ok   desktop line: 1 px at 1080 (%.2f of its pixels thick), 2 px at 1600 (%.2f)\n", t1, t2);
+    double o1 = OhlcThick("ohlc_desktop_1920x1080"), o2 = OhlcThick("ohlc_desktop_3840x1600");
+    if (o1 < 0.0 || o2 < 0.0 || o1 > 0.6 || o2 < 0.9) {
+        printf("FAIL desktop OHLC: %.2f of the bars' pixels have a neighbor beside them at 1080 (want <= 0.60, 1 px), %.2f at 1600 (want >= 0.90, 2 px)\n",
+               o1, o2);
+        bad++;
+    } else printf("ok   desktop OHLC: 1 px strokes at 1080 (%.2f beside), 2 px at 1600 (%.2f)\n", o1, o2);
     return bad;
 }
 

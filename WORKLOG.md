@@ -125,6 +125,9 @@ the caption glyphs and the check mark thicken with the dpi.
 and a mountain besides the candles - one choice per mode, from the gear
 menu's CHART TYPE, `C` and the tray menu; the desktop draws the line by
 default.
+**Phase 50** closes phase 49's two small limitations: the OHLC strokes on
+the desktop widen with the line, and the gear menu's rows share the room
+on a low panel, so all eight fit at 400x250.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
@@ -4394,6 +4397,29 @@ was checked through field 127 and the tray menu built as desktop mode
 (+7 680: the engine +5 632, of it 512 for the desktop's line; the app
 +2 048).**
 
+### Phase 50 — the two small limitations of phase 49
+
+Branch `phase-50`, merged with `--no-ff`. The user asked for phase 49's two
+known limitations to be fixed at once.
+
+- **The OHLC strokes on the desktop widen with the line.** Phase 49 gave the
+  desktop's line `DeskLineW` (1 px at 1080, 2 at 1600, 3 at 2160) and left
+  the bars' high-low line and ticks at 1 px, thin next to it on a large
+  wallpaper. They take the same width now. New case
+  `ohlc_desktop_3840x1600`; no older golden changed.
+- **The gear menu's rows share the room on a low panel.** Under 283 px the
+  last rows were cut, and at the 400x250 minimum Mountain was missing and
+  `End` stopped at Line. The rows now shrink together, down to 16 px each,
+  so all eight fit at 400x250.
+
+**Verified.** `chart_golden` 64/64 twice, with a check that the desktop's
+OHLC strokes are 2 px at 1600 and still 1 px at 1080 (a mutation back to
+1 px fails it). `shot_p49` has a new check at 400x250 (G, End reaches
+Mountain, Enter picks it), red against phase 49 and green; 51/51 twice,
+and once more by the orchestrator on the merged build. The earlier scripts
+pass, and `golden.ps1 -Hidden` is identical to phase 49 in all seven
+captures. **Exe unchanged at 250 368 bytes.**
+
 ---
 
 ## Known limitations
@@ -4413,13 +4439,6 @@ was checked through field 127 and the tray menu built as desktop mode
   (phase 49), not the highs and lows, so a level or an alert between the
   closes' range and the wicks' is not drawn there, where the candles and
   the bars would show it (the rule of the alert and level items below).
-- **A panel under 283 px tall cuts the gear menu's last rows** (phase 49;
-  283 at 96 dpi, and it scales with the panel). At the 400x250 minimum
-  the Mountain row is missing and `End` stops at Line; `C` and the tray
-  menu still reach it.
-- **The OHLC bars' ticks stay 1 px on the desktop** (phase 49). Only the
-  line, and the mountain's line, widen with the surface's height
-  (`DeskLineW`).
 - **The chart type in desktop mode is untested on the real desktop**
   (phase 49): the tray submenu there, the 2 px line on the wallpaper and
   the per-frame pen's GDI count (reviewed, not tested). The desktop's
@@ -5541,7 +5560,7 @@ was checked through field 127 and the tray menu built as desktop mode
 
 ## Backups
 
-**Only `tickc.c.bak43` and `chart.c.bak43` are left** (2026-09-24). From
+**Only `tickc.c.bak44` and `chart.c.bak44` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
 to `tickc.c` and `chart.c` after phase 49 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
@@ -5550,7 +5569,7 @@ the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48) and `.bak43` (phase 49). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49) and `.bak44` (phase 50). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

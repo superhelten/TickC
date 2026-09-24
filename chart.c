@@ -1563,11 +1563,14 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // below see them (MarksHitRect, FillHitRect). The OHLC stroke is
     // ChartPx(dpi, 1), no wider than the body; the line's is the pen's.
     int ctype = ChartTypeOf(st);
-    int markW = PX(1);
-    if (markW > bodyW) markW = bodyW;
     // The line's width: the pen's, ChartPx(dpi, 1), on the panel; on the
-    // desktop it follows the surface's height (DeskLineW).
+    // desktop it follows the surface's height (DeskLineW). The OHLC bars'
+    // strokes take the same width - on a 3840x1600 wallpaper 1 px ticks
+    // beside 9 px bodies' worth of slot were hairlines too - and never more
+    // than the body's.
     int lineW = in->desktop ? DeskLineW(H) : PX(1);
+    int markW = lineW;
+    if (markW > bodyW) markW = bodyW;
     PriceMarks pm = { ctype, in->candles, n, i0, i1, left, top, bottom, ch, bodyW, markW, lineW,
                       dStart, slot, maxP, range };
 
