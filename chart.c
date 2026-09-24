@@ -2090,6 +2090,26 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         }
     }
 
+    // --- The price column as an axis (phase 51) ---
+    // Bloomberg draws the price scale as an axis: a line down the plot's
+    // right edge and a short tick at each label ("-4800"). The line stands on
+    // column edge, the first column outside the clip and the one the grid,
+    // the alert lines and the crosshair stop in front of; down each pane,
+    // not across the gaps between them. Drawn before the labels and the
+    // tags, which begin at edge + 1 and cover it where they stand; the last
+    // price's bridge (to edge + 1) crosses it on the stamp's row. The ticks
+    // are drawn with the labels below, only where a label is drawn. Panel
+    // only: the desktop has no column of labels (phase 14).
+    int tickL = PX(GRID_TICK_LEN);
+    if (!in->desktop) {
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);
+        MoveToEx(hdc, edge, top, NULL);
+        LineTo(hdc, edge, bottom + 1);
+        if (volPane) { MoveToEx(hdc, edge, vt, NULL); LineTo(hdc, edge, vb + 1); }
+        if (bandOn)  { MoveToEx(hdc, edge, bt, NULL); LineTo(hdc, edge, bb + 1); }
+    }
+
     SelectObject(hdc, GetStockObject(BLACK_PEN));
     SelectObject(hdc, GetStockObject(NULL_BRUSH));
 
@@ -2201,6 +2221,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             if (hide) yLvl[q] = INT_MIN;
         }
 
+        // Phase 51: each label drawn gets its tick on the axis line, from
+        // edge + 1 toward the text (which begins at edge + AXIS_LBL_GAP).
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);
         for (int i = 0; i <= 4; ++i) {
             int y = top + (ch * i) / 4;
             if (yPill != INT_MIN && abs(y - yPill) < tagH) continue;
@@ -2208,6 +2232,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             for (int t = 0; t < nTag; ++t) if (abs(y - yTag[t]) < tagH) hidden = TRUE;
             for (int q = 0; q < LVL_COUNT; ++q) if (yLvl[q] != INT_MIN && abs(y - yLvl[q]) < tagH) hidden = TRUE;
             if (hidden) continue;
+            MoveToEx(hdc, edge + 1, y, NULL);
+            LineTo(hdc, edge + 1 + tickL, y);
             double p = maxP - (range * i) / 4.0;
             swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
             RECT rcLbl = { axL, y - tagHalf, axR, y + tagHalf };
@@ -2294,9 +2320,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.axis, rsiT));
         const int lvY[2] = { y70, y30 };
         const wchar_t* lvT[2] = { L"70", L"30" };
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);   // phase 51: the labels' ticks
         for (int q = 0; q < 2; ++q) {
             if (yv != INT_MIN && abs(lvY[q] - yv) < tagH) continue;
             if (yBandCross != INT_MIN && abs(lvY[q] - yBandCross) < tagH) continue;
+            MoveToEx(hdc, edge + 1, lvY[q], NULL);
+            LineTo(hdc, edge + 1 + tickL, lvY[q]);
             RECT rcL = { axL, lvY[q] - tagHalf, axR, lvY[q] + tagHalf };
             DrawTextW(hdc, lvT[q], -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
