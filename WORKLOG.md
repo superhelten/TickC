@@ -80,16 +80,46 @@ the production exe is byte-identical apart from the link timestamp.
 **Phase 33** translates this work log and renames it from `ARBEIDSLOGG.md`.
 **Phase 34** moves the chart engine into `chart.c` / `chart.h`, pixel-identical,
 and gives the test build recorded responses and golden captures.
-Phases 35-45 are in their own sections below.
+**Phase 35** adds golden tests for the engine: `tests/chart_golden.c` draws
+`chart.c` into a memory DC with no window, network or clock and compares a
+hash of every case with `tests/golden/chart.txt`.
+**Phase 36** lets the engine draw at any dpi (`ChartPx`), with lines kept
+one device pixel wide.
+**Phase 37** makes the panel per-monitor DPI aware: the header, buttons,
+toolbar, overlay and minimum size scale, and the geometry is saved in
+device pixels.
+**Phase 38** takes the chart's colors from a `ChartTheme` table, a dark one
+and a light one.
+**Phase 39** adds an RSI 14 band under the chart (`I`), off in both modes.
+**Phase 40** makes the light theme a setting (`T` and the tray menu), one
+choice per mode, with every text pair of the light table at WCAG AA; from
+then on the test scripts run on a hidden desktop.
+**Phase 41** keeps the range (1D … Max) apart from the bar size: the
+interval becomes a dropdown with 1w added, and a range is the panel's home
+view.
+**Phase 42** puts the header on the Bloomberg model: a quote line for the
+UTC trading day, a range field of cells, and a gear with a settings menu.
+**Phase 43** gives the volume a pane of its own under the price.
+**Phase 44** fixes what a deep review found: tray clicks after an Explorer
+restart, input in the lower panes, small wheel steps, auto-repeat and AltGr,
+a candle lost after a gap, and the shutdown.
+**Phase 45** is the review's UI half: dates on the time axis, stronger bars
+in the volume pane, the symbol as a dropdown, one selection color and the
+keys in the settings menu.
 **Phase 46** keeps one main instance per exe - a second start shows the
 first one's panel, and a plain start opens the panel while the start at
 sign-in (`--autostart`) stays quiet - shows an offline icon when there is
 no network at startup, follows the Windows proxy, and gives the ghost tag a
 place in the price column on the row the alert will land on.
+**Phase 47** polishes the interaction: `S`, `B` and `G` open the header's
+menus and the arrows, `Enter` and the menu's own keys work in them, the
+caption buttons act on the release, a drag owns the wheel and the keys, the
+crosshair stays under a resting pointer while the view eases, YTD grows with
+the year, and the tray menu gets a bold "Show panel" and a "None" range.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
-The code is **two files** from phase 34: `tickc.c` (the app, ~6550 lines) and
+The code is **two files** from phase 34: `tickc.c` (the app, ~7050 lines) and
 `chart.c` behind `chart.h` (the chart engine, ~2450 lines). Next to them is
 `tickc.manifest`, which the build embeds (phase 9). No external dependencies
 beyond Win32 and WinHTTP.
@@ -4014,10 +4044,138 @@ pointer (reviewed, not tested). **Exe 232 960 → 237 568 bytes (+4 608)**;
 alone, the app's half was +3 072 and the engine's +1 024, and the
 integration fix costs nothing.
 
+### Phase 47 — interaction polish
+
+Branch `phase-47`, merged with `--no-ff`. The input and interaction
+findings left from phase 44's deep review, all on the app's side: one agent
+edited `tickc.c`, and `chart.c` is untouched.
+
+**The drag.**
+- **A drag that started right after a backfill jumped by the backfill.**
+  Button-down took its anchor from a view already in the new buffer's
+  indices while the shift was still pending, and the first move applied the
+  shift again (a backfill of 5 moved the view by 10). The shift is now
+  applied before the anchor is taken, as the move handler does.
+- **The wheel and the keys acted during a drag** (only navigation and the
+  toggles were blocked). R and Esc reset the view under the finger, and the
+  next move put it back; Esc could hide the panel with the button down; and
+  Ctrl+0 resized the window. The drag now owns the wheel and the whole
+  keyboard until the release or a lost capture.
+
+**Hover that follows the display.**
+- **The wheel's crosshair rode a moving candle.** The candle under the
+  pointer was computed before the display eased, and the crosshair stayed
+  on it as it slid away. The pointer's x is kept (`hoverX`), and while the
+  view eases the clock asks `HitCandle` again, so the crosshair stays under
+  a resting pointer after a wheel notch, a double-click or a new candle. The
+  keys still clear it.
+- **The red "click removes" alert tag went stale** when the price axis
+  rescaled under a resting pointer. The click itself was right (it asks
+  `AxisAlertAt` afresh since phase 46); the drawing was not. The clock now
+  recomputes the column's hover whenever the axis eases (`AxisHoverSet`,
+  shared with the mouse move).
+
+**Minimized.** `IsWindowVisible` is TRUE for a minimized window, so an
+offline panel's clock ticked 60 times a second while minimized (57 ticks in
+1.5 s before, 0 now), and an ease cut off by the minimize stood frozen after
+the restore until the next fetch. Both of the clock's keep-ticking branches
+and `WM_APP_DATA` check `IsIconic` now, and `WM_SIZE` restarts the clock on
+a restore - for the published panel only (pitfall 124).
+
+**The header.**
+- **An open menu owns the whole header band.** On free header area the
+  first click was caption: it moved the window with the menu open, and a
+  double-click maximized it. Now it closes the menu, as a click anywhere
+  else does. The resize border still resizes.
+- **The caption buttons act on the release,** on the button they were
+  pressed on, and show a pressed state. Released off the button, or with
+  the capture lost, the press does nothing; slid back on before the
+  release, the button lights again - Windows' own buttons behave so.
+  Maximized, the buttons reach the screen's top edge and the close button
+  its right edge (Fitts's law: a pointer flung into the corner is on the
+  cross). One hit test, `ButtonHitAt`, serves `WM_NCHITTEST`, hover, press,
+  release and the double-click. The keyboard shortcuts still act at once.
+
+**Keys into the menus.** S, B and G open the symbol, interval (bar size)
+and settings menus, and the same letter closes its own. From the keyboard
+the highlighted row starts on the current symbol or interval, as in a
+Windows dropdown, or on the first setting. Up and Down, Home and End move
+it; Enter or Space picks it as a click would (a setting toggles and the
+menu stays open); Left and Right go to the next menu in the header's
+order (symbol, interval, settings), or to the other column in the
+right-click picker. The keys a list shows now work in it: the interval rows show 1-7,
+right-aligned, and V M I T, which the settings have shown since phase 45,
+toggle there. Enter and Space join the keys that ignore auto-repeat (a held
+Enter toggled a setting at the repeat rate). Up to phase 46 the symbol
+could not be changed from the keyboard at all.
+
+**The tray menu.** In panel mode "Show panel" is the bold default item,
+first: it shows the panel and never hides it (`ShowPanel`, as a second
+start does), while the left click still toggles (phase 46). The key hints
+after a tab show in panel mode only - the desktop surface takes no keys -
+and now include S and B on Symbol and Interval, 1-7 on the intervals and
+Shift+1-8 on the ranges. Range gets a "None" radio item that ends the
+range, and in the tray menu the checked range picked again keeps it (it
+used to end it); a second press of its cell or its Shift key still ends
+it. There is no "New panel" item: `[ + ]` cascades from the panel's
+position, which the tray does not have when the panel was never opened.
+
+**Ranges.** YTD is anchored: its size is counted from 1 January 00:00 UTC
+to the newest candle (by the clock while the buffer is empty), and the
+worker counts it again on every merge (`rangeYtd`). A followed YTD view had
+kept its first count, so every midnight UTC pushed 1 January out of it while
+the header still said YTD. The durations (1D … 5Y) round up: 5Y is 261
+weeks, as the phase 41 table says (the truncation gave 260), and 1Y on 1w
+is 53.
+
+**The back buffer** is freed before the style's fonts are deleted on a
+theme or dpi change (`ApplyPanelStyle`); the fonts were still selected in
+it, against `DeleteObject`'s contract. The leak did not reproduce: the GDI
+count stayed flat over 50 theme switches and 20 dpi changes in both builds,
+so the fix follows the contract, not a measurement.
+
+Probe fields, panel: 80 the clock running, 81 the pan anchor, 82 the
+highlighted menu row (pointer or keys), 83 the candle a pointer at (x, y) in
+`lParam` would be on and 84 the alert a pointer at row `lParam` in the price
+column would be on (both without touching the hover), 85 the clock's ticks,
+86 the client size (w << 16 | h); 106 WRITING, a backfill of `lParam`
+candles lands with no repaint. Main window: 125 the tray menu as the next
+right-click would build it (the default item, the number of key hints, an
+item's state, whether an item has a hint; bit 8 builds it as desktop mode),
+126 WRITING, a candle one interval after the last merges.
+
+**Verified.** `shot_p47.ps1` (53 checks, 19 of them controls, posted
+messages on the hidden desktop). **Red** against commit 1, twice: 34 fail -
+every fix except the back buffer's, which the old build does not show
+either - and the controls pass. Green three times. The earlier scripts pass
+(`shot_p46`, `shot_arow46`, `shot_fix44`, `shot_ui45`, `shot_vol`,
+`shot_range`, `shot_theme`, `shot_quote`, `shot_rsi`, `shot_dpi`);
+`shot_range` now expects the tray's checked range to stay and "None" to end
+it (21/21). `chart_golden` 42/42 twice. `golden.ps1 -Hidden` is identical to
+phase 46 in all seven captures. The interval list with its keys and the
+pressed close button were looked at. Not exercised: a real slide-off, a real
+fling into the maximized corner, `WM_MOUSELEAVE` while a button is held, a
+real double-click on the header with a menu open, Ctrl+0 mid-drag, AltGr,
+and the tray menu in desktop mode, which was only built with the mode flag
+(reviewed, not tested). **Exe 237 568 → 241 152 bytes (+3 584).**
+
 ---
 
 ## Known limitations
 
+- **A menu opened from the keyboard shows no highlight until it moves**
+  (phase 47). The arrows start on the current symbol or interval, which is
+  already drawn as the accent row, as in a Windows dropdown; the row
+  appears to light only after the first arrow. G starts on the first
+  setting.
+- **The mouse takes the menu's row back** (phase 47). Any mouse move over
+  an open menu replaces the keyboard's row with the one under the pointer.
+- **G is shown nowhere in the panel** (phase 47). S and B stand in the tray
+  menu next to Symbol and Interval, and the settings stand there one by
+  one, so the settings menu's key is only in the README.
+- **`Ctrl`+`M` and `Ctrl`+`W` act while a caption button is held** (phase
+  47). The press waits for the release; the shortcuts act at once, and
+  nothing blocks them in between.
 - **A tray click within 500 ms after the panel lost activation hides it**
   (phase 46), also when the click was meant to bring it back; the next
   click shows it. The rule follows the review's reading of a real click
@@ -4064,7 +4222,11 @@ integration fix costs nothing.
   before phase 43. At 150 % the limit scales with the panel.
 - **YTD in the first week of January** (phase 41) is fewer than
   `MIN_VIEW` (8) daily candles, so the range cannot be shown on 1d and
-  ends. It comes back once the year is eight days old.
+  ends. It comes back once the year is eight days old. A YTD view at home
+  when the year turns (phase 47) is left, not ended: the new year's count
+  is under eight, so the cell goes out, the header shows the span and the
+  view keeps its size, as after a pan. R or a pick of the cell asks again,
+  and ends the range while the year is under eight days old.
 - **A view away from a range's home shows spans like `(2100d)`** (phase
   41). `FormatSpan` counts days and hours; months and years are not
   spelled out.
@@ -4149,9 +4311,10 @@ integration fix costs nothing.
   branch is gone along with the symbol line.
 - **The periods are fixed** (phase 25): SMA 20 and EMA 50, not selectable,
   and both or neither — one toggle.
-- **The `MA` pill does not exist below 426 px width** (phase 25). `M` and
-  the tray menu work. The legend needs ~335 px of chart width and is gone
-  below ~440 px panel width; the lines are drawn regardless.
+- **The averages' legend needs ~335 px of chart width** (phase 25) and is
+  gone below ~440 px panel width; the lines are drawn regardless. The
+  phase 25 `MA` pill, which did not fit below 426 px, left the header in
+  phase 42: the toggle is in the gear menu, on `M` and in the tray menu.
 - **EMA depends on where the buffer begins** (phase 25). It is fed from
   candle 0, so a backfill (phase 18) or an eviction at the front moves the
   seed point. The effect dies out as (49/51)ⁿ: after 300 candles it is below
@@ -4172,8 +4335,10 @@ integration fix costs nothing.
   it was started from** (phase 22). `--dup` carries symbol and interval, not
   the volume choice; in practice they are the same, because the main
   instance writes the choice the moment it is made. A duplicate never writes.
-- **The toolbar has no keyboard focus marker.** The pills are reached with
-  `V` and `1`…`6`, not with `Tab`.
+- **The header's cells have no `Tab` order and no focus marker.** From
+  phase 47 `S`, `B` and `G` open its menus with a highlighted row that the
+  arrows move; the intervals are on `1`…`7`, the ranges on
+  `Shift`+`1`…`8`, and the settings on `V`, `M`, `I` and `T`.
 - **A duplicate hidden from its own tray icon stays hidden** (a tray click
   on an active panel hides it, as for the main instance). It is closed with
   the close cross, `ESC` or the tray menu.
@@ -4185,13 +4350,16 @@ integration fix costs nothing.
   have `WS_SYSMENU`. The control buttons are reached from the keyboard with
   `Ctrl`+`N`, `Ctrl`+`M`, `F11`, `Ctrl`+`W` and `Alt`+`F4` (phase 19), the
   chart with arrow keys, `PgUp`/`PgDn`, `Home`/`End` and `+`/`-` (phase 20),
-  in addition to `Ctrl`+`0`, `R`, `ESC` and `Win`+arrow.
+  the header's menus with `S`, `B` and `G` (phase 47), in addition to
+  `Ctrl`+`0`, `R`, `ESC` and `Win`+arrow.
 - **`ESC`, the shortcuts and the navigation keys need keyboard focus.** If
   you have clicked in another window, the panel must be clicked first. The
   buttons and the wheel work regardless.
 - **A keystroke in the chart removes the crosshair** until the next mouse
   move (phase 20). That was chosen over letting the cross slide with the
-  candle during the easing.
+  candle during the easing. From phase 47 the wheel, a double-click and a
+  new candle keep it under a resting pointer instead; the keys still clear
+  it.
 - **`Alt`+`Tab` in the middle of a drag does not always release capture.**
   Measured: in two of five runs the task switcher took capture, three times
   the panel kept it, and the drag then continues until the button is
@@ -4201,7 +4369,8 @@ integration fix costs nothing.
   both drawn as `150`. The font has no `k` glyph — phase 1 deliberately chose
   `75.8` over `75k` — and the tooltip carries the exact number.
 - **The animation timer runs in short bursts while the panel is open.** With
-  the panel closed no timer runs at all. With the panel open every data fetch
+  the panel closed or minimized (phase 47) no timer runs at all. With the
+  panel open every data fetch
   restarts the timer, because the live candle can move the Y target:
   measured **23 ticks in 30 seconds**, against 1800 if it had run
   continuously. So it dies between fetches — this is not a leak.
@@ -4971,21 +5140,49 @@ integration fix costs nothing.
     after a click instead: `OnAxisClick` recomputes the hover with the same
     function as `WM_MOUSEMOVE`. A zoomed-far-in view needs no zoom at all:
     fixtures squeezed around one price (`mk_flat46.py`) give ~76 px a cent.
+123. **`IsWindowVisible` is TRUE for a minimized window.** A "do not tick
+    while nobody sees it" guard needs `IsIconic` as well. And a minimized
+    client is not 0x0: this frameless panel's is 160x28.
+124. **`CreateWindowExW` sends `WM_SIZE` before `hPopup` is published.**
+    Starting the clock there must check `hwnd == g_Ctx.hPopup`: a desktop
+    surface that fails to attach is destroyed before it is published, its
+    `WM_NCDESTROY` does not reset `animRunning`, and the next surface's
+    clock would never start.
+125. **A per-frame hover recompute must be gated on a hover existing**
+    (`hoverIdx >= 0`, `axisHotY >= 0`), or it undoes the clears that the
+    keys and `WM_MOUSELEAVE` make.
+126. **From phase 47 a caption button acts on `WM_LBUTTONUP`.** A probe
+    that posts only `WM_LBUTTONDOWN` (0x0201) does nothing; post the up
+    too. A posted click also skips `WM_NCHITTEST`, so a hit-test fix needs
+    a `SendMessage(WM_NCHITTEST)` check of its own.
+127. **A red check can pass because nothing happened.** "S, Up, Enter picks
+    BTC again" passes when the keys never arrived, and "None ends it" when
+    the range had already ended. Record the precondition in the same check.
+128. **An ease takes longer than it looks.** With tau 70 ms, 65 candles
+    need ~490 ms to snap. Wait on field 80 (the clock running) or compute
+    the wait from tau, not with a guessed sleep.
+129. **The `.ps1` files in the scratchpad can be CRLF too** (pitfall 68's
+    family). Detect the newline before asserting that a Python match found
+    its place.
+130. **Changing a UI convention breaks the earlier script that encoded
+    it.** `shot_range` checked that picking the selected range in the tray
+    menu ends it. Update the expectation in the same phase, and name the
+    check that changed.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak40` and `chart.c.bak40` are left** (2026-09-24). From
+**Only `tickc.c.bak41` and `chart.c.bak41` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 46 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 47 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak39` (phases 34–45) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak40` (phases 34–46) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45) and `.bak40` (phase 46). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46) and `.bak41` (phase 47). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
