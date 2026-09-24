@@ -148,7 +148,7 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
     st.hoverIdx = -1;
     if (k->hoverX >= 0) {
         // As TickC's probe field 104 does it: a mouse move at (x, y).
-        ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi, k->rsi);
+        ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi, k->rsi, k->volF > 0.0);
         st.hoverIdx = HitCandle(&st, k->n, &g, k->hoverX, k->hoverY);
         st.hoverY   = k->hoverY;
     }
@@ -166,8 +166,11 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base) {
     in.axisHotY = -1;
     in.utcOffsetMs = UTC_OFFSET_MS;
     in.band = k->rsi;
+    // The volume's choice (phase 43): on whenever its display is, so a fade
+    // case is a pane with bars half grown, as in the app.
+    in.vol = (k->volF > 0.0);
     if (k->alerts) {
-        ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi, k->rsi);
+        ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi, k->rsi, k->volF > 0.0);
         in.alerts = alerts; in.alertCount = 2;
         in.axisHotY = g.top + (g.bottom - g.top) / 3;   // ghost tag under the pointer
         in.alertFlashLevel = floor(last * 0.975);   // a fired one, gone from the list

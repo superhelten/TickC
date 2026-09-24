@@ -26,7 +26,11 @@ typedef struct {
 // (both = bottom) when there is no band. bottom and ch stay the PRICE pane's,
 // so every price <-> y function reads them as before; the time axis sits
 // under the lowest pane.
-typedef struct { int left, top, right, bottom, cw, ch, edge, dpi, bandTop, bandBottom; } ChartRect;
+// volTop/volBottom (phase 43) are the volume pane, between the price pane and
+// the RSI band; equal (both = bottom) when the volume has no pane of its own.
+// The lowest pane's bottom is ChartPanesBottom - the hit test, the crosshair
+// and the time axis all read it, so they cannot disagree.
+typedef struct { int left, top, right, bottom, cw, ch, edge, dpi, bandTop, bandBottom, volTop, volBottom; } ChartRect;
 
 // The chart's own state. viewStart/viewCount/followLive are the TARGET view
 // (in TickC written by the UI and read by the worker thread, under the lock);
@@ -78,6 +82,10 @@ typedef struct {
     // The RSI band is on (phase 39). The region follows this at once; its
     // content fades with ChartState.dispRsiF. ChartGeometry takes the same flag.
     BOOL          band;
+    // The volume is on (phase 43): the CHOICE, which decides the region -
+    // a pane of its own, or the bars behind the candles when there is no room
+    // for one. The bars grow and sink with ChartState.dispVolF.
+    BOOL          vol;
 } ChartData;
 
 // The chart's colors (phase 38). Every color the engine draws with comes from
@@ -297,7 +305,8 @@ typedef struct {
 #define IND_BATCH (VOL_BATCH * 4)
 
 // --- Geometry and hit testing ---
-ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band);
+ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band, BOOL vol);
+int       ChartPanesBottom(const ChartRect* g);
 int       ChartAxisW(int dpi);
 int       DeskPillH(int H);
 int       DeskPillFontH(int H);

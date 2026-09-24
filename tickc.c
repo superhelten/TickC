@@ -527,6 +527,14 @@ static BOOL ShowIndNow(const AppContext* ctx) {
 static BOOL ShowRsiNow(const AppContext* ctx) {
     return g_desktopMode ? ctx->showRsiDesk : ctx->showRsi;
 }
+// The chart's rectangle for a W x H surface in the mode we are in (phase 43).
+// Painting, the watermark and every hit test go through here: the panes
+// under the price follow two choices, and a call site that forgot one would
+// point the crosshair at the wrong candle.
+static ChartRect PanelGeometry(int W, int H) {
+    return ChartGeometry(W, H, g_desktopMode, g_Ctx.sty.dpi,
+                         ShowRsiNow(&g_Ctx), ShowVolNow(&g_Ctx));
+}
 static UINT g_msgTaskbarCreated = 0;   // Explorer restarted
 static char s_httpBuf[98304];    // 360 candles give a ~60 KB response
 static Candle s_incoming[SEED_COUNT];
@@ -2461,7 +2469,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     SetTextColor(ctx->wmDC, Blend(ctx->sty.clr.bg, ctx->theme->wmInk,
                                   (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
 
-    ChartRect g = ChartGeometry(W, H, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+    ChartRect g = PanelGeometry(W, H);
 
     // The font height follows the height of the chart surface, not a fixed
     // value: a small panel must not get the watermark clipped, and a large
@@ -2983,6 +2991,7 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
     in.alertFlashLevel = ctx->alertFlashLevel; in.alertFlashF = ctx->alertFlashF;
     in.utcOffsetMs = ChartUtcOffsetMs();
     in.band = ShowRsiNow(ctx);   // phase 39
+    in.vol  = ShowVolNow(ctx);   // phase 43
 
     ChartStyle sty = ctx->sty;
     sty.fontPill = ctx->hFontPill;
@@ -3814,7 +3823,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+            ChartRect g = PanelGeometry(rc.right, rc.bottom);
 
             // Button hover. Must come after the TrackMouseEvent arming above
             // (pitfall 13) and before the overlay and panning branches, which
@@ -3974,7 +3983,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect g = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+            ChartRect g = PanelGeometry(rc.right, rc.bottom);
             if (g.cw <= 0) return 0;
 
             BOOL ctrl   = (GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0;
@@ -4113,7 +4122,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 104: {
                     RECT rcH;
                     GetClientRect(hwnd, &rcH);
-                    ChartRect gH = ChartGeometry(rcH.right, rcH.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+                    ChartRect gH = PanelGeometry(rcH.right, rcH.bottom);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gH, LOWORD(lParam), HIWORD(lParam));
                     g_Ctx.ch.hoverY   = HIWORD(lParam);
                     InvalidateRect(hwnd, NULL, FALSE);
@@ -4218,6 +4227,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 71: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayHigh * 100.0 + 0.5) : -1; break;
                 case 72: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayLow  * 100.0 + 0.5) : -1; break;
                 case 73: r = g_Ctx.dayValid ? (LRESULT)floor(g_Ctx.dayVol  * 100.0 + 0.5) : -1; break;
+                // 74-77 (phase 43): where the volume stands - 0 off, 1 a pane
+                // of its own, 2 behind the candles - then the pane's top and
+                // bottom and the price pane's bottom, in client pixels.
+                case 74: case 75: case 76: case 77: {
+                    RECT rcV;
+                    GetClientRect(hwnd, &rcV);
+                    ChartRect gV = PanelGeometry(rcV.right, rcV.bottom);
+                    if (wParam == 74)
+                        r = !ShowVolNow(&g_Ctx) ? 0 : (gV.volBottom > gV.bottom) ? 1 : 2;
+                    else
+                        r = (wParam == 75) ? gV.volTop : (wParam == 76) ? gV.volBottom : gV.bottom;
+                    break;
+                }
                 case 62: r = (LRESULT)(g_Ctx.ch.dispRsiF * 1000.0); break;
                 case 63: {
                     double v;
@@ -4312,7 +4334,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 {
                     RECT rcE;
                     GetClientRect(hwnd, &rcE);
-                    ChartRect gE = ChartGeometry(rcE.right, rcE.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+                    ChartRect gE = PanelGeometry(rcE.right, rcE.bottom);
 
                     int tvs = 0, tvc = 0, tn = 0;
                     double tMin = 0.0, tMax = 1.0, tVol = 0.0;
@@ -4418,7 +4440,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (!g_Ctx.overlayOpen) {
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
-                ChartRect gd = ChartGeometry(rcD.right, rcD.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+                ChartRect gd = PanelGeometry(rcD.right, rcD.bottom);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
                 // [g.left, edge]: the chart and the headroom. Up to and
                 // including phase 22 the area went all the way to W, with the
@@ -4488,7 +4510,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
             }
 
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+            ChartRect gg = PanelGeometry(rc.right, rc.bottom);
             // The price column (phase 23): set or remove an alert. Same
             // area as the hover block in WM_MOUSEMOVE, and same data requirement.
             if (g_Ctx.ch.dispValid && dx > gg.edge && dy >= gg.top && dy <= gg.bottom) {
@@ -4520,7 +4542,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_RBUTTONUP: {
             RECT rc;
             GetClientRect(hwnd, &rc);
-            ChartRect gg = ChartGeometry(rc.right, rc.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+            ChartRect gg = PanelGeometry(rc.right, rc.bottom);
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
             if (!g_Ctx.overlayOpen &&
                 mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
@@ -4656,7 +4678,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     if (g_Ctx.ch.hoverIdx >= 0 && g_Ctx.ch.dispValid) {
                         RECT rcA;
                         GetClientRect(hwnd, &rcA);
-                        ChartRect ga = ChartGeometry(rcA.right, rcA.bottom, g_desktopMode, g_Ctx.sty.dpi, ShowRsiNow(&g_Ctx));
+                        ChartRect ga = PanelGeometry(rcA.right, rcA.bottom);
                         int hy = g_Ctx.ch.hoverY;
                         if (hy < ga.top)    hy = ga.top;
                         if (hy > ga.bottom) hy = ga.bottom;

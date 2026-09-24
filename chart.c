@@ -427,7 +427,7 @@ int ChartAxisW(int dpi) {
     return ChartPx(dpi, AXIS_LBL_GAP) + AXIS_Y_CHARS * cw + ChartPx(dpi, AXIS_PAD_R);
 }
 
-ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band) {
+ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band, BOOL vol) {
     ChartRect g;
     if (dpi <= 0) dpi = CHART_DPI_BASE;
     g.dpi    = dpi;
@@ -451,7 +451,19 @@ ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band) {
             g.ch      = g.bottom - g.top;
         }
     }
+    // The volume pane (phase 43): none yet, the bars stand behind the candles.
+    (void)vol;
+    g.volTop = g.volBottom = g.bottom;
     return g;
+}
+
+// The lowest pane's bottom row (phase 43): where the hit test, the vertical
+// crosshair and the time axis end. One function, so the three agree.
+int ChartPanesBottom(const ChartRect* g) {
+    int y = g->bottom;
+    if (g->volBottom > y)  y = g->volBottom;
+    if (g->bandBottom > y) y = g->bandBottom;
+    return y;
 }
 
 // Which candle is the mouse over? Returns an absolute index, -1 outside.
@@ -461,8 +473,9 @@ ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band) {
 int HitCandle(const ChartState* ctx, int n, const ChartRect* g, int mx, int my) {
     if (ctx->dispCount <= 0.0 || g->cw <= 0) return -1;
     if (n <= 0) return -1;
-    // The band (phase 39) belongs to the same candles: the crosshair works there too.
-    int yMax = (g->bandBottom > g->bottom) ? g->bandBottom : g->bottom;
+    // The panes under the price (phase 39, 43) belong to the same candles:
+    // the crosshair works there too.
+    int yMax = ChartPanesBottom(g);
     if (mx < g->left || mx >= g->right || my < g->top || my > yMax) return -1;
 
     double slot = (double)g->cw / ctx->dispCount;
@@ -1035,9 +1048,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     int n = in->count;
     wchar_t buf[64];
     int dpi = (sty->dpi > 0) ? sty->dpi : CHART_DPI_BASE;
-    ChartRect g = ChartGeometry(W, H, in->desktop, dpi, in->band);
+    ChartRect g = ChartGeometry(W, H, in->desktop, dpi, in->band, in->vol);
     BOOL bandOn = (g.bandBottom > g.bottom);   // phase 39
-    int  axisB  = bandOn ? g.bandBottom : g.bottom;   // the lowest pane: the time axis sits under it
+    int  axisB  = ChartPanesBottom(&g);   // the lowest pane: the time axis sits under it
     // The tags on the price axis: [y - tagHalf, y + tagHalf), and two tags
     // closer than tagH collide (16 px at 96 dpi).
     int tagHalf = PX(8), tagH = 2 * tagHalf;
