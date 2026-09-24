@@ -2765,14 +2765,21 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
                 SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.accent, a));
                 FillRect(hdc, &box, (HBRUSH)GetStockObject(DC_BRUSH));
                 SetDCPenColor(hdc, Blend(ctx->sty.clr.accent, ctx->sty.clr.onAccent, a));
-                for (int t = 0; t < 2; ++t) {   // two pixels thick
+                // Two pixels thick at 96, three at 144 (phase 48, review
+                // C10: it stayed two while the box grew).
+                for (int t = 0; t < Dp(2); ++t) {
                     MoveToEx(hdc, cx0 + Dp(2), cy0 + Dp(5) + t, NULL);
                     LineTo(hdc, cx0 + Dp(4), cy0 + Dp(7) + t);
                     LineTo(hdc, cx0 + Dp(9), cy0 + Dp(2) + t);
                 }
             } else {
+                // The empty box's edge follows the caption glyphs' stroke.
                 SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.text, a));
-                FrameRect(hdc, &box, (HBRUSH)GetStockObject(DC_BRUSH));
+                RECT fr = box;
+                for (int t = 0; t < Dp(1); ++t) {
+                    FrameRect(hdc, &fr, (HBRUSH)GetStockObject(DC_BRUSH));
+                    InflateRect(&fr, -1, -1);
+                }
             }
             SelectObject(hdc, oldP);
             SelectObject(hdc, oldB);
@@ -3063,6 +3070,17 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         int cx = (r->left + r->right) / 2;
         int cy = (r->top + r->bottom) / 2;
         int g  = Dp(4);   // half glyph width: 9x9 pixels in total at 96 dpi
+        // The stroke follows the dpi too (phase 48, review C10): one pixel at
+        // 96 and 120, two at 144-192. The glyphs grew with Dp while the pens
+        // stayed one device pixel, and at 150-200 % they read as hairlines.
+        // A wide GDI pen gets round ends and is centred on the path, which
+        // the +1 end-point arithmetic below does not allow for, so each
+        // stroke is drawn s times, one pixel further right (or down, or in)
+        // each time. Every glyph's box then grows by s - 1 to the right and
+        // down, and they stay centred on one another. At s = 1 the loops
+        // draw what they drew before, pixel for pixel.
+        int s  = Dp(1);
+        int e  = s - 1;
 
         switch (i) {
             case BTN_NEW:
@@ -3070,14 +3088,18 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                 // LineTo does not draw the end point, hence +4 - that is what
                 // makes the cross symmetric. 7 and not 9 like the others: a
                 // 9x9 plus weighs optically heavier than the X next to it.
-                MoveToEx(hdc, cx - Dp(3), cy, NULL);
-                LineTo(hdc, cx + Dp(3) + 1, cy);
-                MoveToEx(hdc, cx, cy - Dp(3), NULL);
-                LineTo(hdc, cx, cy + Dp(3) + 1);
+                for (int k = 0; k < s; ++k) {
+                    MoveToEx(hdc, cx - Dp(3), cy + k, NULL);
+                    LineTo(hdc, cx + Dp(3) + 1 + e, cy + k);
+                    MoveToEx(hdc, cx + k, cy - Dp(3), NULL);
+                    LineTo(hdc, cx + k, cy + Dp(3) + 1 + e);
+                }
                 break;
             case BTN_MIN:
-                MoveToEx(hdc, cx - g, cy + Dp(3), NULL);
-                LineTo(hdc, cx + g + 1, cy + Dp(3));
+                for (int k = 0; k < s; ++k) {
+                    MoveToEx(hdc, cx - g, cy + Dp(3) + k, NULL);
+                    LineTo(hdc, cx + g + 1 + e, cy + Dp(3) + k);
+                }
                 break;
             case BTN_MAX:
                 if (zoomed) {
@@ -3085,7 +3107,7 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                     // drawn as an OPEN polyline - only the edges that do not
                     // lie behind the front one - so we avoid filling the
                     // front one opaque to hide the overlap. Two GDI calls,
-                    // not four.
+                    // not four (per stroke ring from phase 48, inward).
                     //
                     // Two 7x7 rectangles offset 2 px diagonally, within the
                     // same 9x9 footprint as the other glyphs. The back rect
@@ -3096,26 +3118,34 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                     // Polyline does not draw the last point, so it stops just
                     // before the front one's right edge.
                     int d2 = Dp(2);
-                    POINT bak[5] = {
-                        { cx - d2, cy - d2 },
-                        { cx - d2, cy - g },
-                        { cx + g,  cy - g },
-                        { cx + g,  cy + d2 },
-                        { cx + d2, cy + d2 },
-                    };
-                    Polyline(hdc, bak, 5);
-                    // NULL_BRUSH is selected above, so Rectangle gives only an outline.
-                    Rectangle(hdc, cx - g, cy - d2, cx + d2 + 1, cy + g + 1);
+                    for (int k = 0; k < s; ++k) {
+                        POINT bak[5] = {
+                            { cx - d2 + k,     cy - d2 },
+                            { cx - d2 + k,     cy - g + k },
+                            { cx + g + e - k,  cy - g + k },
+                            { cx + g + e - k,  cy + d2 + e - k },
+                            { cx + d2 + e,     cy + d2 + e - k },
+                        };
+                        Polyline(hdc, bak, 5);
+                        // NULL_BRUSH is selected above, so Rectangle gives only an outline.
+                        Rectangle(hdc, cx - g + k, cy - d2 + k, cx + d2 + 1 + e - k, cy + g + 1 + e - k);
+                    }
                 } else {
                     // NULL_BRUSH is selected above, so Rectangle gives only an outline.
-                    Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
+                    for (int k = 0; k < s; ++k)
+                        Rectangle(hdc, cx - g + k, cy - g + k, cx + g + 1 + e - k, cy + g + 1 + e - k);
                 }
                 break;
             case BTN_CLOSE:
-                MoveToEx(hdc, cx - g, cy - g, NULL);
-                LineTo(hdc, cx + g + 1, cy + g + 1);
-                MoveToEx(hdc, cx + g, cy - g, NULL);
-                LineTo(hdc, cx - g - 1, cy + g + 1);
+                // The diagonals widen to the right: at s = 2 the cross is one
+                // pixel wider than tall (14 x 13 at 144), and it still reads
+                // as square in the capture.
+                for (int k = 0; k < s; ++k) {
+                    MoveToEx(hdc, cx - g + k, cy - g, NULL);
+                    LineTo(hdc, cx + g + 1 + k, cy + g + 1);
+                    MoveToEx(hdc, cx + g + k, cy - g, NULL);
+                    LineTo(hdc, cx - g - 1 + k, cy + g + 1);
+                }
                 break;
         }
     }
