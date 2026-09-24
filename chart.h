@@ -53,6 +53,13 @@ typedef struct {
     double dispRsiF;               // phase 39: the RSI band's content, 0..1
     int  hoverIdx;       // index of the candle under the pointer, -1 = none
     int  hoverY;         // mouse Y in client coordinates
+    // Phase 49: how the price is drawn, a CHART_* value (see below). Here and
+    // not in ChartData: the app fills ChartData field by field without
+    // zeroing it, while its ChartState is static - so 0, the candles, is
+    // what every caller that does not know the field gets. The autoscale
+    // reads it too (SyncDisp, PriceRangeFor): the display and the app's
+    // easing target must scale on the same prices.
+    int  chartType;
 #ifdef TICKER_PROBE
     // Test build only: what the last ChartDrawBody measured. 45: the session
     // blocks (us), 56: yesterday (us), 39: the averages (us), 57: bitmask of
@@ -118,6 +125,11 @@ typedef struct {
     // quote is the values' amber (Bloomberg's data color), accent the
     // selected cell, onAccent its text.
     COLORREF quote, accent, onAccent;
+    // Phase 49: the line and mountain chart types. line is the close line,
+    // mountain the fill under it - an exact Blend of bg toward line, so a
+    // probe can count it (see CLR_LINE). Last in the struct, so the tables'
+    // positional initializers keep their order.
+    COLORREF line, mountain;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
@@ -133,7 +145,11 @@ typedef struct {
     HPEN   penGrid, penCross, penLastUp, penLastDown;
     HBRUSH brBg, brBox, brBoxEdge, brVolUp, brVolDown;
     HBRUSH brVolPaneUp, brVolPaneDown;   // phase 45
-    int    dpi;                 // phase 36: the fonts are built for it; 96 = 100 %
+    // Phase 49: the price line of the line and mountain types, clr.line and
+    // ChartPx(dpi, 1) wide - the one line the engine scales with the dpi
+    // (see below), so it is a pen of its own and not DC_PEN.
+    HPEN   penLine;
+    int    dpi;               // phase 36: the fonts are built for it; 96 = 100 %
     ChartTheme clr;             // phase 38: the colors, copied from the theme
 } ChartStyle;
 
@@ -141,7 +157,9 @@ typedef struct {
 // scaled with ChartPx when drawn: MulDiv rounds to nearest, and at 96 it is
 // the identity, so a 100 % surface keeps exactly its old pixels. Lines stay
 // 1 device pixel wide at every dpi - a styled GDI pen (PS_DOT, PS_DASH) only
-// keeps its pattern at width 1.
+// keeps its pattern at width 1. Phase 49: except the price itself when it is
+// drawn as a line or as OHLC bars - there it is the only mark, with no body
+// to carry it, and 1 px at 200 % is a hairline. ChartPx(dpi, 1) wide.
 #define CHART_DPI_BASE   96
 #define ChartPx(dpi, v)  MulDiv((v), (dpi), CHART_DPI_BASE)
 
@@ -334,6 +352,29 @@ typedef struct {
 #define CLR_QUOTE          RGB(0xFB, 0x8B, 0x1E)
 #define CLR_ACCENT         RGB(0x2F, 0x5D, 0xA8)
 
+// Chart types (phase 49), on the Bloomberg GP model: ChartState.chartType.
+// Candles are 0, so a caller that does not set the field draws what it drew
+// before. OHLC bars are the high-low line with the open ticked to the left
+// and the close to the right, in the candle's up/down color; the line is the
+// close; the mountain is the same line with a fill under it to the price
+// pane's bottom. Values outside the range draw candles. The prefix is CHART_
+// like the rest of the header (CT_ is winnls.h's, pitfall 67).
+#define CHART_CANDLES      0
+#define CHART_OHLC         1
+#define CHART_LINE         2
+#define CHART_MOUNTAIN     3
+#define CHART_TYPE_COUNT   4
+// The line: a cool near-white, the strongest mark on the surface and one
+// hue no other curve has (phase 25's rule) - green/red are the candles and
+// the stamp, amber the header's values and the alerts, gold VWAP, blue and
+// violet the averages, teal RSI. Not CLR_TEXT, the header's price: the line
+// is not text, and a probe must be able to count it apart from text
+// (pitfall 87; checked per channel against every text role and the
+// watermark's white). The mountain is the line blended 40/255 toward CLR_BG,
+// Blend's own integer result, and on no text role's blend line either.
+#define CLR_LINE           RGB(0xDD, 0xE6, 0xF0)
+#define CLR_MOUNTAIN       RGB(0x2D, 0x32, 0x39)
+
 // Batches for PolyPolygon / Polyline; see chart.c.
 #define VOL_BATCH 256
 #define IND_BATCH (VOL_BATCH * 4)
@@ -358,6 +399,11 @@ void      GetView(const ChartState* st, int n, int* vs, int* vc);
 BOOL      PanView(ChartState* st, int n, int delta);
 BOOL      ZoomView(ChartState* st, int n, double frac, int notches);
 void      PriceRange(const Candle* candles, int vs, int vc, double* outMin, double* outMax);
+// Phase 49: the price axis for a chart type. The line and the mountain scale
+// on the closes they plot, the candles and the bars on high and low.
+// PriceRange is the candles' (type 0). The app's easing target must call this
+// with the same ChartState.chartType the frame is drawn with.
+void      PriceRangeFor(const Candle* candles, int vs, int vc, int chartType, double* outMin, double* outMax);
 double    VolumeMax(const Candle* candles, int vs, int vc);
 void      ApplyFrontShift(ChartState* st, long long frontShift);
 void      SyncDisp(ChartState* st, const Candle* candles, int n);

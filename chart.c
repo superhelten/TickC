@@ -595,6 +595,13 @@ void PriceRange(const Candle* candles, int vs, int vc, double* outMin, double* o
     if (mn >= 0.0 && *outMin < 0.0) *outMin = 0.0;
 }
 
+// Phase 49: the price axis per chart type. Commit 1 of the phase: the API
+// only - every type scales as the candles do.
+void PriceRangeFor(const Candle* candles, int vs, int vc, int chartType, double* outMin, double* outMax) {
+    (void)chartType;
+    PriceRange(candles, vs, vc, outMin, outMax);
+}
+
 // Largest volume in the view (phase 21): the scale of the bars. 0 when no
 // candle has volume - then no bars are drawn, instead of the height becoming
 // NaN. Called under the lock, like PriceRange.
@@ -1074,6 +1081,8 @@ const ChartTheme ChartThemeDark = {
     CLR_QUOTE,     // quote (phase 42)
     CLR_ACCENT,    // accent
     CLR_BTNHOT,    // onAccent: white
+    CLR_LINE,      // line (phase 49)
+    CLR_MOUNTAIN,  // mountain
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -1126,6 +1135,8 @@ const ChartTheme ChartThemeLight = {
     RGB(0xA8, 0x54, 0x00),   // quote      5.12 (phase 42: the alertText amber)
     RGB(0x2F, 0x5D, 0xA8),   // accent
     RGB(0xFF, 0xFF, 0xFF),   // onAccent   6.5 on the accent
+    RGB(0x1B, 0x36, 0x5D),   // line       phase 49: deep navy, 11.6 on bg
+    RGB(0xDA, 0xDE, 0xE4),   // mountain   Blend(bg, line, 36)
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -1164,10 +1175,13 @@ BOOL ChartStyleCreate(ChartStyle* sty, int dpi, const ChartTheme* theme) {
     sty->brVolDown = CreateSolidBrush(t->volDown);
     sty->brVolPaneUp   = CreateSolidBrush(t->volPaneUp);     // phase 45
     sty->brVolPaneDown = CreateSolidBrush(t->volPaneDown);
+    // Phase 49: the price line, scaled with the dpi (see chart.h). Solid and
+    // wider than 1 at 144 dpi and up, so no pattern is lost.
+    sty->penLine = CreatePen(PS_SOLID, ChartPx(dpi, 1), t->line);
     return sty->fontSmall && sty->fontAxis && sty->penGrid && sty->penCross &&
            sty->penLastUp && sty->penLastDown && sty->brBg && sty->brBox &&
            sty->brBoxEdge && sty->brVolUp && sty->brVolDown &&
-           sty->brVolPaneUp && sty->brVolPaneDown;
+           sty->brVolPaneUp && sty->brVolPaneDown && sty->penLine;
 }
 
 HFONT ChartPillFontCreate(int H) {
@@ -1181,7 +1195,7 @@ void ChartStyleDestroy(ChartStyle* sty) {
     HGDIOBJ own[] = { sty->fontSmall, sty->fontAxis, sty->penGrid, sty->penCross,
                       sty->penLastUp, sty->penLastDown, sty->brBg, sty->brBox,
                       sty->brBoxEdge, sty->brVolUp, sty->brVolDown,
-                      sty->brVolPaneUp, sty->brVolPaneDown };
+                      sty->brVolPaneUp, sty->brVolPaneDown, sty->penLine };
     for (int i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++)
         if (own[i]) DeleteObject(own[i]);
     HFONT pill = sty->fontPill;   // the app's, see chart.h
