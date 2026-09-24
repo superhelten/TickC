@@ -128,11 +128,16 @@ default.
 **Phase 50** closes phase 49's two small limitations: the OHLC strokes on
 the desktop widen with the line, and the gear menu's rows share the room
 on a low panel, so all eight fit at 400x250.
+**Phase 51** is part 1 of the Bloomberg look, on the model of the GIP
+chart: a black background, the mountain as a navy fill under a white line
+and the panel's default type, a dotted grid, the price column as an axis,
+a white last-price box for the line and the mountain, and the view's high
+and low as labels.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
 The code is **two files** from phase 34: `tickc.c` (the app, ~7500 lines) and
-`chart.c` behind `chart.h` (the chart engine, ~2800 lines). Next to them is
+`chart.c` behind `chart.h` (the chart engine, ~3100 lines). Next to them is
 `tickc.manifest`, which the build embeds (phase 9). No external dependencies
 beyond Win32 and WinHTTP.
 
@@ -4420,21 +4425,161 @@ and once more by the orchestrator on the merged build. The earlier scripts
 pass, and `golden.ps1 -Hidden` is identical to phase 49 in all seven
 captures. **Exe unchanged at 250 368 bytes.**
 
+### Phase 51 — the Bloomberg look, part 1: the chart area
+
+Branch `phase-51`, merged with `--no-ff`. The user asked for the chart to
+look like the Bloomberg Terminal's and gave a screenshot of its GIP
+Standard Chart (SPX, one year, the mountain) as the answer key; the colors
+below were sampled from that picture or measured against it side by side.
+One agent edited `tickc.c`, `chart.c`, `chart.h` and `tests/`. Part 1 is
+the chart area. The statistics box, the volume pane's style, the two-level
+time axis and a proportional axis font are phase 52.
+
+**A black background.** The dark theme's background (`CLR_BG`) is
+`000000`, as on the terminal, where it was `0D1117` in phases 1-50. The
+header, the quote line and the menus draw on the theme's background, so no
+`0D1117` pixel is left in the panel; only the tray icon keeps it
+(`RenderMicroFontIcon`), since it stands on the taskbar. On black, every
+darker copy of a text color lies exactly on that color's blend line
+(pitfall 152), so the colors that were blends toward the old background
+were derived again and moved one channel off: the bars behind the price
+`01481C`/`48141D` (were `09542D`/`51212D`) and the alert line `815810`
+(was `86601B`). The volume pane's bars (`05A046`/`9E3346`) are kept. Every
+text gains contrast: the text 10.40 → 11.54:1, the muted gray 4.12 → 4.57,
+the axis labels 8.05 → 8.94, the number on the down stamp 5.76 → 6.40.
+`chart_golden` now checks the dark theme's text pairs too, not only the
+light theme's: 45 pairs, the lowest 4.57:1. Three older pairs of the muted
+gray on the box are named in `DARK_ALLOW` at their floor of 3.69 (the ghost
+tag with its slots full, the hover box's labels, the menus' headings); they
+may not drop, and every other pair must reach 4.5.
+
+**The mountain** is GIP's: a dark navy fill, `011A31` (the most common
+pixel of the screenshot's fill), under a white line, `F4F6F9`, whose slight
+cool tint keeps it off the gray ramp from black to the watermark's white.
+Phase 49's fill was a blend of the background toward the line (`2D3239`
+under `DDE6F0`); the check that the fill equals that blend was rewritten,
+not loosened (pitfall 153). In the light theme the fill goes from `DADEE4`
+to `D6E4F4`, the navy's hue, under the navy line `1B365D`. On the navy the
+texts read at 9.67:1 (the text), 7.49 (the axis labels), 5.74 (today's
+levels), 4.93 (SMA), 4.87 (EMA) and 11.73 (VWAP). Phase 49 put a level
+name or the averages' legend on a patch of the background where it stood on
+the fill; on the navy that patch was a black box on the default chart
+(pitfall 161). A new theme role, `fillCell`, is that cell: the navy itself
+in the dark theme, and still the background in the light one, where the
+grays are ~3.7:1 on the fill. Yesterday's gray (`CLR_PREV`) is a step
+lighter for the navy, `6F7B95` → `7985A0`: 4.76 on the navy, 5.68 on the
+background and 4.58 on the box, which takes it off the list of pairs under
+4.5.
+
+**The grid, the axis, the stamp.** The panel's grid is dotted both ways,
+one device pixel in four (`GRID_DOT_PERIOD` 4), in `474E5B` (2.51:1,
+weaker than the crosshair's `555F6E` at 3.25): rows at the price labels
+and columns at the time labels, through the volume pane and the RSI band.
+`TimeLabelsOf` computes the time labels once per frame, before the grid, so
+a column stands where a label is drawn and nowhere else (pitfall 14). The
+light theme's dots are `B4BCC8`. The price column is an axis: a line on its
+edge down each pane, not across the gaps between them, in `737D8C` (5.04;
+`7D8795` in the light theme), and a 3 px tick at each price label drawn and
+at RSI's 70 and 30. The tags and the stamp cover it where they stand. The
+last-price stamp of the line and the mountain is the series' white: a
+`FFFFFF` box with a black number (21:1) and the dashed line in the same
+white; in the light theme it is inverted, the navy `1B365D` with a white
+number (12.1). The candles and the OHLC bars keep the up/down stamp. The
+desktop keeps its three solid rules, no axis line and the up/down stamp for
+every type: side by side the dots were not calmer there, and the stamp's
+color is the desktop's direction signal (phase 16) - a white box would be
+the loudest thing on the wallpaper.
+
+**The view's high and low.** Bloomberg marks the period's high and low. The
+highest and the lowest price of the candles whose middle is in view, in the
+prices the axis scales on (the highs and lows for the candles and the bars,
+the closes for the line and the mountain), stand as `H 87001.68` and
+`L 75453.85` by their points: above the high and below the low, centered,
+else to the right, else to the left. `HiLoFree` keeps a label off the level
+lines (each from where it starts: a level line begins at today's first
+candle, pitfall 156), the alerts, the ghost, the afterglow, the last-price
+line, the marks, the legend, the level names and the hover box plus 1 px;
+the hover box's place is now decided before the labels. A label stands on
+an opaque cell (the navy on the fill, else the background), so the averages
+cannot run through its digits. Where nothing fits, or the plot is under
+200 px wide, it is not drawn. Panel only. Probe field 94 (panel) is the
+mask of the labels drawn.
+
+**The panel opens as the mountain**, GIP's default. Only a missing (or
+out-of-range) `ChartType` changes; a saved choice is kept, and the desktop
+keeps the line.
+
+**Verified.** Commit 1 (the new theme roles, the probe mask and the checks,
+nothing drawn yet) was **red**: 42 unit checks failed while the 64 goldens
+still passed and the controls held. `shot_p51.ps1` (18 checks, on the
+hidden desktop), **red** against `ticker_test_51c1.exe`: 11 fail and the 7
+controls pass. Green: `chart_golden` 64/64 twice with no unit failures; 63
+goldens changed, each looked at, and `light_desktop_1920x1080` is
+unchanged. Eleven mutations of `chart.c` each fail at least one check. Two
+of them first went undetected - the hover box and the lines as colliders of
+the high/low labels - because the opaque cell hides what it cuts (pitfall
+154); the check now computes the colliders from the state (`PlotRows`,
+`MarksInRect`), and a new check makes sure a level name wholly on the navy
+stands on the navy. `shot_p51` 18/18 twice: the mountain by default, the
+desktop's line, a saved `ChartType` kept, the mountain back when the value
+is removed, no `0D1117` pixel in the panel, the settings menu or the
+dropdown, the header on black, the navy fill and the white stamp in the
+capture, field 94 = 3 for the mountain and for the candles, and no black
+in the light theme. `regress51.ps1` (`regress49`'s 12 scripts, `shot_p49`
+and `shot_p51`) 14/14 twice. Expectations changed on purpose, each named:
+`shot_p49`'s fresh panel type (DEF) 0 → 3 and its out-of-range value, which
+keeps the panel's default, 0 → 3; its tray check, whose checked item on a
+fresh start is 1403, not 1400 (and the pick of the mountain now starts
+from candles, pitfall 127); its color literals (PIC); and `shot_theme`'s
+`$DARK_BG` `0x0D1117` → `0x000000` (pitfall 158). `golden.ps1 -Hidden`:
+all seven captures differ, as they should, and were looked at. GDI 67 → 67.
+Draw time: the panel +0.5 ms (~3 %), the desktop unchanged. Not exercised:
+desktop mode itself (it cannot run hidden); the black desktop was checked
+in `chart_golden` only. `/W4` clean. The README picture is the same
+fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
+
 ---
 
 ## Known limitations
 
+- **The view's high and low labels follow the visible extremes** (phase
+  51). They move while the view pans and when a new candle makes a new
+  extreme, and a label that fits nowhere is not drawn.
+- **The high/low labels' opaque cells cut what lies under the text**
+  (phase 51): the averages and the grid's dots stop at the digits. That is
+  the point of the cell (the averages would run through the number), but
+  a line there is interrupted.
+- **The stamp has no pointer notch and the axis no minor ticks** (phase
+  51). Bloomberg's GIP chart has both.
+- **The line's and the mountain's stamp creates its dashed pen every
+  frame** (phase 51) and deletes it again. A `penLastSeries` in
+  `ChartStyle` would avoid it.
+- **The desktop keeps the old look** (phase 51, by choice): three solid
+  grid rules, the up/down stamp for every type, no axis line and no
+  high/low labels. Desktop mode itself was not exercised (it cannot run
+  hidden); the black desktop was checked in `chart_golden` only, and the
+  README's desktop picture is from before phases 49 and 51 (candles on
+  the old background).
+- **The desktop's wide line is slow with a very wide view** (phase 49,
+  observed in phase 51): with `DeskLineW`'s wide pen the line takes ~19 ms
+  at 3840x1600 with all 6000 candles in view.
+- **The tray icon keeps the old background** (phase 51). The micro font's
+  bitmap is filled with `0D1117` (`RenderMicroFontIcon`); the icon stands
+  on the taskbar, not on the chart.
+- **`golden.ps1 -Light` was not re-run in phase 51.** The light theme's
+  chart was checked in `chart_golden` and `shot_p51`.
 - **The mountain hides the watermark where its fill lies** (phase 49). The
   fill is opaque and drawn under the grid, the bars behind the price and
   the alert and level lines, but over the watermark. That is one reason
   the desktop's default is the line.
 - **The mountain's fill is solid, not a gradient** (phase 49). A gradient
   would need msimg32's `GradientFill` or a region every frame.
-- **A label or the legend on the fill stands on a patch of the
-  background** (phase 49). The light theme's gray label text is ~3.6:1 on
-  the light fill, so the level labels and the averages' legend go opaque
-  where they sit on it, and show as small background-colored patches in
-  the mountain.
+- **In the light theme a label or the legend on the fill stands on a patch
+  of the background** (phase 49; dark theme changed in phase 51). The light
+  theme's gray label text is ~3.7:1 on the light fill, so the level labels
+  and the averages' legend go opaque where they sit on it, and show as
+  small background-colored patches in the mountain. In the dark theme the
+  cell is the navy itself (`fillCell`), so nothing shows.
 - **On the line and the mountain the price axis spans the closes**
   (phase 49), not the highs and lows, so a level or an alert between the
   closes' range and the wicks' is not drawn there, where the candles and
@@ -4547,12 +4692,14 @@ captures. **Exe unchanged at 250 368 bytes.**
   the taskbar, which follows Windows' theme, not TickC's.
 - **The theme does not follow Windows' light/dark app mode** (phase 40).
   It is an explicit choice, per mode, and dark by default.
-- **The dark theme has text pairs under 4.5:1** (phase 40): the muted
-  gray `CLR_DIM` on the box (3.69:1, hover box labels and overlay
-  headings) and on the background (4.12, toolbar pills at rest), and
-  yesterday's levels (`CLR_PREV`, 3.99 on the box, 4.45 on the
-  background). These are older, deliberate "muted" choices and were left
-  alone. The contrast check in `chart_golden` covers the light theme only.
+- **The dark theme has text pairs under 4.5:1** (phase 40, narrowed in
+  phase 51): the muted gray `CLR_DIM` on the box, 3.69:1, in three places
+  (the ghost tag with its slots full, the hover box's labels and the
+  menus' headings). These are older, deliberate "muted" choices and were
+  left alone. On the black background of phase 51 the same gray is 4.57,
+  and yesterday's levels (`CLR_PREV` `7985A0`) reach 4.58 on the box, 5.68
+  on the background and 4.76 on the navy. `chart_golden` checks both
+  themes; the three pairs are named in `DARK_ALLOW` at their floor.
 - **A hovered toolbar pill is fainter in the light theme** (phase 40): the
   white box on `FAFAFB` is 1.05:1, against 1.10:1 in the dark theme. The
   text turning from dim to the text color carries the hover.
@@ -4734,9 +4881,10 @@ captures. **Exe unchanged at 250 368 bytes.**
   carries the level. On a young day the PD* labels drop more often, and
   HOD can lose its name to PDH. An opaque surface behind the text was
   rejected (it would wipe out the candles). On the mountain's fill (phase
-  49) a label does stand on a background patch, since it covers only
-  fill there, and the label tests the chosen type's marks, not the
-  candles'.
+  49) a label does stand on an opaque cell, since it covers only fill
+  there - from phase 51 the theme's `fillCell`, the navy itself in the
+  dark theme and the background in the light one - and the label tests
+  the chosen type's marks, not the candles'.
 - **The crosshair tag is not shown within 16 px of the last-price stamp**
   (phase 29). The crosshair line and the hover box stay; the number on the
   axis is then the stamp's.
@@ -5555,21 +5703,50 @@ captures. **Exe unchanged at 250 368 bytes.**
 150. **`pwsh -File x.ps1 -Names a,b,c` passes one string, not an array.**
 151. **Phase N's regression runner must include `shot_pN`.** `regress48`
     left out `shot_p48`; `regress49` has it.
+152. **On black, every darker copy of a text color is exactly on its blend
+    line** (`Blend(000000, c, t)` = c*t/255). Blends toward the background
+    must be re-derived and moved one channel off (pitfall 87).
+153. **A check that the mountain equals `Blend(bg, line)` breaks by design
+    once the fill gets its own color.** Rewrite the rule, don't loosen the
+    tolerance.
+154. **Text drawn with an opaque cell hides what it cuts,** so "no line or
+    mark in the label" pixel checks pass without testing anything. Compute
+    the colliders from state; the mutation changed 15 goldens and failed
+    no pixel check.
+155. **Row-by-row pixel grouping splits one label** (the top row of the
+    far digits opens its own group before the lower rows join). Merge
+    groups after the scan.
+156. **A level line starts at today's first candle, not the plot's left
+    edge.** A collision test on rows needs each row's x-extent (the L
+    label was refused by PDL's row ~1000 px away).
+157. **Dotted rows and columns meet.** A "no two dots touching" check must
+    skip neighbors on a grid row.
+158. **A background literal in a script (`$DARK_BG`) turns "no dark pixel"
+    checks vacuous after a background change.**
+159. **Staging hunks by keyword can leave one behind** (the tick pen's
+    select); the axis commit first went in with black ticks. Build what is
+    staged, and grep the remaining diff for the feature's identifiers
+    (pitfall 141).
+160. **`%06X` of a `COLORREF` prints BBGGRR.** Use a helper that prints
+    RRGGBB.
+161. **A patch rule chosen for one theme can be an artifact in another:**
+    the black patch was invisible on the gray fill and a box on the navy.
+    Look at the default chart in the app capture, not only at the goldens.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak44` and `chart.c.bak44` are left** (2026-09-24). From
+**Only `tickc.c.bak45` and `chart.c.bak45` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 49 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 51 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak42` (phases 34–48) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak44` (phases 34–50) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49) and `.bak44` (phase 50). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49), `.bak44` (phase 50) and `.bak45` (phase 51). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

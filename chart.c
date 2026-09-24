@@ -1082,6 +1082,70 @@ static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn,
     if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
 }
 
+// The same down column x over [y0, y1), the pattern anchored at row anchor
+// (phase 51: the dotted grid's verticals, anchored at the price pane's top so
+// the dots in the panes below keep its rhythm).
+static void DrawDashLineV(HDC hdc, int x, int y0, int y1, int anchor, int dashOn, int period) {
+    if (y0 < anchor) y0 = anchor;
+    int y = anchor + ((y0 - anchor) / period) * period;
+    int k = 0;
+    for (; y < y1; y += period) {
+        int a = (y < y0) ? y0 : y;
+        int b = y + dashOn;
+        if (b > y1) b = y1;
+        if (a >= b) continue;
+        s_volPts[k * 2].x     = x; s_volPts[k * 2].y     = a;
+        s_volPts[k * 2 + 1].x = x; s_volPts[k * 2 + 1].y = b;
+        s_volCnt[k++] = 2;
+        if (k == VOL_BATCH) { PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k); k = 0; }
+    }
+    if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
+}
+
+// The time axis's labels for the frame (phase 51): which candles get one and
+// at which x. The labels are drawn under the lowest pane, after the clip is
+// gone; the grid's verticals stand on the same x inside the clip, before the
+// candles - one computation for both, so a vertical is where a label is and
+// nowhere else (pitfall 14). The rules are phase 11's, 44's and 45's (see the
+// time axis in ChartDrawBody): anchored in time, the step measured on the
+// widest label, and a label that would leave [left, right] left out. The
+// axis font is selected for the measuring and put back. Not on the desktop,
+// which has no time axis.
+#define TIME_LBL_MAX 128
+typedef struct { int n; int k[TIME_LBL_MAX]; int x[TIME_LBL_MAX]; } TimeLabels;
+static TimeLabels s_timeLbl;
+
+static void TimeLabelsOf(HDC hdc, HFONT fontAxis, const ChartData* in, int left, int right, int cw,
+                         double dStart, double dCount, double slot, int i0, int i1, int dpi,
+                         TimeLabels* out) {
+    out->n = 0;
+    if (i0 >= i1 || in->desktop) return;
+    HGDIOBJ oldF = SelectObject(hdc, fontAxis);
+    wchar_t tl[24];
+    int minDx = ChartTimeLabelW(hdc, in->intervalMs) + ChartPx(dpi, TIME_LBL_GAP);
+    if (minDx < ChartPx(dpi, TIME_DX_MIN)) minDx = ChartPx(dpi, TIME_DX_MIN);
+    long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
+    int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
+    // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
+    // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
+    // whole view, the one the labels are written with.
+    long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
+    long long slotNo = (t0 + tzMs) / iv;
+    int rem = (int)(slotNo % step);
+    int k = i0 + ((rem == 0) ? 0 : (step - rem));
+    for (; k < i1 && out->n < TIME_LBL_MAX; k += step) {
+        int x = left + (int)(((double)k - dStart + 0.5) * slot);
+        FormatTimeAs(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, TIME_AXIS, tl, 24);
+        SIZE tsz = { 0, 0 };
+        GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
+        if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
+        out->k[out->n] = k;
+        out->x[out->n] = x;
+        out->n++;
+    }
+    SelectObject(hdc, oldF);
+}
+
 // The themes (phase 38). Dark is the CLR_ macros, field for field, so TickC
 // draws exactly what it drew before the colors became data.
 const ChartTheme ChartThemeDark = {
@@ -1116,6 +1180,11 @@ const ChartTheme ChartThemeDark = {
     CLR_BTNHOT,    // onAccent: white
     CLR_LINE,      // line (phase 49)
     CLR_MOUNTAIN,  // mountain
+    CLR_GRID_DOT,  // gridDot (phase 51)
+    CLR_AXIS_LINE, // axisLine
+    CLR_STAMP,     // stamp: white
+    CLR_ON_STAMP,  // onStamp: black, 21:1
+    CLR_MOUNTAIN,  // fillCell: the navy itself
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -1169,7 +1238,12 @@ const ChartTheme ChartThemeLight = {
     RGB(0x2F, 0x5D, 0xA8),   // accent
     RGB(0xFF, 0xFF, 0xFF),   // onAccent   6.5 on the accent
     RGB(0x1B, 0x36, 0x5D),   // line       phase 49: deep navy, 11.6 on bg
-    RGB(0xDA, 0xDE, 0xE4),   // mountain   Blend(bg, line, 36)
+    RGB(0xD6, 0xE4, 0xF4),   // mountain   phase 51: the navy's hue, light
+    RGB(0xB4, 0xBC, 0xC8),   // gridDot    phase 51, lighter than cross
+    RGB(0x7D, 0x87, 0x95),   // axisLine
+    RGB(0x1B, 0x36, 0x5D),   // stamp      the line's navy, inverted:
+    RGB(0xFF, 0xFF, 0xFF),   // onStamp    white on it, 12.1
+    RGB(0xFA, 0xFA, 0xFB),   // fillCell   bg: the grays are ~3.7 on the fill
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -1472,6 +1546,78 @@ static BOOL FillHitRect(const PriceMarks* m, const RECT* rc) {
     return FALSE;
 }
 
+// Phase 51: does the mountain's fill cover all of rc? It does when the line
+// over rc's columns stays above rc's top everywhere - FillHitRect's test
+// the other way round, on the line's lowest point, a pixel on the safe side.
+static BOOL FillUnderRect(const PriceMarks* m, const RECT* rc) {
+    if (m->type != CHART_MOUNTAIN || m->slot <= 0.0 || rc->bottom > m->bottom + 1) return FALSE;
+    int first = (m->i0 > 0) ? m->i0 - 1 : 0;
+    int last  = (m->i1 < m->n) ? m->i1 : m->n - 1;
+    int a = (int)floor(m->dStart + (double)(rc->left - m->left) / m->slot) - 1;
+    int b = (int)ceil(m->dStart + (double)(rc->right - m->left) / m->slot) + 1;
+    if (a < first) a = first;
+    if (b > last) b = last;
+    BOOL any = FALSE;
+    for (int i = a; i < b; ++i) {
+        POINT p = LinePoint(m->candles, i,     m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        POINT q = LinePoint(m->candles, i + 1, m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        int xa = (p.x > rc->left) ? p.x : rc->left;
+        int xb = (q.x < rc->right - 1) ? q.x : rc->right - 1;
+        if (xa > xb) continue;
+        double yMax;
+        if (q.x == p.x) {
+            yMax = (p.y > q.y) ? p.y : q.y;
+        } else {
+            double ya = p.y + (double)(q.y - p.y) * (double)(xa - p.x) / (double)(q.x - p.x);
+            double yb = p.y + (double)(q.y - p.y) * (double)(xb - p.x) / (double)(q.x - p.x);
+            yMax = (ya > yb) ? ya : yb;
+        }
+        any = TRUE;
+        if (yMax + (double)m->lineW >= (double)rc->top) return FALSE;
+    }
+    return any;
+}
+
+// Phase 51: is rc free for the view's high or low label? Inside the price
+// pane's plot - left of right, so never in the price column, where the stamp
+// and the tags stand; no horizontal line through its rows or the row above
+// (the levels, the alerts, the ghost's and the afterglow's, and the last
+// price's from its candle to the axis); none of the chart type's marks in it
+// (MarksHitRect); clear of the text placed before it (the legend, the level
+// names, the other label) and of the hover box, grown by a pixel so the two
+// do not touch. The mountain's fill is not a collider: the label's text
+// color is 9.7:1 on the navy and 12.2:1 on the light blue.
+// rows[i] runs from rowX0[i] to the axis: the levels from today's first
+// candle, the rest from the plot's left edge.
+typedef struct {
+    const PriceMarks* pm;
+    int left, top, right, bottom;
+    const int* rows;
+    const int* rowX0;
+    int nRows;
+    int yLast, xLast;
+    const RECT* placed;
+    int nPlaced;
+    RECT hover;   // empty: no hover box
+} HiLoRoom;
+
+static BOOL HiLoFree(const HiLoRoom* r, const RECT* rc) {
+    if (rc->left < r->left || rc->right > r->right || rc->top < r->top || rc->bottom > r->bottom) return FALSE;
+    for (int i = 0; i < r->nRows; ++i)
+        if (r->rows[i] >= rc->top - 1 && r->rows[i] <= rc->bottom && rc->right > r->rowX0[i]) return FALSE;
+    if (r->yLast >= rc->top - 1 && r->yLast <= rc->bottom && rc->right > r->xLast) return FALSE;
+    if (MarksHitRect(r->pm, rc)) return FALSE;
+    RECT tmp;
+    for (int i = 0; i < r->nPlaced; ++i)
+        if (IntersectRect(&tmp, rc, &r->placed[i])) return FALSE;
+    if (r->hover.right > r->hover.left) {
+        RECT hv = r->hover;
+        InflateRect(&hv, 1, 1);
+        if (IntersectRect(&tmp, rc, &hv)) return FALSE;
+    }
+    return TRUE;
+}
+
 // The chart body: everything from the chart geometry down. The header and the
 // status text are the app's (DrawHeader / DrawEmptyState in tickc.c), the
 // background is ChartDrawBackground. Reads the DISPLAY in st, the data in in,
@@ -1598,13 +1744,35 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // out. The pane's top line stands PANE_GAP (6 px) under it, and the two
     // read as a double rule; the pane's line is the one separator, as in
     // Bloomberg. The price label on row 4 stays - it is the pane's low.
-    HPEN hOldPen = (HPEN)SelectObject(hdc, sty->penGrid);
+    //
+    // Phase 51: dotted, in both directions, as on Bloomberg's GIP chart -
+    // one pixel in GRID_DOT_PERIOD (see chart.h), the rows at the price
+    // labels and the columns at the time labels (TimeLabelsOf), in the
+    // price pane and in the panes under it. Over the mountain's fill, like
+    // the solid grid was. The desktop keeps its three solid rules and gets
+    // no columns (it has no time axis). Looked at side by side at 3840x1600,
+    // the dotted rows were not calmer: a quarter of the pixels in a color
+    // bright enough to be seen gives about the same light as the solid
+    // 1C222B (0.013 against 0.015 in luminance per pixel), and reads as
+    // texture on the wallpaper instead of a hairline.
+    TimeLabelsOf(hdc, sty->fontAxis, in, left, right, cw, dStart, dCount, slot, i0, i1, dpi, &s_timeLbl);
     int gi0 = in->desktop ? 1 : 0;
     int gi1 = (in->desktop || volPane || bandOn) ? 3 : 4;
-    for (int i = gi0; i <= gi1; ++i) {
-        int y = top + (ch * i) / 4;
-        MoveToEx(hdc, left, y, NULL);
-        LineTo(hdc, edge, y);
+    HPEN hOldPen;
+    if (in->desktop) {
+        hOldPen = (HPEN)SelectObject(hdc, sty->penGrid);
+        for (int i = gi0; i <= gi1; ++i) {
+            int y = top + (ch * i) / 4;
+            MoveToEx(hdc, left, y, NULL);
+            LineTo(hdc, edge, y);
+        }
+    } else {
+        hOldPen = (HPEN)SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.gridDot);
+        for (int i = gi0; i <= gi1; ++i)
+            DrawDashLine(hdc, left, edge, top + (ch * i) / 4, left, 1, GRID_DOT_PERIOD);
+        for (int t = 0; t < s_timeLbl.n; ++t)
+            DrawDashLineV(hdc, s_timeLbl.x[t], top, bottom + 1, top, 1, GRID_DOT_PERIOD);
     }
     SelectObject(hdc, hOldPen);
 
@@ -1869,6 +2037,15 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         MoveToEx(hdc, left, vt, NULL);
         LineTo(hdc, edge, vt);
         SelectObject(hdc, hOldV);
+        // Phase 51: the grid's dotted columns go on down through the pane,
+        // under the bars, in the price pane's rhythm (anchored at top).
+        if (s_timeLbl.n > 0) {
+            HGDIOBJ oldPenD = SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, sty->clr.gridDot);
+            for (int t = 0; t < s_timeLbl.n; ++t)
+                DrawDashLineV(hdc, s_timeLbl.x[t], vt + 1, vb + 1, top, 1, GRID_DOT_PERIOD);
+            SelectObject(hdc, oldPenD);
+        }
         IntersectClipRect(hdc, left, vt, edge, vb + 1);
         // Phase 45: the stronger pane colors in the panel only - the desktop
         // is meant to be quiet, and keeps the muted bars even in a pane.
@@ -1901,6 +2078,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         HPEN hOldB = (HPEN)SelectObject(hdc, sty->penGrid);
         MoveToEx(hdc, left, bt, NULL);
         LineTo(hdc, edge, bt);
+        // Phase 51: and through the band, as through the volume pane.
+        if (s_timeLbl.n > 0) {
+            SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, sty->clr.gridDot);
+            for (int t = 0; t < s_timeLbl.n; ++t)
+                DrawDashLineV(hdc, s_timeLbl.x[t], bt + 1, bb + 1, top, 1, GRID_DOT_PERIOD);
+        }
         SelectObject(hdc, hOldB);
         if (rsiT > 0) {
             IntersectClipRect(hdc, left, bt, edge, bb + 1);
@@ -1978,6 +2162,26 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             BOOL fitsV = (hyV >= vt + tagHalf) && (!bandOn || hyV + tagHalf <= bt);
             if (fitsV && (yVolV == INT_MIN || abs(hyV - yVolV) >= tagH)) yVolCross = hyV;
         }
+    }
+
+    // --- The price column as an axis (phase 51) ---
+    // Bloomberg draws the price scale as an axis: a line down the plot's
+    // right edge and a short tick at each label ("-4800"). The line stands on
+    // column edge, the first column outside the clip and the one the grid,
+    // the alert lines and the crosshair stop in front of; down each pane,
+    // not across the gaps between them. Drawn before the labels and the
+    // tags, which begin at edge + 1 and cover it where they stand; the last
+    // price's bridge (to edge + 1) crosses it on the stamp's row. The ticks
+    // are drawn with the labels below, only where a label is drawn. Panel
+    // only: the desktop has no column of labels (phase 14).
+    int tickL = PX(GRID_TICK_LEN);
+    if (!in->desktop) {
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);
+        MoveToEx(hdc, edge, top, NULL);
+        LineTo(hdc, edge, bottom + 1);
+        if (volPane) { MoveToEx(hdc, edge, vt, NULL); LineTo(hdc, edge, vb + 1); }
+        if (bandOn)  { MoveToEx(hdc, edge, bt, NULL); LineTo(hdc, edge, bb + 1); }
     }
 
     SelectObject(hdc, GetStockObject(BLACK_PEN));
@@ -2091,6 +2295,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             if (hide) yLvl[q] = INT_MIN;
         }
 
+        // Phase 51: each label drawn gets its tick on the axis line, from
+        // edge + 1 toward the text (which begins at edge + AXIS_LBL_GAP).
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);
         for (int i = 0; i <= 4; ++i) {
             int y = top + (ch * i) / 4;
             if (yPill != INT_MIN && abs(y - yPill) < tagH) continue;
@@ -2098,6 +2306,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             for (int t = 0; t < nTag; ++t) if (abs(y - yTag[t]) < tagH) hidden = TRUE;
             for (int q = 0; q < LVL_COUNT; ++q) if (yLvl[q] != INT_MIN && abs(y - yLvl[q]) < tagH) hidden = TRUE;
             if (hidden) continue;
+            MoveToEx(hdc, edge + 1, y, NULL);
+            LineTo(hdc, edge + 1 + tickL, y);
             double p = maxP - (range * i) / 4.0;
             swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), p);
             RECT rcLbl = { axL, y - tagHalf, axR, y + tagHalf };
@@ -2184,9 +2394,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.axis, rsiT));
         const int lvY[2] = { y70, y30 };
         const wchar_t* lvT[2] = { L"70", L"30" };
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);   // phase 51: the labels' ticks
         for (int q = 0; q < 2; ++q) {
             if (yv != INT_MIN && abs(lvY[q] - yv) < tagH) continue;
             if (yBandCross != INT_MIN && abs(lvY[q] - yBandCross) < tagH) continue;
+            MoveToEx(hdc, edge + 1, lvY[q], NULL);
+            LineTo(hdc, edge + 1 + tickL, lvY[q]);
             RECT rcL = { axL, lvY[q] - tagHalf, axR, lvY[q] + tagHalf };
             DrawTextW(hdc, lvT[q], -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
@@ -2300,32 +2514,16 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // Phase 45: two forms on one axis ("14:35", and "21 Sep" where a day
     // begins), so the spacing is measured on the widest (ChartTimeLabelW),
     // not on the first label, and the edge test on each label's own width.
-    if (i0 < i1 && !in->desktop) {
+    // Phase 51: which labels and where is TimeLabelsOf's, computed before
+    // the grid, whose dotted columns stand on the same x.
+    if (s_timeLbl.n > 0 && !in->desktop) {
         wchar_t tl[24];
-        int minDx = ChartTimeLabelW(hdc, in->intervalMs)   // the axis font is selected
-                  + PX(TIME_LBL_GAP);
-        if (minDx < PX(TIME_DX_MIN)) minDx = PX(TIME_DX_MIN);
-        long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
-        int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
-
-        // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
-        // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
-        // whole view, the one the labels are written with.
-        long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
-        long long slotNo = (t0 + tzMs) / iv;
-        int rem = (int)(slotNo % step);
-        int k = i0 + ((rem == 0) ? 0 : (step - rem));
-
+        SelectObject(hdc, sty->fontAxis);
         UINT oldAlign = SetTextAlign(hdc, TA_CENTER | TA_TOP);
-        for (; k < i1; k += step) {
-            int x = left + (int)(((double)k - dStart + 0.5) * slot);
-            FormatTimeAs(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs,
+        for (int t = 0; t < s_timeLbl.n; ++t) {
+            FormatTimeAs(in->candles[s_timeLbl.k[t]].openTime, in->intervalMs, in->utcOffsetMs,
                          TIME_AXIS, tl, 24);
-            int tlLen = (int)wcslen(tl);
-            SIZE tsz = { 0, 0 };
-            GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);
-            if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-            ExtTextOutW(hdc, x, axisB + PX(2), 0, NULL, tl, tlLen, NULL);
+            ExtTextOutW(hdc, s_timeLbl.x[t], axisB + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
         }
         SetTextAlign(hdc, oldAlign);
     }
@@ -2343,6 +2541,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 #ifdef TICKER_PROBE
     if (!(indT > 0 && !in->desktop)) st->probeLblMask = 0;
 #endif
+    // The text placed in the plot so far, for the level names and (phase 51)
+    // the view's high and low after them: each gives way to what is here.
+    RECT placed[LVL_COUNT + 3];
+    int  nPlaced = 0;
     if (indT > 0 && !in->desktop) {
         RECT rcLegend = { 0, 0, 0, 0 };   // empty when the legend did not fit
         wchar_t lg[96];
@@ -2391,11 +2593,15 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // Phase 49: and the mountain's fill. Its top is the highest
             // close, 7 % under the pane's top, which is inside this row on
             // a price pane under ~275 px (and anywhere in the Y easing).
-            {
-                RECT rcLg = { lx, ly, lx + sz3.cx, ly + szAll.cy };
-                if (FillHitRect(&pm, &rcLg)) struck = TRUE;
+            // Phase 51: where the fill covers the whole row, the cell is the
+            // theme's fillCell - the navy itself in the dark theme, which
+            // carries the averages' colors at 4.5:1 - not a black strip.
+            RECT rcLg = { lx, ly, lx + sz3.cx, ly + szAll.cy };
+            if (FillHitRect(&pm, &rcLg)) struck = TRUE;
+            if (struck) {
+                SetBkColor(hdc, FillUnderRect(&pm, &rcLg) ? sty->clr.fillCell : sty->clr.bg);
+                SetBkMode(hdc, OPAQUE);
             }
-            if (struck) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.sma, indT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.ema, indT));
@@ -2407,6 +2613,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             if (struck) SetBkMode(hdc, TRANSPARENT);
             rcLegend.left = lx; rcLegend.top = ly;
             rcLegend.right = lx + sz3.cx; rcLegend.bottom = ly + szAll.cy;
+            placed[nPlaced++] = rcLegend;
         }
 
         // --- Labels on the level lines (phase 29) ---
@@ -2431,9 +2638,6 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         st->probeLblMask = 0;
 #endif
         if (right - left >= PX(200)) {
-            RECT placed[LVL_COUNT + 1];
-            int  nPlaced = 0;
-            if (rcLegend.right > rcLegend.left) placed[nPlaced++] = rcLegend;
             for (int q = 0; q < LVL_COUNT; ++q) {
                 if (yLine[q] == INT_MIN) continue;
                 SIZE szN = { 0, 0 };
@@ -2483,7 +2687,16 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 // background, as the legend over a level line does: its
                 // gray is not 4.5:1 on the fill in the light theme.
                 BOOL onFill = FillHitRect(&pm, &rcN);
-                if (onFill) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
+                if (onFill) {
+                    // Phase 51: where the fill covers the whole label, on
+                    // a cell of the theme's fillCell - the navy itself in
+                    // the dark theme, where the grays reach 4.5:1 (the
+                    // black patch was a visible box in it); the light
+                    // theme's is still the background. Where the fill
+                    // covers part, the background, as before.
+                    SetBkColor(hdc, FillUnderRect(&pm, &rcN) ? sty->clr.fillCell : sty->clr.bg);
+                    SetBkMode(hdc, OPAQUE);
+                }
                 SetTextColor(hdc, Blend(sty->clr.bg, (q < 2) ? sty->clr.session : sty->clr.prev, indT));
                 ExtTextOutW(hdc, rcN.left, rcN.top, 0, NULL, LVL_NAME[q], 3, NULL);
                 if (onFill) SetBkMode(hdc, TRANSPARENT);
@@ -2497,6 +2710,149 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         QueryPerformanceFrequency(&lblQf);
         st->probeLblUs = (lblQ1.QuadPart - lblQ0.QuadPart) * 1000000LL / lblQf.QuadPart;
 #endif
+    }
+
+    // --- Where the hover box will stand (phase 51) ---
+    // Decided here, before the view's high and low are placed - they keep
+    // off it - and drawn last, over everything, in the crosshair block.
+    // Bound to the VISIBLE surface, not to the target view - the two come
+    // apart in the middle of an animation.
+    //
+    // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
+    // With the indicators on (phase 27) three more rows are added: SMA, EMA
+    // and VWAP at the candle under the crosshair - the same numbers the
+    // legend shows, since legendIdx IS hoverIdx when this block runs (same
+    // condition). The rows stay as long as the lines are visible (indT > 0)
+    // and fade with them, in the lines' own colors; an average that is not
+    // defined at the candle gets a dash, as in the legend.
+    const int indRows = (indT > 0) ? 3 : 0;
+    const int rsiRows = (bandOn && rsiT > 0) ? 1 : 0;   // phase 39
+    const int LINE_H = PX(13), BOX_W = PX(HOVER_BOX_W);
+    const int BOX_H = PX(4) + (6 + indRows + rsiRows) * LINE_H + PX(5);
+    BOOL hoverOn = FALSE;
+    int  hx = 0, hy = 0;
+    RECT rcBox = { 0, 0, 0, 0 };
+    if (st->hoverIdx >= 0 && st->hoverIdx < n) {
+        double hrel = (double)st->hoverIdx - dStart;
+        if (hrel >= 0.0 && hrel < dCount) {
+            hoverOn = TRUE;
+            hx = left + (int)((hrel + 0.5) * slot);
+            hy = st->hoverY;
+            if (hoverInBand) {                 // phase 39: the horizontal lives in the band
+                if (hy < bt) hy = bt;
+                if (hy > bb) hy = bb;
+            } else if (hoverInVol) {           // phase 43: or in the volume pane
+                if (hy < vt) hy = vt;
+                if (hy > vb) hy = vb;
+            } else {
+                if (hy < top) hy = top;
+                if (hy > bottom) hy = bottom;
+            }
+            int bx0 = hx + PX(12);
+            if (bx0 + BOX_W > right) bx0 = hx - PX(12) - BOX_W;   // flip to the left at the edge
+            if (bx0 < left) bx0 = left;
+            // Phase 44: the top clamp comes last, so it wins. On a short panel
+            // with both panes and the averages (290 px: 126 px of price, a
+            // 139 px box) the bottom clamp put the box over the header's quote
+            // line and under the toolbar the app draws after the chart; now it
+            // hangs into the pane below, which is the chart's own.
+            int by0 = hy - BOX_H / 2;
+            if (by0 + BOX_H > bottom) by0 = bottom - BOX_H;
+            if (by0 < top) by0 = top;
+            SetRect(&rcBox, bx0, by0, bx0 + BOX_W, by0 + BOX_H);
+        }
+    }
+
+    // --- The view's high and low (phase 51) ---
+    // Bloomberg marks the period's high and low. Here: the highest and the
+    // lowest price of the candles whose middle is in view, in the prices the
+    // axis scales on (PriceRangeFor) - high and low for the candles and the
+    // bars, the close for the line and the mountain - as "H 63030.12" and
+    // "L 52884.10" by their points. The high's label stands above its point,
+    // centered on it and kept inside the plot: nothing of the price is above
+    // the view's high, so the marks cannot strike it there. Else to the right
+    // of the point, else to the left, halfway down it. The low's the same way
+    // below. A label that fits nowhere (HiLoFree) is not drawn: the smallest
+    // panels, where the 8 % headroom is less than a line of text, lose them
+    // first. In the text color, and at least two decimals (more where the
+    // axis needs them). Panel only (phase 14), placed after the legend and
+    // the level names and giving way to them, as they give way to each
+    // other; the high before the low.
+#ifdef TICKER_PROBE
+    st->probeHiLoMask = 0;
+#endif
+    if (!in->desktop && right - left >= PX(200)) {
+        BOOL closes = (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+        int    iHL[2] = { -1, -1 };
+        double vHL[2] = { 0.0, 0.0 };
+        for (int i = i0; i < i1; ++i) {
+            double fx = ((double)i - dStart + 0.5) * slot;
+            if (fx < 0.0 || (double)left + fx >= (double)right) continue;
+            const Candle* c = &in->candles[i];
+            double hv = closes ? c->close : c->high, lv = closes ? c->close : c->low;
+            if (iHL[0] < 0 || hv > vHL[0]) { iHL[0] = i; vHL[0] = hv; }
+            if (iHL[1] < 0 || lv < vHL[1]) { iHL[1] = i; vHL[1] = lv; }
+        }
+        int rows[LVL_COUNT + ALERT_MAX + 2], rowX0[LVL_COUNT + ALERT_MAX + 2], nRows = 0;
+        for (int q = 0; q < LVL_COUNT; ++q)
+            if (yLine[q] != INT_MIN) { rows[nRows] = yLine[q]; rowX0[nRows++] = lvlXs; }
+        for (int a = 0; a < in->alertCount && a < ALERT_MAX; ++a) {
+            int ya = AlertY(st, &g, fabs(in->alerts[a]));
+            if (ya >= top && ya <= bottom) { rows[nRows] = ya; rowX0[nRows++] = left; }
+        }
+        if (yGhostLine != INT_MIN) { rows[nRows] = yGhostLine; rowX0[nRows++] = left; }
+        if (in->alertFlashF > 0.0) {
+            int yf = AlertY(st, &g, in->alertFlashLevel);
+            if (yf >= top && yf <= bottom) { rows[nRows] = yf; rowX0[nRows++] = left; }
+        }
+        int yLastL = top + (int)(((maxP - in->candles[n - 1].close) / range) * ch);
+        int xLastL = left + (int)(((double)(n - 1) - dStart + 0.5) * slot);
+        if (xLastL < left)  xLastL = left;
+        if (xLastL > right) xLastL = right;
+        HiLoRoom room = { &pm, left, top, right, bottom, rows, rowX0, nRows, yLastL, xLastL, placed, 0, rcBox };
+        int dec = PriceDecimals(range / 4.0);
+        if (dec < 2) dec = 2;
+        SelectObject(hdc, sty->fontAxis);
+        SetTextColor(hdc, sty->clr.text);
+        for (int s = 0; s < 2; ++s) {
+            if (iHL[s] < 0) continue;
+            wchar_t hl[48];
+            swprintf_s(hl, 48, L"%s %.*f", s ? L"L" : L"H", dec, vHL[s]);
+            int len = (int)wcslen(hl);
+            SIZE sz = { 0, 0 };
+            GetTextExtentPoint32W(hdc, hl, len, &sz);
+            int px = left + (int)(((double)iHL[s] - dStart + 0.5) * slot);
+            int py = top + (int)(((maxP - vHL[s]) / range) * ch);
+            int xc = px - sz.cx / 2;
+            if (xc > right - PX(2) - sz.cx) xc = right - PX(2) - sz.cx;
+            if (xc < left + PX(2)) xc = left + PX(2);
+            int yc = s ? py + PX(3) : py - PX(2) - sz.cy;   // below the low, above the high
+            int ym = py - sz.cy / 2;
+            RECT cand[3];
+            SetRect(&cand[0], xc, yc, xc + sz.cx, yc + sz.cy);
+            SetRect(&cand[1], px + PX(6), ym, px + PX(6) + sz.cx, ym + sz.cy);
+            SetRect(&cand[2], px - PX(6) - sz.cx, ym, px - PX(6), ym + sz.cy);
+            room.nPlaced = nPlaced;
+            for (int c = 0; c < 3; ++c) {
+                if (!HiLoFree(&room, &cand[c])) continue;
+                // On a cell of what lies under it - the mountain's fill
+                // when the fill covers the whole cell, else the background:
+                // the averages' curves and VWAP pass anywhere and would run
+                // through the digits (seen at 15m, where the low sat on
+                // three of them); the cell cuts them, and the grid's dots,
+                // as the legend's opaque text cuts a level line.
+                SetBkColor(hdc, FillUnderRect(&pm, &cand[c]) ? sty->clr.mountain : sty->clr.bg);
+                SetBkMode(hdc, OPAQUE);
+                ExtTextOutW(hdc, cand[c].left, cand[c].top, 0, NULL, hl, len, NULL);
+                SetBkMode(hdc, TRANSPARENT);
+                if (nPlaced < LVL_COUNT + 3) placed[nPlaced++] = cand[c];
+#ifdef TICKER_PROBE
+                st->probeHiLoMask |= (1 << s);
+#endif
+                break;
+            }
+        }
+        SetTextColor(hdc, sty->clr.axis);
     }
 
     // --- Last price: dashed line + axis stamp ---
@@ -2536,16 +2892,31 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // edge + 1 because LineTo does not draw the end point: without
             // that one pixel the column x = edge stays empty, and the stamp
             // only starts at edge + 1.
-            HPEN penLast = lastUp ? sty->penLastUp : sty->penLastDown;
+            //
+            // Phase 51: the line and the mountain on the panel take the
+            // series' stamp, as on Bloomberg's GIP chart - a white box with
+            // a black number (the light theme inverts it: the line's navy
+            // with white) - and the line to it is dashed in the same color,
+            // so the two read as one mark. The candles and the bars keep
+            // up/down: their marks carry the direction already, and green
+            // or red on the stamp says the same thing. The desktop keeps
+            // up/down for every type: its stamp is the one direction signal
+            // the wallpaper has (phase 16), and a white box is the brightest
+            // patch that can stand on a black surface - louder, not calmer.
+            BOOL series = !in->desktop && (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+            COLORREF lastClr = series ? sty->clr.stamp : (lastUp ? sty->clr.up : sty->clr.down);
+            HPEN penSeries = series ? CreatePen(PS_DASH, 1, lastClr) : NULL;
+            HPEN penLast = penSeries ? penSeries : (lastUp ? sty->penLastUp : sty->penLastDown);
             HPEN hOld2 = (HPEN)SelectObject(hdc, penLast);
             MoveToEx(hdc, xLast, yLast, NULL);
             LineTo(hdc, right, yLast);
 
             SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, lastUp ? sty->clr.up : sty->clr.down);
+            SetDCPenColor(hdc, lastClr);
             MoveToEx(hdc, right, yLast, NULL);
             LineTo(hdc, edge + 1, yLast);
             SelectObject(hdc, hOld2);
+            if (penSeries) DeleteObject(penSeries);
 
             // The axis stamp overwrites the grid label at this height, so
             // that there are not two numbers on top of each other.
@@ -2560,7 +2931,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int half = in->desktop ? DeskPillH(H) / 2 : tagHalf;
 
                 RECT rcPill = { edge + 1, yLast - half, axR + PX(3), yLast + half };
-                SetDCBrushColor(hdc, lastUp ? sty->clr.up : sty->clr.down);
+                SetDCBrushColor(hdc, lastClr);
                 FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
                 // "Precise value text": two decimals where they fit, otherwise
@@ -2587,7 +2958,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 // out of it. The surface stays, and the price is in the
                 // header's quote line.
                 if (yGhost == INT_MIN || abs(yLast - yGhost) >= tagH) {
-                    SetTextColor(hdc, sty->clr.bg);
+                    SetTextColor(hdc, series ? sty->clr.onStamp : sty->clr.bg);
                     RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
                     DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
                 }
@@ -2622,23 +2993,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 #ifdef TICKER_PROBE
     st->probeCrossTag = 0;
 #endif
-    if (st->hoverIdx < 0 || st->hoverIdx >= n) return;
-    double hrel = (double)st->hoverIdx - dStart;
-    if (hrel < 0.0 || hrel >= dCount) return;
+    if (!hoverOn) return;   // phase 51: decided with the box's place, above
 
     const Candle* hc = &in->candles[st->hoverIdx];
-    int hx = left + (int)((hrel + 0.5) * slot);
-    int hy = st->hoverY;
-    if (hoverInBand) {                 // phase 39: the horizontal lives in the band
-        if (hy < bt) hy = bt;
-        if (hy > bb) hy = bb;
-    } else if (hoverInVol) {           // phase 43: or in the volume pane
-        if (hy < vt) hy = vt;
-        if (hy > vb) hy = vb;
-    } else {
-        if (hy < top) hy = top;
-        if (hy > bottom) hy = bottom;
-    }
 
     HPEN hPrev = (HPEN)SelectObject(hdc, sty->penCross);
     MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, axisB);   // through every pane
@@ -2697,30 +3054,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     wchar_t tbuf[24];
     FormatTimeAs(hc->openTime, in->intervalMs, in->utcOffsetMs, TIME_BOX, tbuf, 24);
 
-    // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
-    // With the indicators on (phase 27) three more rows are added: SMA, EMA
-    // and VWAP at the candle under the crosshair - the same numbers the
-    // legend shows, since legendIdx IS hoverIdx when this block runs (same
-    // condition). The rows stay as long as the lines are visible (indT > 0)
-    // and fade with them, in the lines' own colors; an average that is not
-    // defined at the candle gets a dash, as in the legend.
-    const int indRows = (indT > 0) ? 3 : 0;
-    const int rsiRows = (bandOn && rsiT > 0) ? 1 : 0;   // phase 39
-    const int LINE_H = PX(13), BOX_W = PX(HOVER_BOX_W);
-    const int BOX_H = PX(4) + (6 + indRows + rsiRows) * LINE_H + PX(5);
-    int bx = hx + PX(12);
-    if (bx + BOX_W > right) bx = hx - PX(12) - BOX_W;   // flip to the left at the edge
-    if (bx < left) bx = left;
-    // Phase 44: the top clamp comes last, so it wins. On a short panel with
-    // both panes and the averages (290 px: 126 px of price, a 139 px box) the
-    // bottom clamp put the box over the header's quote line and under the
-    // toolbar the app draws after the chart; now it hangs into the pane
-    // below, which is the chart's own.
-    int by = hy - BOX_H / 2;
-    if (by + BOX_H > bottom) by = bottom - BOX_H;
-    if (by < top) by = top;
-
-    RECT rcBox = { bx, by, bx + BOX_W, by + BOX_H };
+    // The box's place and size are rcBox, computed before the view's high
+    // and low were placed (phase 51).
+    int bx = rcBox.left, by = rcBox.top;
     FillRect(hdc, &rcBox, sty->brBox);
     FrameRect(hdc, &rcBox, sty->brBoxEdge);
 

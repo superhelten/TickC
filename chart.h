@@ -64,8 +64,9 @@ typedef struct {
     // Test build only: what the last ChartDrawBody measured. 45: the session
     // blocks (us), 56: yesterday (us), 39: the averages (us), 57: bitmask of
     // level labels drawn, 58: crosshair tag drawn, 59: the label block (us).
+    // Phase 51: bit 0 the view's high label drawn, bit 1 the low's.
     LONGLONG probeSessUs, probePrevUs, probeIndUs, probeLblUs;
-    int      probeLblMask, probeCrossTag;
+    int      probeLblMask, probeCrossTag, probeHiLoMask;
 #endif
 } ChartState;
 
@@ -126,10 +127,23 @@ typedef struct {
     // selected cell, onAccent its text.
     COLORREF quote, accent, onAccent;
     // Phase 49: the line and mountain chart types. line is the close line,
-    // mountain the fill under it - an exact Blend of bg toward line, so a
-    // probe can count it (see CLR_LINE). Last in the struct, so the tables'
-    // positional initializers keep their order.
+    // mountain the fill under it (phase 51: Bloomberg's navy, see CLR_LINE).
+    // Last in the struct, so the tables' positional initializers keep their
+    // order.
     COLORREF line, mountain;
+    // Phase 51: the Bloomberg GIP chart area. gridDot is the dotted grid
+    // (grid stays the solid rules: the lines between panes, and the
+    // desktop's grid); axisLine the price column's axis line and its ticks;
+    // stamp and onStamp the last-price stamp of the line and the mountain,
+    // which takes the series' color on Bloomberg, where the candles and the
+    // bars keep up/down with bg on it.
+    COLORREF gridDot, axisLine, stamp, onStamp;
+    // fillCell: the cell a level name or the averages' legend stands on
+    // where the mountain's fill covers it. The dark theme's navy carries
+    // every such text at 4.5:1 (the cell is the fill itself, and only cuts
+    // the lines through the text); the light fill does not, so there it is
+    // the background, as in phase 49.
+    COLORREF fillCell;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
@@ -213,8 +227,13 @@ typedef struct {
 // intervals (phase 45); tests/chart_golden.c measures that it fits.
 #define HOVER_BOX_W      104
 
-// Palette (matches the tray icon)
-#define CLR_BG           RGB(0x0D, 0x11, 0x17)
+// Palette. The up green is the tray icon's; the icon keeps its own colors.
+// Phase 51: the background is black, Bloomberg's (it was 0D1117). Every
+// color that was a blend toward the old background is derived again from
+// black below, and moved one step off the exact blend where a text color is
+// the other end (pitfall 87: on black every darker copy of a text color IS
+// on its blend line, which anti-aliased text is made of).
+#define CLR_BG           RGB(0x00, 0x00, 0x00)
 #define CLR_GRID         RGB(0x1C, 0x22, 0x2B)
 #define CLR_UP           RGB(0x00, 0xFF, 0x66)
 #define CLR_DOWN         RGB(0xFF, 0x49, 0x66)
@@ -247,14 +266,17 @@ typedef struct {
 #define VOL_PANE_FRAC    0.20
 #define VOL_PANE_MIN     40
 #define VOL_PANE_PAD     3
-#define CLR_VOL_UP       RGB(0x09, 0x54, 0x2D)
-#define CLR_VOL_DOWN     RGB(0x51, 0x21, 0x2D)
+// Phase 51: 72/255 of the way from black to up and down, as the old values
+// were from 0D1117, with red (up) and blue (down) one step off the blend.
+#define CLR_VOL_UP       RGB(0x01, 0x48, 0x1C)
+#define CLR_VOL_DOWN     RGB(0x48, 0x14, 0x1D)
 // Phase 45: the bars in the pane. The colors above were made to stand BEHIND
 // the candles; in the pane nothing stands in front of them, and at 28 % they
 // read as a shadow. About 60 % of the way from CLR_BG to the candle colors:
 // direction at a glance, still a step under the candles, which stay the
 // brightest thing on the surface. Not exact blends in every channel (pitfall
-// 87: up and down are also text colors).
+// 87: up and down are also text colors). Phase 51: on black they are about
+// 63 % of the way, still off the blend lines, and are kept.
 #define CLR_VOL_PANE_UP   RGB(0x05, 0xA0, 0x46)
 #define CLR_VOL_PANE_DOWN RGB(0x9E, 0x33, 0x46)
 // Moving averages (phase 25): SMA 20 and EMA 50 on the close, drawn as
@@ -304,7 +326,10 @@ typedef struct {
 // patterns stay in step: high/low is 2 on / 10 off (sparse dots; PS_DOT in
 // the crosshair is denser and follows the pointer), the close 10 on / 2 off
 // (almost solid - it is the level today's change is computed from).
-#define CLR_PREV         RGB(0x6F, 0x7B, 0x95)
+// Phase 51: a step lighter (6F7B95 until then), so the names PDC, PDH and
+// PDL reach 4.5:1 on the mountain's navy (4.76) and the tags on the box
+// (4.58, from 3.99); still darker and cooler than CLR_SESSION.
+#define CLR_PREV         RGB(0x79, 0x85, 0xA0)
 #define PREV_DASH_HL     2
 #define PREV_DASH_CLOSE  10
 // The levels in the price axis rank, highest first: today's high and low,
@@ -343,9 +368,10 @@ typedef struct {
 // it fires. The line over the data area is the same color blended halfway
 // down towards CLR_BG: a level is a reference like the grid, not a signal,
 // and must not shout louder than the candles. The tag on the axis carries
-// the saturated color.
+// the saturated color. Phase 51: halfway from black, red one step up, off
+// the alert's own blend line (805810 is on it).
 #define CLR_ALERT          RGB(0xFF, 0xB0, 0x20)
-#define CLR_ALERT_LINE     RGB(0x86, 0x60, 0x1B)
+#define CLR_ALERT_LINE     RGB(0x81, 0x58, 0x10)
 
 // The header (phase 42), on the Bloomberg terminal's model: values in amber,
 // the selected range in blue with white text. The amber is Bloomberg's
@@ -372,10 +398,35 @@ typedef struct {
 // violet the averages, teal RSI. Not CLR_TEXT, the header's price: the line
 // is not text, and a probe must be able to count it apart from text
 // (pitfall 87; checked per channel against every text role and the
-// watermark's white). The mountain is the line blended 40/255 toward CLR_BG,
-// Blend's own integer result, and on no text role's blend line either.
-#define CLR_LINE           RGB(0xDD, 0xE6, 0xF0)
-#define CLR_MOUNTAIN       RGB(0x2D, 0x32, 0x39)
+// watermark's white).
+// Phase 51, Bloomberg's GIP chart: a white line over a dark navy fill. The
+// navy is sampled from the user's screenshot of the terminal (011A31, the
+// fill's most common pixel); the white keeps a cool tint so it is not on the
+// gray ramp from black to the watermark's white. The fill is no longer a
+// blend of the line; neither is on a text role's blend line.
+#define CLR_LINE           RGB(0xF4, 0xF6, 0xF9)
+#define CLR_MOUNTAIN       RGB(0x01, 0x1A, 0x31)
+// The grid is dotted in both directions (phase 51): one pixel in
+// GRID_DOT_PERIOD, horizontally at the price labels and vertically at the
+// time labels, anchored at the chart's left and top edges so the dots stand
+// still while the view pans. The period is in device pixels, as GDI's own
+// PS_DOT is: a dot pattern is a line style, and lines stay one device pixel
+// at every dpi. Brighter than CLR_GRID, which stays the solid rules between
+// panes, because a quarter of the pixels carry it; darker than the
+// crosshair, whose dotted line follows the hand and is the one to read. The
+// crosshair's PS_DOT is 3 on 3 off in a lighter gray, yesterday's high and
+// low 2 on 10 off in CLR_PREV - the three dotted lines stay apart.
+// The price column is an axis (phase 51): a line on its edge down each pane
+// and a tick at each price label, in CLR_AXIS_LINE, dimmer than the labels.
+#define GRID_DOT_PERIOD    4
+#define GRID_TICK_LEN      3
+#define CLR_GRID_DOT       RGB(0x47, 0x4E, 0x5B)
+#define CLR_AXIS_LINE      RGB(0x73, 0x7D, 0x8C)
+// The last-price stamp of the line and the mountain (phase 51): the series'
+// white with a black number, as the terminal draws it. The candles and the
+// bars keep the up/down stamp, and so does every type on the desktop.
+#define CLR_STAMP          RGB(0xFF, 0xFF, 0xFF)
+#define CLR_ON_STAMP       RGB(0x00, 0x00, 0x00)
 
 // Batches for PolyPolygon / Polyline; see chart.c.
 #define VOL_BATCH 256

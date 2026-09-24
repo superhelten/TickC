@@ -2,12 +2,12 @@
 
 A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
 Two source files. No runtime, no installer, no dependencies beyond what ships with Windows.
-The whole thing compiles to a single exe of about 250 KB.
+The whole thing compiles to a single exe of about 256 KB.
 
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
 
-![The chart panel: the quote line, candles, SMA 20, EMA 50, VWAP, the day levels and the volume pane](docs/images/panel.png)
+![The chart panel: the quote line, the mountain on black, SMA 20, EMA 50, VWAP, the day levels, the view's high and low, and the volume pane](docs/images/panel.png)
 
 ## What it does
 
@@ -16,14 +16,18 @@ Binance it shows `...` and says so in the tooltip, and keeps retrying.
 - **A header on the Bloomberg model:** a quote line with Last, Chg, %Chg, Op, Hi, Lo, Vol
 and At for the UTC trading day, a range field (1D … Max, and the bar size), and a gear
 that opens the chart settings: volume, averages, RSI, the theme and the chart type.
-- **Chart panel** (left-click the icon): candlesticks, SMA 20, EMA 50 and a daily VWAP,
+- **Chart panel** (left-click the icon): the price as a mountain, SMA 20, EMA 50 and a daily VWAP,
 with the volume in a pane of its own under the price and an optional RSI 14 pane. You
 also get today's high and low, and yesterday's high, low and close (labelled HOD, LOD,
 PDH, PDL, PDC).
+- **The Bloomberg look,** after the terminal's GIP chart: a black background, a white line over
+a navy fill, a dotted grid, a price axis with a tick at each label, a white box for the last
+price of the line and the mountain, and the view's high and low marked `H` and `L` by their points.
 - **Four chart types,** as in Bloomberg: candles, OHLC bars, a line of the closes, and a
 mountain (the line with the area under it filled). Pick one under CHART TYPE in the gear
 menu, step through them with `C`, or use "Chart type" in the tray menu. The panel and
-desktop mode each have their own choice: the panel starts on candles, the desktop on the line.
+desktop mode each have their own choice: the panel starts on the mountain (Bloomberg's default
+for GIP), the desktop on the line.
 - **Symbols:** BTC, ETH, SOL and BNB against USDT.
 - **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d, 1w, from a dropdown in the toolbar.
 - **Ranges:** 1D, 3D, 1M, 6M, YTD, 1Y, 5Y, Max. A range picks a fitting interval and shows
@@ -76,8 +80,9 @@ cl /nologo /W4 /O2 /I. /Fo:tests\ /Fe:tests\chart_golden.exe tests\chart_golden.
 tests\chart_golden.exe
 ```
 
-Before the pictures, the run checks every text/background pair of the light theme
-against WCAG AA (4.5:1). Each case is hashed and compared with `tests/golden/chart.txt`; a failing case
+Before the pictures, the run checks every text/background pair of both themes
+against WCAG AA (4.5:1); three older, deliberately muted pairs of the dark theme are named and
+held at their floor. Each case is hashed and compared with `tests/golden/chart.txt`; a failing case
 is written to `tests/out/` as a BMP. Text goes through the installed fonts and
 the ClearType setting, so the hashes hold for the machine that wrote them. On
 another machine, look at the pictures (`--bmp`) and rewrite them with `--update`.
