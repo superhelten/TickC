@@ -740,31 +740,26 @@ long long ChartUtcOffsetMs(void) {
     return ((long long)l - (long long)u) / 10000LL;
 }
 
-// Unix ms -> a candle's time, in one of three forms (phase 45; until then 1h
+// Unix ms -> a candle's time, in one of two forms (phase 45; until then 1h
 // and 4h wrote "MM-DD HH:MM" on every label, so a 1h axis read "09-12 00:00"
 // nine times, and under 1h a view across midnight had no date at all):
 //   TIME_CLOCK  "14:35"         the quote line's At (tickc.c, through
 //                               FormatCandleTime)
-//   TIME_AXIS   "14:35", and "21 Sep" on the candle a local day begins with -
-//               Bloomberg marks the day on the axis
-//   TIME_BOX    "21 Sep 14:35"  the hover box
-// The day begins with the candle whose open lies less than one interval
-// after local midnight: that is the midnight candle itself wherever the
-// offset is whole hours and the interval divides them, and in CEST the 4h
-// candle at 02:00 (the candles open at 00:00 UTC), which "on midnight" alone
-// never finds. Month names are English and fixed, not the locale's: the repo
-// and the app are English, and the axis width is measured on them.
+//   TIME_BOX    "21 Sep 14:35"  the hover box and the statistics box
+// Phase 52: the axis's own forms moved to TimeFine and TimeCoarse below -
+// the day now stands in the time axis's second row, not in place of a clock.
+// Month names are English and fixed, not the locale's: the repo and the app
+// are English, and the axis width is measured on them.
 //
 // From 1 day up every form is "YYYY-MM-DD", the UTC date. Daily and weekly
 // candles open at 00:00 UTC; west of UTC the local conversion put them on
 // the previous day (phase 44 review, F4).
 #define TIME_CLOCK 0
-#define TIME_AXIS  1
 #define TIME_BOX   2
+static const wchar_t* const MON_NAME[12] = { L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun",
+                                             L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec" };
 static void FormatTimeAs(long long unixMs, long long intervalMs, long long utcOffsetMs,
                          int form, wchar_t* out, size_t cch) {
-    static const wchar_t* const MON[12] = { L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun",
-                                            L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec" };
     BOOL daily = (intervalMs >= 86400000LL);
     long long off = daily ? 0 : utcOffsetMs;
     ULONGLONG t = (ULONGLONG)(unixMs / 1000 + off / 1000) * 10000000ULL + 116444736000000000ULL;
@@ -780,12 +775,8 @@ static void FormatTimeAs(long long unixMs, long long intervalMs, long long utcOf
         swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
         return;
     }
-    long long tod = (long long)st.wHour * 3600000LL + st.wMinute * 60000LL + st.wSecond * 1000LL;
-    BOOL dayStart = (tod < ((intervalMs > 0) ? intervalMs : 60000LL));
     if (form == TIME_BOX)
-        swprintf_s(out, cch, L"%d %s %02d:%02d", st.wDay, MON[st.wMonth - 1], st.wHour, st.wMinute);
-    else if (form == TIME_AXIS && dayStart)
-        swprintf_s(out, cch, L"%d %s", st.wDay, MON[st.wMonth - 1]);
+        swprintf_s(out, cch, L"%d %s %02d:%02d", st.wDay, MON_NAME[st.wMonth - 1], st.wHour, st.wMinute);
     else
         swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
 }
@@ -795,23 +786,82 @@ void FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffse
     FormatTimeAs(unixMs, intervalMs, utcOffsetMs, TIME_CLOCK, out, cch);
 }
 
-// The widest label TIME_AXIS can give for the interval, measured in the font
-// selected into hdc (phase 45). The spacing of the labels must hold for every
-// label, and until now it was measured on the view's first one - with two
-// forms on one axis, "30 Sep" would have been placed at the distance of
-// "00:00". The axis font is monospace (see ChartStyleCreate), so one sample
-// per form is the widest of its kind.
-int ChartTimeLabelW(HDC hdc, long long intervalMs) {
-    static const wchar_t* const INTRA[2] = { L"00:00", L"30 Sep" };
-    SIZE sz = { 0, 0 };
-    if (intervalMs >= 86400000LL) {
-        GetTextExtentPoint32W(hdc, L"2026-09-21", 10, &sz);
-        return sz.cx;
+// The time axis's calendar (phase 52). A candle's day, month and year, in
+// the time the axis writes: local under 1 day, UTC from 1 day up (as
+// FormatTimeAs). The two rows ask it once per visible candle, so it is
+// integer arithmetic - the civil date from a day number (the proleptic
+// Gregorian algorithm from H. Hinnant's date library), not a system call
+// per candle.
+static long long TimeDayNo(long long unixMs, long long intervalMs, long long utcOffsetMs) {
+    long long t = unixMs + ((intervalMs >= DAY_MS) ? 0 : utcOffsetMs);
+    return (t >= 0) ? t / DAY_MS : -((-t + DAY_MS - 1) / DAY_MS);
+}
+
+static void CivilFromDays(long long z, int* y, int* m, int* d) {
+    z += 719468;
+    long long era = (z >= 0 ? z : z - 146096) / 146097;
+    long long doe = z - era * 146097;
+    long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    long long mp = (5 * doy + 2) / 153;
+    *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    *m = (int)((mp < 10) ? mp + 3 : mp - 9);
+    *y = (int)(yoe + era * 400 + ((*m <= 2) ? 1 : 0));
+}
+
+// The key of the unit a candle lies in (CHART_TUNIT_*): equal keys, same
+// day, month or year. Months count from year 0, so a key modulo a step in
+// months picks every step-th month.
+static long long TimeUnitKey(long long unixMs, long long intervalMs, long long utcOffsetMs, int unit) {
+    long long dn = TimeDayNo(unixMs, intervalMs, utcOffsetMs);
+    if (unit == CHART_TUNIT_DAY) return dn;
+    int y, m, d;
+    CivilFromDays(dn, &y, &m, &d);
+    return (unit == CHART_TUNIT_MONTH) ? (long long)y * 12 + (m - 1) : (long long)y;
+}
+
+// The fine row's text (CHART_TROW_*) and the coarse row's (CHART_TUNIT_*).
+static void TimeFine(long long unixMs, long long intervalMs, long long utcOffsetMs, int form,
+                     wchar_t* out, size_t cch) {
+    int y, m, d;
+    long long dn = TimeDayNo(unixMs, intervalMs, utcOffsetMs);
+    CivilFromDays(dn, &y, &m, &d);
+    if (form == CHART_TROW_CLOCK) {
+        long long t = unixMs + ((intervalMs >= DAY_MS) ? 0 : utcOffsetMs);
+        long long tod = (t - dn * DAY_MS) / 60000LL;
+        swprintf_s(out, cch, L"%02d:%02d", (int)(tod / 60), (int)(tod % 60));
+    } else if (form == CHART_TROW_DAY) {
+        swprintf_s(out, cch, L"%d", d);
+    } else if (form == CHART_TROW_MONTH) {
+        wcscpy_s(out, cch, MON_NAME[m - 1]);
+    } else {
+        swprintf_s(out, cch, L"%d", y);
     }
+}
+
+static void TimeCoarse(long long unixMs, long long intervalMs, long long utcOffsetMs, int unit,
+                       wchar_t* out, size_t cch) {
+    int y, m, d;
+    CivilFromDays(TimeDayNo(unixMs, intervalMs, utcOffsetMs), &y, &m, &d);
+    if (unit == CHART_TUNIT_DAY)        swprintf_s(out, cch, L"%d %s", d, MON_NAME[m - 1]);
+    else if (unit == CHART_TUNIT_MONTH) swprintf_s(out, cch, L"%s %d", MON_NAME[m - 1], y);
+    else                                swprintf_s(out, cch, L"%d", y);
+}
+
+// The widest label the fine row can give for the interval, measured in the
+// font selected into hdc (phase 45). The spacing of the labels must hold for
+// every label, and until phase 45 it was measured on the view's first one.
+// Phase 52: the fine row's forms are a clock (under 1 day), a day of the
+// month, a month and a year, and the axis font is proportional (Arial), so
+// every month is measured, not one sample per form. The digits are tabular,
+// so "00:00", "30" and "2026" are the widest of their kinds.
+int ChartTimeLabelW(HDC hdc, long long intervalMs) {
+    static const wchar_t* const FORMS[3] = { L"00:00", L"30", L"2026" };
     int w = 0;
-    for (int i = 0; i < 2; ++i) {
-        sz.cx = 0;
-        GetTextExtentPoint32W(hdc, INTRA[i], (int)wcslen(INTRA[i]), &sz);
+    for (int i = (intervalMs >= DAY_MS) ? 1 : 0; i < 3 + 12; ++i) {
+        const wchar_t* s = (i < 3) ? FORMS[i] : MON_NAME[i - 3];
+        SIZE sz = { 0, 0 };
+        GetTextExtentPoint32W(hdc, s, (int)wcslen(s), &sz);
         if (sz.cx > w) w = sz.cx;
     }
     return w;
@@ -1143,37 +1193,114 @@ static void DrawDashLineV(HDC hdc, int x, int y0, int y1, int anchor, int dashOn
 // widest label, and a label that would leave [left, right] left out. The
 // axis font is selected for the measuring and put back. Not on the desktop,
 // which has no time axis.
+//
+// Phase 52: two rows, as on Bloomberg's GIP chart ("Jun Sep Dec Mar" over
+// "2021 | 2022"). The fine row is the step's unit: a clock under a day, the
+// day of the month from a day up, the month's name from 28 days up and the
+// year from a year up. From 28 days the steps are CALENDAR months (1, 2, 3,
+// 6 or 12, then 2, 5 and 10 years), each label on the first candle of its
+// month, so a 1Y axis reads "Oct Nov Dec Jan" and not the 30-day steps'
+// arbitrary dates. The step in months is the smallest whose narrowest span
+// (February: 28 days; two months 59, three 89, six 181) keeps the labels
+// minDx apart: the first candle of a month opens less than one interval
+// after the month begins, so two of them are at least floor(days * DAY_MS /
+// interval) candles apart. The coarse row is the next unit up - the day
+// under clocks, the month under days, the year under months, nothing under
+// years - with a separator where it changes and its name centered in each
+// span it has in the plot (Bloomberg's "2021" under Sep, mid-span); a name
+// wider than its span is left out, the separator stays.
 #define TIME_LBL_MAX 128
-typedef struct { int n; int k[TIME_LBL_MAX]; int x[TIME_LBL_MAX]; } TimeLabels;
+typedef struct {
+    int n; int k[TIME_LBL_MAX]; int x[TIME_LBL_MAX];   // the fine row
+    int form, unit;                                     // CHART_TROW_*, CHART_TUNIT_*
+    int nSep; int sepX[TIME_LBL_MAX];                   // the coarse row's separators
+    int nSeg; int segK[TIME_LBL_MAX + 1], segX0[TIME_LBL_MAX + 1], segX1[TIME_LBL_MAX + 1];
+} TimeLabels;
 static TimeLabels s_timeLbl;
 
 static void TimeLabelsOf(HDC hdc, HFONT fontAxis, const ChartData* in, int left, int right, int cw,
                          double dStart, double dCount, double slot, int i0, int i1, int dpi,
                          TimeLabels* out) {
-    out->n = 0;
+    out->n = out->nSep = out->nSeg = 0;
+    out->form = CHART_TROW_CLOCK;
+    out->unit = CHART_TUNIT_NONE;
     if (i0 >= i1 || in->desktop) return;
     HGDIOBJ oldF = SelectObject(hdc, fontAxis);
     wchar_t tl[24];
     int minDx = ChartTimeLabelW(hdc, in->intervalMs) + ChartPx(dpi, TIME_LBL_GAP);
     if (minDx < ChartPx(dpi, TIME_DX_MIN)) minDx = ChartPx(dpi, TIME_DX_MIN);
     long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
+    long long tz = in->utcOffsetMs;
     int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
-    // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
-    // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
-    // whole view, the one the labels are written with.
-    long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
-    long long slotNo = (t0 + tzMs) / iv;
-    int rem = (int)(slotNo % step);
-    int k = i0 + ((rem == 0) ? 0 : (step - rem));
-    for (; k < i1 && out->n < TIME_LBL_MAX; k += step) {
-        int x = left + (int)(((double)k - dStart + 0.5) * slot);
-        FormatTimeAs(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, TIME_AXIS, tl, 24);
-        SIZE tsz = { 0, 0 };
-        GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
-        if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-        out->k[out->n] = k;
-        out->x[out->n] = x;
-        out->n++;
+    long long stepMs = (long long)step * iv;
+    if (stepMs < 28 * DAY_MS) {
+        out->form = (stepMs < DAY_MS) ? CHART_TROW_CLOCK : CHART_TROW_DAY;
+        out->unit = (stepMs < DAY_MS) ? CHART_TUNIT_DAY : CHART_TUNIT_MONTH;
+        // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
+        // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
+        // whole view, the one the labels are written with.
+        long long t0 = in->candles[i0].openTime;
+        long long slotNo = (t0 + tz) / iv;
+        int rem = (int)(slotNo % step);
+        int k = i0 + ((rem == 0) ? 0 : (step - rem));
+        for (; k < i1 && out->n < TIME_LBL_MAX; k += step) {
+            int x = left + (int)(((double)k - dStart + 0.5) * slot);
+            TimeFine(in->candles[k].openTime, iv, tz, out->form, tl, 24);
+            SIZE tsz = { 0, 0 };
+            GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
+            if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
+            out->k[out->n] = k;
+            out->x[out->n] = x;
+            out->n++;
+        }
+    } else {
+        static const int MSTEP[8] = { 1, 2, 3, 6, 12, 24, 60, 120 };
+        static const int MDAYS[8] = { 28, 59, 89, 181, 365, 730, 1826, 3652 };
+        int ms = 0;
+        for (int q = 0; q < 8 && !ms; ++q)
+            if ((double)((long long)MDAYS[q] * DAY_MS / iv) * slot >= (double)(minDx + 1)) ms = MSTEP[q];
+        out->form = (ms >= 12) ? CHART_TROW_YEAR : CHART_TROW_MONTH;
+        out->unit = (ms >= 12) ? CHART_TUNIT_NONE : CHART_TUNIT_YEAR;
+        if (ms > 0) {
+            long long prev = TimeUnitKey(in->candles[(i0 > 0) ? i0 - 1 : 0].openTime, iv, tz, CHART_TUNIT_MONTH);
+            for (int k = i0; k < i1 && out->n < TIME_LBL_MAX; ++k) {
+                long long key = TimeUnitKey(in->candles[k].openTime, iv, tz, CHART_TUNIT_MONTH);
+                BOOL first = (k > 0 && key != prev);
+                prev = key;
+                if (!first || key % ms != 0) continue;
+                int x = left + (int)(((double)k - dStart + 0.5) * slot);
+                TimeFine(in->candles[k].openTime, iv, tz, out->form, tl, 24);
+                SIZE tsz = { 0, 0 };
+                GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
+                if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
+                out->k[out->n] = k;
+                out->x[out->n] = x;
+                out->n++;
+            }
+        }
+    }
+    // The coarse row: the spans of the unit in the plot. A boundary is the
+    // left edge of the first candle's slot in the new unit; one at or left
+    // of the plot's edge only renames the first span.
+    if (out->unit != CHART_TUNIT_NONE) {
+        out->nSeg = 1;
+        out->segK[0] = i0;
+        out->segX0[0] = left;
+        long long prev = TimeUnitKey(in->candles[i0].openTime, iv, tz, out->unit);
+        for (int k = i0 + 1; k < i1; ++k) {
+            long long key = TimeUnitKey(in->candles[k].openTime, iv, tz, out->unit);
+            if (key == prev) continue;
+            prev = key;
+            int x = left + (int)floor(((double)k - dStart) * slot);
+            if (x <= left) { out->segK[out->nSeg - 1] = k; continue; }
+            if (x >= right || out->nSep >= TIME_LBL_MAX) break;
+            out->segX1[out->nSeg - 1] = x;
+            out->sepX[out->nSep++] = x;
+            out->segK[out->nSeg] = k;
+            out->segX0[out->nSeg] = x;
+            out->nSeg++;
+        }
+        out->segX1[out->nSeg - 1] = right;
     }
     SelectObject(hdc, oldF);
 }
@@ -1301,10 +1428,42 @@ BOOL ChartStyleCreate(ChartStyle* sty, int dpi, const ChartTheme* theme) {
     // tmHeight 15. Consolas jumps from 10 to 12 px (em 16 -> 17), Cascadia Mono
     // em 16 gives 11 px but tmHeight 21, which does not fit in the time axis's
     // 18 px. At other dpi the em scales with it, and ChartAxisW follows.
+    //
+    // Phase 52: Arial, Bloomberg's kind of narrow proportional sans, at the
+    // same em. Measured against the stock fonts (Arial Narrow is Office's,
+    // not Windows'; asked for, GDI gives Arial): the same 11 px digit height,
+    // digits 8 px and TABULAR (13 at 144 dpi, 17 at 192), so numbers of one
+    // format still end on the same column; "75812.34" 60 px against 72;
+    // tmHeight 17. Like Lucida it is not antialiased at 96 dpi (100 % of its
+    // pixels exact, the same one color), and both are at 144 and 192. Segoe
+    // UI was antialiased at 96 and its 20 px cell does not fit the 16 px tags;
+    // Bahnschrift's digits are 5-9 px wide. Should Arial ever be missing or
+    // come back with uneven digits, Lucida Console as before - the column is
+    // still sized in its cells.
     sty->fontAxis = CreateFontW(-ChartPx(dpi, 15), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
-                                L"Lucida Console");
+                                ANTIALIASED_QUALITY, VARIABLE_PITCH | FF_SWISS, L"Arial");
+    if (sty->fontAxis) {
+        HDC mdc = CreateCompatibleDC(NULL);
+        BOOL arial = FALSE;
+        if (mdc) {
+            HGDIOBJ oldF = SelectObject(mdc, sty->fontAxis);
+            wchar_t face[LF_FACESIZE] = L"";
+            GetTextFaceW(mdc, LF_FACESIZE, face);
+            SIZE s0 = { 0, 0 }, s1 = { 0, 0 };
+            GetTextExtentPoint32W(mdc, L"1", 1, &s1);
+            GetTextExtentPoint32W(mdc, L"0", 1, &s0);
+            arial = (lstrcmpW(face, L"Arial") == 0 && s0.cx == s1.cx && s0.cx > 0);
+            SelectObject(mdc, oldF);
+            DeleteDC(mdc);
+        }
+        if (!arial) { DeleteObject(sty->fontAxis); sty->fontAxis = NULL; }
+    }
+    if (!sty->fontAxis)
+        sty->fontAxis = CreateFontW(-ChartPx(dpi, 15), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                    ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                                    L"Lucida Console");
     sty->penGrid  = CreatePen(PS_SOLID, 1, t->grid);
     sty->penCross = CreatePen(PS_DOT,   1, t->cross);
     // Dashed, not dotted: keeps the last-price line visually distinct from
@@ -2552,16 +2711,48 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // not on the first label, and the edge test on each label's own width.
     // Phase 51: which labels and where is TimeLabelsOf's, computed before
     // the grid, whose dotted columns stand on the same x.
-    if (s_timeLbl.n > 0 && !in->desktop) {
+    // Phase 52: two rows (see TimeLabelsOf). The fine row's cell begins
+    // TIME_ROW_TOP under the lowest pane, the coarse row's TIME_ROW_PITCH
+    // under that: with Arial's 17 px cell the ink of the two rows is one
+    // pixel apart and the coarse row's descenders end on the band's last row
+    // but one (PAD_B, checked at 96, 144 and 192 dpi). A separator is a line
+    // in the axis line's color down the coarse row where its unit changes;
+    // each span's name stands centered in it, whole or not at all.
+#ifdef TICKER_PROBE
+    st->probeTimeAxis = 0;
+#endif
+    if (!in->desktop && (s_timeLbl.n > 0 || s_timeLbl.nSeg > 0)) {
         wchar_t tl[24];
+        int yFine = axisB + PX(TIME_ROW_TOP), yCoarse = yFine + PX(TIME_ROW_PITCH);
         SelectObject(hdc, sty->fontAxis);
         UINT oldAlign = SetTextAlign(hdc, TA_CENTER | TA_TOP);
         for (int t = 0; t < s_timeLbl.n; ++t) {
-            FormatTimeAs(in->candles[s_timeLbl.k[t]].openTime, in->intervalMs, in->utcOffsetMs,
-                         TIME_AXIS, tl, 24);
-            ExtTextOutW(hdc, s_timeLbl.x[t], axisB + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
+            TimeFine(in->candles[s_timeLbl.k[t]].openTime, in->intervalMs, in->utcOffsetMs,
+                     s_timeLbl.form, tl, 24);
+            ExtTextOutW(hdc, s_timeLbl.x[t], yFine, 0, NULL, tl, (int)wcslen(tl), NULL);
+        }
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);
+        for (int q = 0; q < s_timeLbl.nSep; ++q) {
+            MoveToEx(hdc, s_timeLbl.sepX[q], yCoarse, NULL);
+            LineTo(hdc, s_timeLbl.sepX[q], H);
+        }
+        int coarse = 0;
+        for (int q = 0; q < s_timeLbl.nSeg; ++q) {
+            TimeCoarse(in->candles[s_timeLbl.segK[q]].openTime, in->intervalMs, in->utcOffsetMs,
+                       s_timeLbl.unit, tl, 24);
+            SIZE csz = { 0, 0 };
+            GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &csz);
+            int x0 = s_timeLbl.segX0[q], x1 = s_timeLbl.segX1[q];
+            if (csz.cx + PX(8) > x1 - x0) continue;
+            ExtTextOutW(hdc, (x0 + x1) / 2, yCoarse, 0, NULL, tl, (int)wcslen(tl), NULL);
+            coarse++;
         }
         SetTextAlign(hdc, oldAlign);
+#ifdef TICKER_PROBE
+        st->probeTimeAxis = s_timeLbl.form | (s_timeLbl.unit << 4) |
+                            ((s_timeLbl.nSep > 255 ? 255 : s_timeLbl.nSep) << 8) | ((coarse > 255 ? 255 : coarse) << 16);
+#endif
     }
 
     // --- Legend for the moving averages (phase 25) ---

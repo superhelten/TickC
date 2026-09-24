@@ -130,8 +130,13 @@ static const Case CASES[] = {
     // and the averages, where the hover box (139 px) is taller than the price
     // pane (126 px): the box keeps out of the header and hangs into the pane
     // below.
-    { "vol_1h_gap_hover",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 568, FALSE,  96, FALSE, FALSE },
-    { "vol_rsi_15m_290_hover",   560, 290, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0, 280, 107, FALSE,  96, FALSE, TRUE },
+    // Phase 52: the two-row time band (PAD_B 34) moves the panes up 16 px:
+    // the price pane ends at 552 and the volume pane begins at 558, so the
+    // gap's pointer is 555; and the panel with both panes and a 126 px price
+    // pane is 306 px high now (290 would drop the volume pane behind the
+    // candles), hence the case's new name.
+    { "vol_1h_gap_hover",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 555, FALSE,  96, FALSE, FALSE },
+    { "vol_rsi_15m_306_hover",   560, 306, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0, 280, 107, FALSE,  96, FALSE, TRUE },
     // Phase 46: the axis column's rank and the rows. The pointer in the price
     // column 12 px under an alert (outside its 8 px hit zone) and 10 px over
     // the stamp; a 15 dollar symbol with 12 candles, where one cent is ~50 px
@@ -2199,6 +2204,10 @@ static int CheckTimeRows(void) {
         const ChartRect* g = &sc.g;
         int dpi = sc.k->dpi, axisB = ChartPanesBottom(g), H = sc.s.H;
         int r1 = axisB + ChartPx(dpi, TIME_ROW_TOP), r2 = r1 + ChartPx(dpi, TIME_ROW_PITCH);
+        // The ink: the fine row's descenders reach into the coarse row's
+        // cell, whose capitals begin a few rows down it - the rows split
+        // there.
+        int rInk = r2 + ChartPx(dpi, 2) + 1;
         Marks m;
         MarksOf(&sc, &m);
         // The boundaries of the unit in the plot.
@@ -2229,7 +2238,7 @@ static int CheckTimeRows(void) {
         }
         // The coarse row: every label inside one span, centered in it.
         int gl[64], gr[64];
-        int ng = InkGroups(&sc, g->left, g->right + 1, r2, H, ChartPx(dpi, 8), gl, gr, 64);
+        int ng = InkGroups(&sc, g->left, g->right + 1, rInk, H, ChartPx(dpi, 12), gl, gr, 64);
         if (ng == 0) { printf("FAIL time rows %s: nothing in the coarse row (rows %d-%d)\n", TR[i].name, r2, H); fails++; }
         for (int q = 0; q < ng; q++) {
             int a = g->left, b = g->right;
@@ -2241,7 +2250,7 @@ static int CheckTimeRows(void) {
             }
         }
         // The fine row: labels at least the spacing apart.
-        int nf = InkGroups(&sc, g->left, g->right + 1, r1, r2, ChartPx(dpi, 6), gl, gr, 64);
+        int nf = InkGroups(&sc, g->left, g->right + 1, r1, rInk, ChartPx(dpi, 6), gl, gr, 64);
         int minDx = ChartPx(dpi, TIME_DX_MIN) - 2;
         if (nf == 0) { printf("FAIL time rows %s: no fine labels\n", TR[i].name); fails++; }
         for (int q = 1; q < nf; q++)

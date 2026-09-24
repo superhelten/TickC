@@ -211,6 +211,12 @@ typedef struct {
 //
 // AXIS_PAD_R also stays above RESIZE_BORDER, so no digit stands in the zone
 // where the pointer becomes a resize arrow.
+// Phase 52: the panel's axis font is Arial (see ChartStyleCreate), whose
+// digits are 8 px (13 at 144 dpi, 17 at 192) and tabular. The column keeps
+// its width in Lucida's cells - the header's layout and every hit test stay
+// where they were - and the room it gains goes to a ninth character: a
+// six-digit price with its cents, "112345.67", is 68 px in 72, where Lucida
+// had to drop to whole dollars. The desktop keeps Lucida (DeskAxisW).
 #define AXIS_Y_CHARS     8
 #define AXIS_CHAR_W      9
 #define AXIS_LBL_GAP     4
@@ -231,12 +237,18 @@ typedef struct {
 // high (tmHeight), so 18 px gives text from bottom + 2 to bottom + 17 = H - 1
 // without touching the row y = bottom, where the lowest wick and the bottom
 // grid line stand (the clip is inclusive there, see DrawChart).
-#define PAD_B            18
+// Phase 52: two rows (see TIME_ROW_*) of Arial's 17 px cell, 34 px: the fine
+// row's cell from bottom + 1, the coarse row's from bottom + 16 to bottom +
+// 32. At 144 and 192 dpi the cells are 26 and 35 px in 51 and 68 (checked in
+// tests/chart_golden.c). The price pane pays the 16 px: 400x250 keeps 126 px
+// of price with the volume pane, over PRICE_PANE_MIN.
+#define PAD_B            34
 // Minimum distance between two time labels. Used as
 // max(TIME_DX_MIN, label width + TIME_LBL_GAP), the width the widest label
 // the axis can show (ChartTimeLabelW). Until phase 45 1h and 4h wrote
 // "MM-DD HH:MM", 99 px in the axis font; now every intraday label is "HH:MM"
-// or, where a day begins, "21 Sep" - 54 px, so 80 rules.
+// or, where a day begins, "21 Sep" - 54 px, so 80 rules. Phase 52: the fine
+// row's widest is "00:00", 36 px in Arial; 80 still rules.
 #define TIME_DX_MIN      80
 #define TIME_LBL_GAP     12
 // The time axis's two rows (phase 52, Bloomberg's "Dec | 2021 2022"): the
