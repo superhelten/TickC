@@ -659,6 +659,25 @@ static int      g_probeEmptySecs    = -1;
 // Phase 47, 85 on the panel: ticks of the animation clock since start. A
 // timer that should be dead but is not shows as a count that keeps rising.
 static volatile LONG g_probeAnimTicks = 0;
+// Phase 48: monitors this machine does not have. One monitor at 100 % with
+// the taskbar at the bottom shows none of the placement bugs, and the user's
+// display settings are not ours to change, so the test build pretends.
+// TICKER_FAKE_MON "x0,dpi[,quiet]": every window whose centre lies at screen
+// x >= x0 is on a monitor at that dpi (PanelDpi), and the panel gets the
+// WM_DPICHANGED Windows sends when a move takes it across - built as field
+// 105 builds it - unless quiet is 1, which models a Windows that sends none
+// to a hidden window. TICKER_FAKE_WORKAREA "dx,dy": GetPanelPlacement
+// returns rcNormalPosition shifted by -dx,-dy, as Windows' workspace
+// coordinates are with a taskbar dx wide on the left (or dy tall at the
+// top). Read once at startup, before the panel exists.
+static int  g_fakeMonX0 = 0, g_fakeMonDpi = 0;
+static BOOL g_fakeMonQuiet = FALSE;
+static int  g_fakeWorkDx = 0, g_fakeWorkDy = 0;
+// 87 on the panel: WM_DPICHANGED messages the panel has handled. 89: what
+// the last on-screen check did when the panel was shown (0 none yet, 1 left
+// it, 2 moved it onto a monitor's work area).
+static volatile LONG g_probeDpiChanges = 0;
+static int      g_probeOnScreen = 0;
 #endif
 
 
@@ -1246,10 +1265,23 @@ static void SaveGeometry(int x, int y, int w, int h) {
 // maximized window is not saved as such - then we would remember a
 // taskbar strip or the whole screen as "the user's size".
 // GetWindowPlacement gives the restored geometry in both cases.
+// The panel's WINDOWPLACEMENT. rcNormalPosition is in workspace coordinates
+// (pitfall 42), which equal screen coordinates here; the test build can
+// shift them as a taskbar on the left or at the top would (phase 48, see
+// g_fakeWorkDx). Every read of the panel's placement goes through here.
+static BOOL GetPanelPlacement(HWND hwnd, WINDOWPLACEMENT* wp) {
+    wp->length = sizeof(WINDOWPLACEMENT);
+    if (!GetWindowPlacement(hwnd, wp)) return FALSE;
+#ifdef TICKER_PROBE
+    OffsetRect(&wp->rcNormalPosition, -g_fakeWorkDx, -g_fakeWorkDy);
+#endif
+    return TRUE;
+}
+
 static void SaveWindowPlacement(HWND hwnd) {
     if (!hwnd) return;
     WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-    if (!GetWindowPlacement(hwnd, &wp)) return;
+    if (!GetPanelPlacement(hwnd, &wp)) return;
     RECT r = wp.rcNormalPosition;
     SaveGeometry(r.left, r.top, r.right - r.left, r.bottom - r.top);
 }
@@ -4021,7 +4053,7 @@ static void SpawnInstance(HWND hwnd) {
     RECT r;
     if (IsZoomed(hwnd)) {
         WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-        if (!GetWindowPlacement(hwnd, &wp)) return;
+        if (!GetPanelPlacement(hwnd, &wp)) return;
         r = wp.rcNormalPosition;
     } else if (!GetWindowRect(hwnd, &r)) {
         return;
@@ -4079,7 +4111,7 @@ static void OnButtonClick(HWND hwnd, int bh) {
                 // ends up outside everything visible. Same check as
                 // PlacePopupInitially does on opening.
                 WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-                if (GetWindowPlacement(hwnd, &wp)) {
+                if (GetPanelPlacement(hwnd, &wp)) {
                     RECT* nr = &wp.rcNormalPosition;
                     if (!PlacementIsVisible(nr->left, nr->top,
                                             nr->right - nr->left,
@@ -4102,6 +4134,25 @@ static void OnButtonClick(HWND hwnd, int bh) {
             break;
     }
 }
+
+#ifdef TICKER_PROBE
+// A scale change to nd, as Windows sends it when the panel moves to another
+// monitor (phase 37's field 105, shared with the fake monitor in phase 48):
+// the real WM_DPICHANGED, with the window rectangle scaled by new / old
+// around its top left corner - the logical size is kept. Returns the dpi the
+// panel is drawn at afterwards, -1 for a dpi out of range.
+static int ProbeDpiChange(HWND hwnd, int nd) {
+    int od = g_Ctx.sty.dpi;
+    if (nd < 48 || nd > 480 || od <= 0) return -1;
+    RECT rw;
+    GetWindowRect(hwnd, &rw);
+    RECT nr = { rw.left, rw.top,
+                rw.left + MulDiv(rw.right - rw.left, nd, od),
+                rw.top  + MulDiv(rw.bottom - rw.top, nd, od) };
+    SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(nd, nd), (LPARAM)&nr);
+    return g_Ctx.sty.dpi;
+}
+#endif
 
 static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -4190,6 +4241,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int nd = HIWORD(wParam);
 #ifdef TICKER_PROBE
             if (g_forceDpi > 0) nd = g_forceDpi;
+            InterlockedIncrement(&g_probeDpiChanges);   // field 87 (phase 48)
 #endif
             ApplyPanelStyle(&g_Ctx, (nd > 0) ? nd : PanelDpi(hwnd));
             SetWindowPos(hwnd, NULL, nr->left, nr->top,
@@ -4198,6 +4250,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
+
+#ifdef TICKER_PROBE
+        // The fake monitor (phase 48, see g_fakeMonX0): a move that takes the
+        // panel's centre across x0 changes its dpi, and Windows would answer
+        // it with WM_DPICHANGED. DefWindowProc runs first: it is what sends
+        // WM_SIZE and WM_MOVE from this message. The second pass, from the
+        // SetWindowPos in WM_DPICHANGED, finds the dpi equal and stops.
+        case WM_WINDOWPOSCHANGED:
+            if (g_fakeMonDpi > 0 && !g_fakeMonQuiet && g_forceDpi == 0 &&
+                hwnd == g_Ctx.hPopup && !g_desktopMode && g_Ctx.sty.fontSmall) {
+                LRESULT lr = DefWindowProcW(hwnd, msg, wParam, lParam);
+                int nd = PanelDpi(hwnd);
+                if (nd != g_Ctx.sty.dpi) ProbeDpiChange(hwnd, nd);
+                return lr;
+            }
+            break;
+#endif
 
         case WM_NCHITTEST: {
             // Desktop mode: nothing here should take the mouse.
@@ -4701,18 +4770,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // monitor: the real WM_DPICHANGED, with the window rectangle
                 // scaled by new / old around its top left corner. The RECT
                 // cannot cross from the probe's process, so it is built here.
-                case 105: {
-                    int nd = (int)lParam, od = g_Ctx.sty.dpi;
-                    if (nd < 48 || nd > 480 || od <= 0) { r = -1; break; }
-                    RECT rw;
-                    GetWindowRect(hwnd, &rw);
-                    RECT nr = { rw.left, rw.top,
-                                rw.left + MulDiv(rw.right - rw.left, nd, od),
-                                rw.top  + MulDiv(rw.bottom - rw.top, nd, od) };
-                    SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(nd, nd), (LPARAM)&nr);
-                    r = g_Ctx.sty.dpi;
-                    break;
-                }
+                case 105: r = ProbeDpiChange(hwnd, (int)lParam); break;
                 // Phase 27: today's session. 41 is VWAP at the candle index
                 // in lParam, x100, -1 when it is not defined there. 42/43 are
                 // today's high/low x100. 44 is the session's first candle
@@ -4823,6 +4881,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     break;
                 }
                 case 85: r = (LRESULT)g_probeAnimTicks; break;
+                // 87-89 (phase 48): WM_DPICHANGED messages handled; the dpi
+                // the panel's monitor has now (PanelDpi, fake monitor
+                // included), to compare with the dpi it is drawn at (60);
+                // the last on-screen check (g_probeOnScreen).
+                case 87: r = (LRESULT)g_probeDpiChanges; break;
+                case 88: r = PanelDpi(hwnd); break;
+                case 89: r = g_probeOnScreen; break;
                 case 86: {
                     RECT rcS;
                     GetClientRect(hwnd, &rcS);
@@ -5771,6 +5836,13 @@ static int PanelDpi(HWND hwnd) {
     if (g_desktopMode) return CHART_DPI_BASE;
 #ifdef TICKER_PROBE
     if (g_forceDpi > 0) return g_forceDpi;
+#endif
+#ifdef TICKER_PROBE
+    if (g_fakeMonDpi > 0 && hwnd) {   // phase 48, see g_fakeMonX0
+        RECT rf;
+        GetWindowRect(hwnd, &rf);
+        if ((rf.left + rf.right) / 2 >= g_fakeMonX0) return g_fakeMonDpi;
+    }
 #endif
     UINT d = hwnd ? GetDpiForWindow(hwnd) : 0;
     return d ? (int)d : CHART_DPI_BASE;
@@ -6957,6 +7029,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (GetEnvironmentVariableW(L"TICKER_FORCE_DPI", fd, 16) > 0) {
             int v = _wtoi(fd);
             if (v >= 48 && v <= 480) g_forceDpi = v;
+        }
+    }
+    // Phase 48: the fake monitor and the fake taskbar (see g_fakeMonX0).
+    // Comma-separated integers; anything malformed leaves the hook off.
+    {
+        wchar_t fv[64];
+        if (GetEnvironmentVariableW(L"TICKER_FAKE_MON", fv, 64) > 0) {
+            wchar_t* e = fv;
+            int x0 = (int)wcstol(e, &e, 10);
+            int dpi = (*e == L',') ? (int)wcstol(e + 1, &e, 10) : 0;
+            int quiet = (*e == L',') ? (int)wcstol(e + 1, &e, 10) : 0;
+            if (dpi >= 48 && dpi <= 480) {
+                g_fakeMonX0 = x0; g_fakeMonDpi = dpi; g_fakeMonQuiet = (quiet != 0);
+            }
+        }
+        if (GetEnvironmentVariableW(L"TICKER_FAKE_WORKAREA", fv, 64) > 0) {
+            wchar_t* e = fv;
+            int dx = (int)wcstol(e, &e, 10);
+            int dy = (*e == L',') ? (int)wcstol(e + 1, &e, 10) : 0;
+            if (dx >= 0 && dx <= 400 && dy >= 0 && dy <= 400) { g_fakeWorkDx = dx; g_fakeWorkDy = dy; }
         }
     }
     // Recorded responses (phase 34); see g_fixtureDir. Read before the thread
