@@ -470,6 +470,11 @@ typedef struct {
     // the wallpaper - a white one is a change nobody asked for there.
     BOOL   lightTheme;
     BOOL   lightThemeDesk;
+    // The chart type (phase 49), a CHART_* value, one choice per mode like
+    // the overlays. Read through ChartTypeNow; the engine draws and scales
+    // with ch.chartType, which follows the mode's choice.
+    int    chartType;
+    int    chartTypeDesk;
     // Price alerts (phase 23). Everything is UI-owned: the alerts are set
     // from the mouse and tested in WM_APP_DATA, both on the UI thread, so the
     // thread contract is untouched. Per symbol - a level in dollars is
@@ -4957,6 +4962,22 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 87: r = (LRESULT)g_probeDpiChanges; break;
                 case 88: r = PanelDpi(hwnd); break;
                 case 89: r = g_probeOnScreen; break;
+                // 90-93 (phase 49): the chart type chosen for this mode; the
+                // type the engine draws and scales with (ch.chartType - the
+                // DRAWN one, as field 64 is the drawn theme); and the price
+                // axis's target for the chart type in lParam over the target
+                // view, min and max x100, as the clock computes it - -1 with
+                // an empty buffer. With 31/32 a probe sees that the display
+                // settles on the target of the type drawn.
+                case 90: r = g_desktopMode ? g_Ctx.chartTypeDesk : g_Ctx.chartType; break;
+                case 91: r = g_Ctx.ch.chartType; break;
+                case 92: case 93:
+                    if (g_Ctx.candleCount > 0 && pvc > 0) {
+                        double tmn, tmx;
+                        PriceRangeFor(g_Ctx.candles, pvs, pvc, (int)lParam, &tmn, &tmx);
+                        r = (LRESULT)floor((wParam == 92 ? tmn : tmx) * 100.0 + 0.5);
+                    }
+                    break;
                 case 86: {
                     RECT rcS;
                     GetClientRect(hwnd, &rcS);
@@ -6837,6 +6858,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (g_Ctx.hPopup) InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
                 return cnt;
             }
+            //   127  READING (phase 49): the chart type chosen for a mode,
+            //        lParam 0 the panel's, 1 the desktop surface's - both
+            //        readable in either mode and with the panel hidden, so
+            //        the desktop's default and its registry value can be
+            //        checked where desktop mode cannot run (the hidden
+            //        desktop has no WorkerW).
+            if (wParam == 127) return lParam ? g_Ctx.chartTypeDesk : g_Ctx.chartType;
             return 0;
 #endif
 
