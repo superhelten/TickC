@@ -647,6 +647,38 @@ double VolumeMax(const Candle* candles, int vs, int vc) {
     return mx;
 }
 
+// Phase 52: the view's statistics (see chart.h). The candles are those whose
+// middle is in the plot - the frame's own x, (i - dStart + 0.5) * slot, in
+// [0, cw) - so the high and low labels (phase 51) and the statistics box
+// read one computation (pitfall 14). The first of equal extremes wins, as
+// the labels' loop did. The average is the mean close whatever the type: it
+// is the "Average" of Bloomberg's legend, the level the series sat at.
+BOOL ChartViewStats(const Candle* candles, int n, double dStart, double dCount, int cw,
+                    int chartType, ChartViewStat* out) {
+    ZeroMemory(out, sizeof(*out));
+    out->iHigh = out->iLow = -1;
+    if (n <= 0 || cw <= 0) return FALSE;
+    if (dCount < 1.0) dCount = 1.0;
+    double slot = (double)cw / dCount, sum = 0.0;
+    BOOL closes = (chartType == CHART_LINE || chartType == CHART_MOUNTAIN);
+    int i0 = (int)floor(dStart), i1 = (int)ceil(dStart + dCount);
+    if (i0 < 0) i0 = 0;
+    if (i1 > n) i1 = n;
+    for (int i = i0; i < i1; ++i) {
+        double fx = ((double)i - dStart + 0.5) * slot;
+        if (fx < 0.0 || fx >= (double)cw) continue;
+        const Candle* c = &candles[i];
+        double hv = closes ? c->close : c->high, lv = closes ? c->close : c->low;
+        if (out->iHigh < 0 || hv > out->high) { out->iHigh = i; out->high = hv; }
+        if (out->iLow < 0 || lv < out->low)   { out->iLow = i;  out->low = lv; }
+        sum += c->close;
+        out->count++;
+    }
+    if (out->count == 0) return FALSE;
+    out->avg = sum / (double)out->count;
+    return TRUE;
+}
+
 // When candles drop out at the front, EVERYTHING that is an absolute index is
 // shifted by the same amount. Without this the chart jumps one candle to the
 // left every minute once the buffer has reached its cap, and hoverIdx points
@@ -1185,6 +1217,8 @@ const ChartTheme ChartThemeDark = {
     CLR_STAMP,     // stamp: white
     CLR_ON_STAMP,  // onStamp: black, 21:1
     CLR_MOUNTAIN,  // fillCell: the navy itself
+    CLR_VOL_SERIES,    // volSeries (phase 52): GIP's steel blue
+    CLR_ON_VOL_SERIES, // onVolSeries: black on it, 4.97
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -1244,6 +1278,8 @@ const ChartTheme ChartThemeLight = {
     RGB(0x1B, 0x36, 0x5D),   // stamp      the line's navy, inverted:
     RGB(0xFF, 0xFF, 0xFF),   // onStamp    white on it, 12.1
     RGB(0xFA, 0xFA, 0xFB),   // fillCell   bg: the grays are ~3.7 on the fill
+    RGB(0x56, 0x72, 0x9F),   // volSeries  phase 52: the steel blue, a step deeper
+    RGB(0xFF, 0xFF, 0xFF),   // onVolSeries white on it, 4.88 (the light stamp's rule)
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase

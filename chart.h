@@ -67,6 +67,16 @@ typedef struct {
     // Phase 51: bit 0 the view's high label drawn, bit 1 the low's.
     LONGLONG probeSessUs, probePrevUs, probeIndUs, probeLblUs;
     int      probeLblMask, probeCrossTag, probeHiLoMask;
+    // Phase 52. probeLegendMask: the statistics box's rows drawn, bit 0
+    // Last Price, 1 High, 2 Average, 3 Low, 4 SMA, 5 EMA, 6 VWAP, and bit 7
+    // set when the box stands in the upper-left corner (0 = no box).
+    // probeTimeAxis: the time axis's two rows - the fine row's form (bits
+    // 0-3, CHART_TROW_*), the coarse row's unit (bits 4-7, CHART_TUNIT_*),
+    // the separators drawn (bits 8-15) and the coarse labels drawn (bits
+    // 16-23). probeVolMask: the volume pane - bit 0 the bars in the series'
+    // one color, bit 1 the volume's average line, bit 2 the framed legend,
+    // bit 3 the value tag.
+    int      probeLegendMask, probeTimeAxis, probeVolMask;
 #endif
 } ChartState;
 
@@ -144,6 +154,12 @@ typedef struct {
     // the lines through the text); the light fill does not, so there it is
     // the background, as in phase 49.
     COLORREF fillCell;
+    // Phase 52: the volume pane of the line and the mountain, Bloomberg's
+    // one series color: the bars, the legend's swatch and the value tag's
+    // surface (volSeries), and the number on that tag (onVolSeries). The
+    // candles and the OHLC bars keep up/down bars, as they keep the up/down
+    // stamp (phase 51).
+    COLORREF volSeries, onVolSeries;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
@@ -223,6 +239,21 @@ typedef struct {
 // or, where a day begins, "21 Sep" - 54 px, so 80 rules.
 #define TIME_DX_MIN      80
 #define TIME_LBL_GAP     12
+// The time axis's two rows (phase 52, Bloomberg's "Dec | 2021 2022"): the
+// fine row's form, and the coarse row's unit, whose name stands centered in
+// each span it has in view with a separator where it changes.
+#define CHART_TROW_CLOCK   0   // "14:35"; the coarse row names the day
+#define CHART_TROW_DAY     1   // "21"; the coarse row names the month
+#define CHART_TROW_MONTH   2   // "Sep"; the coarse row names the year
+#define CHART_TROW_YEAR    3   // "2026"; no coarse row
+#define CHART_TUNIT_NONE   0
+#define CHART_TUNIT_DAY    1   // "21 Sep"
+#define CHART_TUNIT_MONTH  2   // "Sep 2026"
+#define CHART_TUNIT_YEAR   3   // "2026"
+// The rows' text cells: the fine row's top TIME_ROW_TOP under the lowest
+// pane's bottom row, the coarse row's TIME_ROW_PITCH under it.
+#define TIME_ROW_TOP       1
+#define TIME_ROW_PITCH     15
 // The hover box's width. Its time row is "21 Sep 14:35" on intraday
 // intervals (phase 45); tests/chart_golden.c measures that it fits.
 #define HOVER_BOX_W      104
@@ -427,6 +458,32 @@ typedef struct {
 // bars keep the up/down stamp, and so does every type on the desktop.
 #define CLR_STAMP          RGB(0xFF, 0xFF, 0xFF)
 #define CLR_ON_STAMP       RGB(0x00, 0x00, 0x00)
+// The volume pane of the line and the mountain (phase 52): GIP's steel
+// blue, sampled from the screenshot - the legend's swatch and the value tag
+// are solid there (637DA0 and 657FA7; the thin bars are resampled toward the
+// black gaps between them). The tag carries a black number, as the stamp
+// does: 4.97:1.
+#define CLR_VOL_SERIES     RGB(0x63, 0x7D, 0xA0)
+#define CLR_ON_VOL_SERIES  RGB(0x00, 0x00, 0x00)
+
+// The statistics box (phase 52), Bloomberg's legend: framed in boxEdge on the
+// box surface, LGD_INSET_X inside the plot's left edge and LGD_INSET_Y from
+// the price pane's bottom (or top), rows LGD_ROW_H apart under a LGD_PAD_T
+// top and over a LGD_PAD_B bottom margin, each with a LGD_SWATCH square or
+// glyph LGD_PAD_X inside the frame. The box takes at most LGD_MAX_PCT of the
+// plot's width and of the price pane's height; see ChartDrawBody for what
+// gives way first. The volume legend is the same frame, LGD_VOL_INSET inside
+// the volume pane's corner. VOL_MA_PERIOD: the volume's average line.
+#define LGD_INSET_X        6
+#define LGD_INSET_Y        4
+#define LGD_ROW_H          15
+#define LGD_PAD_T          3
+#define LGD_PAD_B          4
+#define LGD_PAD_X          5
+#define LGD_SWATCH         9
+#define LGD_MAX_PCT        50
+#define LGD_VOL_INSET      3
+#define VOL_MA_PERIOD      20
 
 // Batches for PolyPolygon / Polyline; see chart.c.
 #define VOL_BATCH 256
@@ -459,6 +516,15 @@ void      PriceRange(const Candle* candles, int vs, int vc, double* outMin, doub
 // with the same ChartState.chartType the frame is drawn with.
 void      PriceRangeFor(const Candle* candles, int vs, int vc, int chartType, double* outMin, double* outMax);
 double    VolumeMax(const Candle* candles, int vs, int vc);
+// Phase 52: the view's statistics, as the statistics box and the high and
+// low labels show them - over the candles whose middle is in the plot
+// (cw pixels wide, the display dStart/dCount), in the prices the axis
+// scales on for the chart type (high and low for the candles and the bars,
+// the close for the line and the mountain). avg is the mean CLOSE of the
+// same candles, for every type. FALSE when no candle's middle is in view.
+typedef struct { int iHigh, iLow, count; double high, low, avg; } ChartViewStat;
+BOOL      ChartViewStats(const Candle* candles, int n, double dStart, double dCount, int cw,
+                         int chartType, ChartViewStat* out);
 void      ApplyFrontShift(ChartState* st, long long frontShift);
 void      SyncDisp(ChartState* st, const Candle* candles, int n);
 
