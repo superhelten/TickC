@@ -2662,16 +2662,31 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // edge + 1 because LineTo does not draw the end point: without
             // that one pixel the column x = edge stays empty, and the stamp
             // only starts at edge + 1.
-            HPEN penLast = lastUp ? sty->penLastUp : sty->penLastDown;
+            //
+            // Phase 51: the line and the mountain on the panel take the
+            // series' stamp, as on Bloomberg's GIP chart - a white box with
+            // a black number (the light theme inverts it: the line's navy
+            // with white) - and the line to it is dashed in the same color,
+            // so the two read as one mark. The candles and the bars keep
+            // up/down: their marks carry the direction already, and green
+            // or red on the stamp says the same thing. The desktop keeps
+            // up/down for every type: its stamp is the one direction signal
+            // the wallpaper has (phase 16), and a white box is the brightest
+            // patch that can stand on a black surface - louder, not calmer.
+            BOOL series = !in->desktop && (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+            COLORREF lastClr = series ? sty->clr.stamp : (lastUp ? sty->clr.up : sty->clr.down);
+            HPEN penSeries = series ? CreatePen(PS_DASH, 1, lastClr) : NULL;
+            HPEN penLast = penSeries ? penSeries : (lastUp ? sty->penLastUp : sty->penLastDown);
             HPEN hOld2 = (HPEN)SelectObject(hdc, penLast);
             MoveToEx(hdc, xLast, yLast, NULL);
             LineTo(hdc, right, yLast);
 
             SelectObject(hdc, GetStockObject(DC_PEN));
-            SetDCPenColor(hdc, lastUp ? sty->clr.up : sty->clr.down);
+            SetDCPenColor(hdc, lastClr);
             MoveToEx(hdc, right, yLast, NULL);
             LineTo(hdc, edge + 1, yLast);
             SelectObject(hdc, hOld2);
+            if (penSeries) DeleteObject(penSeries);
 
             // The axis stamp overwrites the grid label at this height, so
             // that there are not two numbers on top of each other.
@@ -2686,7 +2701,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int half = in->desktop ? DeskPillH(H) / 2 : tagHalf;
 
                 RECT rcPill = { edge + 1, yLast - half, axR + PX(3), yLast + half };
-                SetDCBrushColor(hdc, lastUp ? sty->clr.up : sty->clr.down);
+                SetDCBrushColor(hdc, lastClr);
                 FillRect(hdc, &rcPill, (HBRUSH)GetStockObject(DC_BRUSH));
 
                 // "Precise value text": two decimals where they fit, otherwise
@@ -2713,7 +2728,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 // out of it. The surface stays, and the price is in the
                 // header's quote line.
                 if (yGhost == INT_MIN || abs(yLast - yGhost) >= tagH) {
-                    SetTextColor(hdc, sty->clr.bg);
+                    SetTextColor(hdc, series ? sty->clr.onStamp : sty->clr.bg);
                     RECT rcPillTxt = { axL, yLast - half, axR, yLast + half };
                     DrawTextW(hdc, buf, -1, &rcPillTxt, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
                 }
