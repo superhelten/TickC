@@ -11,7 +11,8 @@
 //   cl /nologo /W4 /O2 /I. /Fo:tests\ /Fe:tests\chart_golden.exe tests\chart_golden.c chart.c user32.lib gdi32.lib
 // Run:
 //   tests\chart_golden.exe            compare with the goldens, exit 1 on any difference
-//   tests\chart_golden.exe --update   rewrite the goldens (look at tests\out\*.bmp first)
+//   tests\chart_golden.exe --update   rewrite the goldens (look at tests\out\*.bmp first);
+//                                     refused when a case is unstable or off the screen bitmap
 //   tests\chart_golden.exe --bmp      also write every case to tests\out\<name>.bmp
 //
 // The hashes hold for one machine: text goes through the installed fonts and
@@ -107,6 +108,15 @@ static const Case CASES[] = {
     { "vol_rsi_15m_560x300",     560, 300, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, TRUE },
     { "vol_light_rsi_hover",    1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 900, 530, FALSE,  96, TRUE,  TRUE },
     { "vol_desktop_1920x1080",  1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 1.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE },
+    // Phase 44: the pointer in the 6 px gap above the volume pane (the price
+    // pane ends at 565, the volume pane begins at 571): the horizontal stands
+    // on the pane's top row, and its tag, which would reach up over the price
+    // column's bottom label, is not drawn. And a 290 px panel with both panes
+    // and the averages, where the hover box (139 px) is taller than the price
+    // pane (126 px): the box keeps out of the header and hangs into the pane
+    // below.
+    { "vol_1h_gap_hover",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 568, FALSE,  96, FALSE, FALSE },
+    { "vol_rsi_15m_290_hover",   560, 290, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0, 280, 107, FALSE,  96, FALSE, TRUE },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -420,6 +430,67 @@ static int CheckPriceFloor(void) {
     return 0;
 }
 
+// --- The time axis on the smallest panels (phase 44) ---
+// With two label widths in the chart (N = 2) TimeTickStep gave the whole view
+// as the step, NiceTimeStep rounded it past the view, and a 400x250 panel on
+// 1h never got a time label. The label width is measured in the axis font,
+// as ChartDrawBody measures it, not assumed. Then the N <= 2 branch over the
+// phase 11 ranges (chart width 160-4000, minDx 80-118, 1-1440 candles):
+// the spacing step * chartW / dCount is never below minDx. N >= 3 is the
+// phase 11 formula, untouched.
+static int CheckTimeAxisSmall(void) {
+    int bad = 0;
+    ChartStyle sty;
+    HDC dc = CreateCompatibleDC(NULL);
+    if (!dc || !ChartStyleCreate(&sty, 96, NULL)) {
+        printf("FAIL time axis: no DC or style\n");
+        if (dc) DeleteDC(dc);
+        return 1;
+    }
+    HGDIOBJ oldF = SelectObject(dc, sty.fontAxis);
+    SIZE tsz = { 0, 0 };
+    GetTextExtentPoint32W(dc, L"09-12 00:00", 11, &tsz);
+    SelectObject(dc, oldF);
+    ChartStyleDestroy(&sty);
+    DeleteDC(dc);
+
+    ChartRect g = ChartGeometry(400, 250, FALSE, 96, FALSE, TRUE);
+    int minDx = tsz.cx + TIME_LBL_GAP;
+    if (minDx < TIME_DX_MIN) minDx = TIME_DX_MIN;
+    int step = NiceTimeStep(TimeTickStep(300.0, g.cw, minDx), HOUR_MS);
+    // A label's center must stay tsz.cx / 2 inside [left, right]; labels
+    // step * slot apart (+ 2 px for the truncation to whole pixels) that fit
+    // in that window always put at least one in it, wherever the view is.
+    double dx = (double)step * (double)g.cw / 300.0;
+    if (step >= 300 || dx + 2.0 > (double)(g.cw - tsz.cx)) {
+        printf("FAIL time axis 400x250 1h: cw %d, minDx %d, step %d (%.1f px), window %d px\n",
+               g.cw, minDx, step, dx, g.cw - tsz.cx);
+        bad++;
+    } else {
+        printf("ok   time axis 400x250 1h: cw %d, minDx %d, step %d candles, %.1f px apart\n",
+               g.cw, minDx, step, dx);
+    }
+
+    long long checked = 0;
+    for (int w = 160; w <= 4000; w++) {
+        for (int dxMin = 80; dxMin <= 118; dxMin++) {
+            if (w / dxMin > 2) continue;   // the N <= 2 branch only
+            for (int m = 1; m <= 1440; m++) {
+                int s = TimeTickStep((double)m, w, dxMin);
+                checked++;
+                if (s < 1 || (long long)s * w < (long long)m * dxMin) {
+                    if (bad < 10)
+                        printf("FAIL time axis N<=2: W %d, minDx %d, M %d gives S %d, %.1f px\n",
+                               w, dxMin, m, s, (double)s * w / m);
+                    bad++;
+                }
+            }
+        }
+    }
+    if (!bad) printf("ok   time axis N<=2: %lld cases, never closer than minDx\n", checked);
+    return bad;
+}
+
 int main(int argc, char** argv) {
     BOOL update = FALSE, bmp = FALSE;
     for (int i = 1; i < argc; i++) {
@@ -440,7 +511,8 @@ int main(int argc, char** argv) {
     if (!update && s_goldCount == 0) printf("no goldens in %s - run with --update\n", goldPath);
 
     unsigned long long hashes[NCASES] = { 0 };
-    int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor();
+    int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor() +
+                        CheckTimeAxisSmall();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -486,7 +558,14 @@ int main(int argc, char** argv) {
         ChartStyleDestroy(&sty);
     }
 
-    if (update) {
+    // Phase 44: --update writes only a clean run. Under --update a case fails
+    // when it is UNSTABLE, differs from the screen bitmap or could not be
+    // drawn, and a hash of such a picture is no golden. Until now the file
+    // was written anyway, and the next run compared against it.
+    if (update && fails) {
+        printf("not writing %s: %d case(s) failed, see the FAIL lines above\n",
+               goldPath, fails);
+    } else if (update) {
         FILE* f;
         sprintf_s(path, MAX_PATH, "%s\\golden", dir);
         CreateDirectoryA(path, NULL);
@@ -500,6 +579,6 @@ int main(int argc, char** argv) {
     }
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
-    if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor)\n", contrastFails);
+    if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }
