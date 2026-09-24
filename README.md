@@ -2,7 +2,7 @@
 
 A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
 Two source files. No runtime, no installer, no dependencies beyond what ships with Windows.
-The whole thing compiles to a single exe of about 230 KB.
+The whole thing compiles to a single exe of about 240 KB.
 
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
@@ -11,7 +11,8 @@ a browser tab open, and without a 150 MB Electron app. It grew from there.
 
 ## What it does
 
-- **Tray icon** with the live price. Updates every 3 seconds.
+- **Tray icon** with the live price. Updates every 3 seconds. With no connection to
+Binance it shows `...` and says so in the tooltip, and keeps retrying.
 - **A header on the Bloomberg model:** a quote line with Last, Chg, %Chg, Op, Hi, Lo, Vol
 and At for the UTC trading day, a range field (1D … Max, and the bar size), and a gear
 that opens the chart settings: volume, averages, RSI and the theme.
@@ -77,7 +78,8 @@ another machine, look at the pictures (`--bmp`) and rewrite them with `--update`
 
 ## Usage
 
-Run `TickC.exe`. An icon appears in the tray.
+Run `TickC.exe`. An icon appears in the tray and the chart panel opens. Only one
+copy runs at a time: starting it again brings up the panel of the one that's running.
 
 
 | Action                     | What happens                                                            |
@@ -85,6 +87,10 @@ Run `TickC.exe`. An icon appears in the tray.
 | Left-click the tray icon   | Show or hide the chart panel                                            |
 | Right-click the tray icon  | Symbol, interval, range, overlays, theme, desktop mode, autostart, quit |
 | `TickC.exe --desktop-mode` | Start with the chart on the desktop                                     |
+| `TickC.exe --autostart`    | Start quietly, with only the tray icon (what "Start at sign-in" uses)   |
+
+`--desktop-mode` only counts when TickC isn't already running. In desktop mode, starting
+it again shows a balloon that points to the tray menu.
 
 
 In the chart panel:
@@ -116,7 +122,7 @@ Nothing outside your user profile. No admin rights needed.
 
 - Settings live in `HKCU\Software\TickC`.
 - "Start at sign-in" adds a `TickC` value under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which starts it with `--autostart`.
 
 To remove it completely, untick autostart in the tray menu, quit, and delete
 `HKCU\Software\TickC`.
@@ -142,7 +148,8 @@ code comments point to its sections.
 ## Data source
 
 Market data comes from the public [Binance API](https://developers.binance.com/docs/binance-spot-api-docs)
-(`api.binance.com`). No account or API key is involved.
+(`api.binance.com`). No account or API key is involved. It goes through the proxy
+set in Windows, if there is one (a proxy that asks for a password isn't supported).
 This project has no connection to Binance, and Binance doesn't endorse it.
 
 Prices are for information only. Don't trade on a tray icon.
