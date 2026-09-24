@@ -121,11 +121,15 @@ saved monitor at that monitor's dpi (the size saved with its dpi in
 `PanelGeomDpi`), a taskbar on the left or at the top no longer makes it
 drift, a hidden panel is put back on a work area whenever it is shown, and
 the caption glyphs and the check mark thicken with the dpi.
+**Phase 49** adds chart types on the Bloomberg model - OHLC bars, a line
+and a mountain besides the candles - one choice per mode, from the gear
+menu's CHART TYPE, `C` and the tray menu; the desktop draws the line by
+default.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
-The code is **two files** from phase 34: `tickc.c` (the app, ~7050 lines) and
-`chart.c` behind `chart.h` (the chart engine, ~2450 lines). Next to them is
+The code is **two files** from phase 34: `tickc.c` (the app, ~7500 lines) and
+`chart.c` behind `chart.h` (the chart engine, ~2800 lines). Next to them is
 `tickc.manifest`, which the build embeds (phase 9). No external dependencies
 beyond Win32 and WinHTTP.
 
@@ -4272,10 +4276,158 @@ arithmetic; they cannot prove what origin Windows gives this frameless
 popup's work-area coordinates, or when it sends `WM_DPICHANGED` to a
 hidden window. **Exe 241 152 → 242 688 bytes (+1 536).**
 
+### Phase 49 — chart types
+
+Branch `phase-49`, merged with `--no-ff`. A feature phase, not from phase
+44's review: the user asked for more chart types than candles, on the
+model of the Bloomberg Terminal, whose GP chart draws bars, a line or a
+mountain as well. The engine agent edited `chart.c`, `chart.h` and
+`tests/`; the app agent edited `tickc.c` and made one engine commit of its
+own, the desktop's line width (`DeskLineW`).
+
+**The engine.** Three chart types join the candles: OHLC bars, the close as
+a line, and a mountain (the line with a fill under it). The type is
+`ChartState.chartType` (`CHART_CANDLES` 0, `CHART_OHLC`, `CHART_LINE`,
+`CHART_MOUNTAIN`, `CHART_TYPE_COUNT` 4; a value out of range draws
+candles). It lives in `ChartState` and not `ChartData` because the app
+fills `ChartData` field by field without zeroing it, and 0 has to mean
+candles for every caller that does not know the field (pitfall 143). The
+types branch where the candles are drawn, and the candle loop is
+untouched. A bar is the high-low stroke with the open's tick on the left
+and the close's on the right, in the candle's up or down color: three
+`PatBlt` rectangles on the candle's own geometry (`OhlcRects`). The line is
+the close, through a new pen, `penLine`. The bars' strokes and the line
+are `ChartPx(dpi, 1)` wide, 2 px at 144 and 192 dpi, where the candle wicks
+stay one device pixel: here the stroke is the only mark. The mountain's
+fill is drawn first, before the grid, so the grid, the bars behind the
+price and the alert and level lines stay on top of it (pitfall 147). It is
+solid, because a gradient would need msimg32 or a region every frame. The
+line and the mountain scale on the closes (`PriceRangeFor`, and `SyncDisp`
+reads the type; `PriceRange` is the candles' case): the axis follows what
+is drawn. The level labels test the chosen type's own marks
+(`MarksHitRect`; `CandlesHitRect` is untouched). On the fill, a label or
+the averages' legend stands on a patch of the background (`FillHitRect`),
+because the light theme's gray label text is ~3.6:1 on the light fill, not
+4.5. The new theme roles `line` (`DDE6F0` dark, `1B365D` light) and
+`mountain` (an exact blend of the background toward the line, 40/255 and
+36/255: `2D3239` and `DADEE4`) are off every text role's blend line
+(pitfall 87); the line's cool near-white is a hue no other curve uses
+(amber is the header and the alerts, gold the VWAP).
+
+**The desktop's line** follows the surface's height (`DeskLineW`): the
+panel's 1 px line beside its 16 px stamp, kept against the desktop's own
+stamp (`DeskPillH`), gives 1 px at 1080, 2 at 1600 and 3 at 2160, drawn
+with a wide pen made per frame - the kind of pen `penLine` already is at
+144 dpi. At 3840x1600 a 1 px line was a hairline where the candles stand
+9 px wide, and it is the line the wallpaper shows by default. The OHLC
+ticks stay 1 px there.
+
+**The app.** One chart type per mode, like the overlays: `ChartType` and
+`ChartTypeDesktop` in the registry, stored as the type itself.
+`RangeIndex` adds 1 only because "no range" is a value; a missing or
+out-of-range entry keeps the mode's default. The panel keeps its candles.
+The desktop draws the line: one quiet stroke instead of hundreds of green
+and red bodies, it hides nothing (the mountain's solid fill would cover the
+watermark), and it draws in 1.0 ms against the candles' 6.3.
+`ch.chartType`, which the engine draws and scales with, is set from the
+mode's choice at startup (after the mode is known, pitfall 86), on a mode
+switch and in `SetChartType`, before the surface's first frame. The
+clock's easing target now calls `PriceRangeFor` with the drawn type - the
+only place `tickc.c` asked for a price range; with `PriceRange` there, a
+line snapped to its closes on the first frame and then eased back out to
+the wicks. `SetChartType` saves at once and leaves `dispValid` alone, so a
+switch eases the axis, and a hidden panel snaps when it opens. The type is
+chosen in three places:
+- the gear menu gets a CHART TYPE section after APPEARANCE, four rows
+  (Candles, OHLC bars, Line, Mountain) with the current one as the accent
+  row, so the rows above keep their places (`OVL_ROWS_MAX` 16 → 20);
+- the key `C` steps through them, candles → OHLC bars → line → mountain →
+  candles. The menu shows it on the section's heading, since it picks no
+  one row. It also works with the settings menu open (the menu stays), and
+  like the other letters it ignores auto-repeat and a drag; `Ctrl`+`C`
+  stays free;
+- the tray gets a "Chart type" submenu of radio items (IDs 1400-1403,
+  guarded by `C_ASSERT`), with `C` on its item in panel mode only.
+
+The hover box keeps its OHLC rows for every type. A duplicate reads the
+type from the registry, as it reads the theme (a duplicate of a duplicate
+therefore gets the main instance's choice: a duplicate's own changes are
+never saved). Probe fields, panel: 90 the chosen type, 91 the drawn one,
+92/93 the axis target (min/max ×100) for the type in `lParam`; main window:
+127 the choice per mode (`lParam` 0 panel, 1 desktop).
+
+**Verified.** `chart_golden` has 21 new cases, **63 in total** (42 → 63):
+OHLC bars ×6 (1h, zoomed with the crosshair, dense 1m, light with alerts,
+144 dpi, desktop), line ×6 (1h, crosshair, light with alerts, 192 dpi, and
+the desktop at 1920x1080 and 3840x1600) and mountain ×9 (among them RSI at
+400x250, light at 560x300, dense 1m with more candles than pixels, and the
+desktop at 3840x1600 and light). Each picture was looked at before
+`--update`; the 42 older hashes are byte-identical. `CheckChartTypes`
+checks that each type has its own marks and scale, that the fill lies under
+the line and never above it, that OHLC bars have ticks and no bodies, the
+colors, and that the legend over the fill stays clear (its precondition
+measures the cause: three closes rising into the legend's box, pitfall
+144). `CheckDeskLine` tells a 1 px line from a 2 px one (0.04 of the line
+pixels thick at 1080, the control, against 1.00 at 1600). **Red** against
+the engine's API commit: the 42 old cases pass, the 19 typed cases have no
+golden and 57 unit checks fail. `shot_p49.ps1` (50 checks, posted messages
+on the hidden desktop), **red** against the app's commit 1: 36 fail and the
+14 controls pass. Four mutations fail what they should: `FillHitRect`
+switched off (the legend check and 7 label checks), `MarksHitRect`
+ignoring bars and line (9 label checks), the clock back on `PriceRange`
+(exactly the five axis checks: the line and the mountain settling, the
+eased switch, the hidden panel's open, the restart) and `DeskLineW`
+returning 1 (`CheckDeskLine`). Green: `chart_golden` 63/63 twice,
+`shot_p49` 50/50 twice. `regress49` (`regress48` plus `shot_p48`, which
+`regress48` had left out) passes all 12 scripts on the commit-1 build and
+the green build. `golden.ps1 -Hidden` is identical to phase 48 in all
+seven captures. GDI 67 → 67 over 16 type switches. Each type in both
+themes, the menu at 96 and 144 dpi, at 400x250 and 560x300, the line under
+the hover box and the desktop line at 3840x1600 (1:1) were looked at. Draw
+time at 3840x1600 with 6000 candles in view, median: the panel (volume
+and averages on) 18.9 ms for candles, 16.6 OHLC bars, 13.6 line, 16.4
+mountain; the desktop 6.3, 3.8, 1.0 and 3.8. Not exercised: desktop mode
+itself (it cannot run hidden) - the tray submenu there, the 2 px line on
+the real wallpaper and the per-frame pen's GDI count; the desktop's choice
+was checked through field 127 and the tray menu built as desktop mode
+(field 125 bit 8) (reviewed, not tested). **Exe 242 688 → 250 368 bytes
+(+7 680: the engine +5 632, of it 512 for the desktop's line; the app
++2 048).**
+
 ---
 
 ## Known limitations
 
+- **The mountain hides the watermark where its fill lies** (phase 49). The
+  fill is opaque and drawn under the grid, the bars behind the price and
+  the alert and level lines, but over the watermark. That is one reason
+  the desktop's default is the line.
+- **The mountain's fill is solid, not a gradient** (phase 49). A gradient
+  would need msimg32's `GradientFill` or a region every frame.
+- **A label or the legend on the fill stands on a patch of the
+  background** (phase 49). The light theme's gray label text is ~3.6:1 on
+  the light fill, so the level labels and the averages' legend go opaque
+  where they sit on it, and show as small background-colored patches in
+  the mountain.
+- **On the line and the mountain the price axis spans the closes**
+  (phase 49), not the highs and lows, so a level or an alert between the
+  closes' range and the wicks' is not drawn there, where the candles and
+  the bars would show it (the rule of the alert and level items below).
+- **A panel under 283 px tall cuts the gear menu's last rows** (phase 49;
+  283 at 96 dpi, and it scales with the panel). At the 400x250 minimum
+  the Mountain row is missing and `End` stops at Line; `C` and the tray
+  menu still reach it.
+- **The OHLC bars' ticks stay 1 px on the desktop** (phase 49). Only the
+  line, and the mountain's line, widen with the surface's height
+  (`DeskLineW`).
+- **The chart type in desktop mode is untested on the real desktop**
+  (phase 49): the tray submenu there, the 2 px line on the wallpaper and
+  the per-frame pen's GDI count (reviewed, not tested). The desktop's
+  choice was checked through probe field 127 and the tray menu built as
+  desktop mode.
+- **A duplicate reads the chart type from the registry** (phase 49), like
+  the theme and the overlays, and never writes it; a duplicate of a
+  duplicate gets the main instance's type, not its parent's.
 - **Monitors and scaling are tested with fakes only** (phase 48). A real
   second monitor, a real side taskbar and a real scale change were not
   exercised (reviewed, not tested); `TICKER_FAKE_MON` and
@@ -4463,7 +4615,9 @@ hidden window. **Exe 241 152 → 242 688 bytes (+1 536).**
 - **The lines are 1 px on the desktop too** when turned on there (phase 25;
   off by default from phase 26). The stamp scales
   with H/40; the lines do not (`DC_PEN` is always 1 px), and at
-  3840×1600 they are thin. The grid has the same property.
+  3840×1600 they are thin. The grid has the same property. From phase 49
+  the price line of the line and mountain types does widen there
+  (`DeskLineW`); the averages do not.
 - **The crosshair is drawn over the legend** when the pointer is under it.
 - **A duplicate inherits `ShowIndicators` from the registry**, like
   `ShowVolume` below, and never writes it.
@@ -4560,7 +4714,10 @@ hidden window. **Exe 241 152 → 242 688 bytes (+1 536).**
   line are above; when both are taken it is left out and the axis tag
   carries the level. On a young day the PD* labels drop more often, and
   HOD can lose its name to PDH. An opaque surface behind the text was
-  rejected (it would wipe out the candles).
+  rejected (it would wipe out the candles). On the mountain's fill (phase
+  49) a label does stand on a background patch, since it covers only
+  fill there, and the label tests the chosen type's marks, not the
+  candles'.
 - **The crosshair tag is not shown within 16 px of the last-price stamp**
   (phase 29). The crosshair line and the hover box stay; the number on the
   axis is then the stamp's.
@@ -4745,7 +4902,10 @@ hidden window. **Exe 241 152 → 242 688 bytes (+1 536).**
     in the build without phase 21. Phase 22 added nothing: 34/14 before and
     after in both the red and the green build, measured *after* the first overlay (+2,
     pitfall 65). Nor did phase 23: 34/14 in the red and both green
-    runs, after ten set/remove, a balloon and a `MessageBeep`.
+    runs, after ten set/remove, a balloon and a `MessageBeep`. **Phase 49
+    adds one pen to the chart style (`penLine`)**, so every baseline taken
+    before it is one higher from then on; a chart type switch adds
+    nothing (67 → 67 in the test build over 16 switches).
 
 28. **`WM_SETCURSOR` must return `TRUE` to keep the pointer, and `break` for
     everything else.** If you return `0` in the default branch, the edge zones lose their
@@ -5347,21 +5507,50 @@ hidden window. **Exe 241 152 → 242 688 bytes (+1 536).**
 142. **The fakes (`TICKER_FAKE_MON`, `TICKER_FAKE_WORKAREA`) model
     Windows.** They prove the app's arithmetic, not Windows' behaviour; a
     real monitor change can still differ.
+143. **`ChartData` is filled field by field and never zeroed.** A new field
+    there is garbage for every caller that does not set it. Put a default
+    that must be 0 in `ChartState` or `ChartStyle` (phase 49's
+    `chartType`, where 0 is the candles).
+144. **A precondition that measures the fix's effect passes falsely once
+    the fix works.** Measure the cause instead: the legend check's
+    precondition is three closes rising into the legend's box, not what
+    the fix takes away.
+145. **A pixel check keyed on one type's colors proves nothing for
+    another type.** The label check (U7) passed on the line cases before
+    it counted `clr.line`, and in the app's red run all eight chart type
+    captures were identical while the per-type checks still passed for
+    candles and OHLC bars; only "eight different pictures" and the
+    line-pixel counts made that run red. Prove that a check can fail,
+    with a mutation.
+146. **The hover box covers marks.** A per-bar pixel check must leave out
+    the box's footprint.
+147. **An opaque fill drawn where the candles are would cover the bars
+    behind the price and the alert and level lines.** Draw it before the
+    grid.
+148. **A red build without a layer sends the key to the next one.** `Esc`
+    with no menu to close hid the panel, and every later capture came out
+    blank. A script must reassert the state it needs before capturing
+    (`EnsureShown`) and log that it did.
+149. **`Write-Output` inside a PowerShell function that returns a value
+    becomes part of the return value.** Use `Write-Host` there.
+150. **`pwsh -File x.ps1 -Names a,b,c` passes one string, not an array.**
+151. **Phase N's regression runner must include `shot_pN`.** `regress48`
+    left out `shot_p48`; `regress49` has it.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak42` and `chart.c.bak42` are left** (2026-09-24). From
+**Only `tickc.c.bak43` and `chart.c.bak43` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 48 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 49 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak41` (phases 34–47) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak42` (phases 34–48) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47) and `.bak42` (phase 48). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48) and `.bak43` (phase 49). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

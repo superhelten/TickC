@@ -2,7 +2,7 @@
 
 A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
 Two source files. No runtime, no installer, no dependencies beyond what ships with Windows.
-The whole thing compiles to a single exe of about 240 KB.
+The whole thing compiles to a single exe of about 250 KB.
 
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
@@ -15,11 +15,15 @@ a browser tab open, and without a 150 MB Electron app. It grew from there.
 Binance it shows `...` and says so in the tooltip, and keeps retrying.
 - **A header on the Bloomberg model:** a quote line with Last, Chg, %Chg, Op, Hi, Lo, Vol
 and At for the UTC trading day, a range field (1D … Max, and the bar size), and a gear
-that opens the chart settings: volume, averages, RSI and the theme.
+that opens the chart settings: volume, averages, RSI, the theme and the chart type.
 - **Chart panel** (left-click the icon): candlesticks, SMA 20, EMA 50 and a daily VWAP,
 with the volume in a pane of its own under the price and an optional RSI 14 pane. You
 also get today's high and low, and yesterday's high, low and close (labelled HOD, LOD,
 PDH, PDL, PDC).
+- **Four chart types,** as in Bloomberg: candles, OHLC bars, a line of the closes, and a
+mountain (the line with the area under it filled). Pick one under CHART TYPE in the gear
+menu, step through them with `C`, or use "Chart type" in the tray menu. The panel and
+desktop mode each have their own choice: the panel starts on candles, the desktop on the line.
 - **Symbols:** BTC, ETH, SOL and BNB against USDT.
 - **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d, 1w, from a dropdown in the toolbar.
 - **Ranges:** 1D, 3D, 1M, 6M, YTD, 1Y, 5Y, Max. A range picks a fitting interval and shows
@@ -29,7 +33,8 @@ YTD starts on 1 January and grows by a day each day.
 - **Price alerts.** Click the price column to set one. When the price gets there you get a
 balloon and a sound, even with the panel closed.
 - **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
-It stays quiet on purpose: no volume or moving averages there unless you turn them on.
+It stays quiet on purpose: by default the price is a single line, with no volume or moving
+averages unless you turn them on.
 - **Dark or light.** A light theme from the tray menu (or `T`), with every text on it
 readable at WCAG AA contrast. The panel and desktop mode each have their own choice.
 - **Scrolls back in time.** Pan into the left edge and it fetches older candles,
@@ -91,7 +96,7 @@ drawn with thicker lines, so they stay sharp.
 | Action                     | What happens                                                            |
 | -------------------------- | ----------------------------------------------------------------------- |
 | Left-click the tray icon   | Show or hide the chart panel                                            |
-| Right-click the tray icon  | Show panel, symbol, interval, range, overlays, theme, desktop mode, autostart, quit |
+| Right-click the tray icon  | Show panel, symbol, interval, range, overlays, theme, chart type, desktop mode, autostart, quit |
 | `TickC.exe --desktop-mode` | Start with the chart on the desktop                                     |
 | `TickC.exe --autostart`    | Start quietly, with only the tray icon (what "Start at sign-in" uses)   |
 
@@ -118,6 +123,7 @@ In the chart panel:
 | `M`                             | Indicators on/off (moving averages, VWAP, levels)                 |
 | `I`                             | RSI band on/off (RSI 14 under the chart)                          |
 | `T`                             | Light theme on/off                                                |
+| `C`                             | Next chart type (candles, OHLC bars, line, mountain)              |
 | `A`                             | Set an alert at the crosshair price                               |
 | `R`, double-click               | Reset zoom and pan (to the range, if one is selected)             |
 | `Esc`                           | Close an open menu, then reset the view, then hide the panel      |
@@ -135,6 +141,7 @@ In an open menu (from `S`, `B`, `G`, a click on its cell in the header, or a rig
 | `←` / `→`                       | Previous / next menu (symbol, interval, settings); in the right-click picker, the other column |
 | `1` … `7`                       | Pick an interval (interval list and right-click picker)           |
 | `V` / `M` / `I` / `T`           | Toggle a setting (settings menu)                                  |
+| `C`                             | Next chart type (settings menu)                                   |
 | The menu's own letter, `Esc`    | Close it                                                          |
 
 

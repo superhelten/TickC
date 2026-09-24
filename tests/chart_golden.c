@@ -14,6 +14,7 @@
 //   tests\chart_golden.exe --update   rewrite the goldens (look at tests\out\*.bmp first);
 //                                     refused when a case is unstable or off the screen bitmap
 //   tests\chart_golden.exe --bmp      also write every case to tests\out\<name>.bmp
+//   tests\chart_golden.exe --perf     only time the chart types (phase 49), no checks
 //
 // The hashes hold for one machine: text goes through the installed fonts and
 // the ClearType setting (fontSmall is CLEARTYPE_QUALITY). If only text differs
@@ -27,9 +28,10 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 #include "chart.h"
 
-#define MAX_CANDLES 3000
+#define MAX_CANDLES 6000   // TickC's buffer; the phase 49 timing draws all of it
 #define MIN_MS      60000LL
 #define HOUR_MS     3600000LL
 #define DAY_MS      86400000LL
@@ -66,6 +68,8 @@ typedef struct {
     double base;
     int  ghost, ghostDy;
     BOOL loudLast;
+    // Phase 49: the chart type, CHART_* (0, the candles, in the older rows).
+    int  type;
 } Case;
 
 // The desktop stamp is sized from H (DeskPillFontH); 1920x1080 and a 3840x1600
@@ -143,6 +147,36 @@ static const Case CASES[] = {
     // value tag stands at its top (the last candle is the loudest): the
     // ghost tag would reach 2 rows into that tag.
     { "ghost_pane_edge",        1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 5,  0, TRUE },
+    // Phase 49: the chart types. Each in both themes, with the averages,
+    // levels and the volume pane; a crosshair, alerts and a ghost; 150 % and
+    // 200 %; the desktop edge to edge; the smallest panel, where the bars
+    // stand behind the price; OHLC zoomed in (full ticks) and with more
+    // candles than pixels (the ticks collapse into the high-low line).
+    { "ohlc_1h_1280x720",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
+    { "ohlc_1h_zoomed_hover",   1280, 720, FALSE, HOUR_MS,      360, FALSE,  40,  5, 1.0, 1.0, 640, 300, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
+    { "ohlc_1m_dense",          1280, 720, FALSE, MIN_MS,      2400, FALSE,   0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
+    { "ohlc_light_15m_alerts",  1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
+    { "ohlc_dpi144_1h",         1920,1080, FALSE, HOUR_MS,      360, FALSE,  60,  0, 1.0, 1.0,  -1,  -1, FALSE, 144, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
+    { "ohlc_desktop_1920x1080", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_OHLC },
+    { "line_1h_1280x720",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
+    { "line_1h_hover",          1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
+    { "line_light_15m_alerts",  1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
+    { "line_dpi192_1m",         2560,1440, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,1400, 600, FALSE, 192, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
+    { "line_desktop_1920x1080", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
+    { "line_desktop_3840x1600", 3840,1600, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
+    { "mountain_1h_1280x720",   1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    { "mountain_light_1h_hover",1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    { "mountain_15m_alerts",    1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    { "mountain_dpi144_rsi",    1920,1080, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144, FALSE, TRUE,  0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    { "mountain_rsi_400x250",    400, 250, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, TRUE,  0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    // A 185 px price pane: the fill's top (the highest close, 7 % under the
+    // pane's top, on 15 Sep) lies under the averages' legend.
+    { "mountain_light_560x300",  560, 300, FALSE, HOUR_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    // More candles than pixels: many points per column, and the fill's
+    // top edge runs up and down the same column.
+    { "mountain_1m_dense",      1280, 720, FALSE, MIN_MS,      2400, FALSE,   0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    { "mountain_desktop_3840x1600",3840,1600,TRUE, MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    { "mountain_light_desktop", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -189,6 +223,7 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base, ChartState*
     st.viewCount  = k->view;
     st.viewStart  = k->n - k->back - k->view;
     st.followLive = (k->back == 0);
+    st.chartType  = k->type;   // phase 49: before SyncDisp, which scales by it
     // TickC clamps only a real view; 0 ("show all") would become MIN_VIEW.
     if (k->view > 0) ClampView(&st, k->n);
     SyncDisp(&st, s_candles, k->n);
@@ -365,7 +400,8 @@ static BOOL WriteBmp(const char* path, const Surface* s) {
 
 // --- Golden file ---
 typedef struct { char name[64]; int W, H; unsigned long long hash; } Golden;
-static Golden s_gold[64];
+#define GOLD_MAX 96   // phase 49: 61 cases
+static Golden s_gold[GOLD_MAX];
 static int    s_goldCount;
 
 static void LoadGoldens(const char* path) {
@@ -373,7 +409,7 @@ static void LoadGoldens(const char* path) {
     s_goldCount = 0;
     if (fopen_s(&f, path, "r") != 0) return;
     char line[256];
-    while (fgets(line, sizeof(line), f) && s_goldCount < 64) {
+    while (fgets(line, sizeof(line), f) && s_goldCount < GOLD_MAX) {
         if (line[0] == '#' || line[0] == '\n') continue;
         Golden* g = &s_gold[s_goldCount];
         if (sscanf_s(line, "%63s %dx%d %llx", g->name, (unsigned)sizeof(g->name),
@@ -851,12 +887,29 @@ static int CheckLevelLabels(void) {
         }
         for (int b = 0; b < nb; b++) {
             labels++;
-            int hit = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.up, TRUE) +
+            // Phase 49: the marks of the case's chart type. The candles and
+            // the OHLC bars are up and down; the line and the mountain are
+            // the line - and the mountain's fill must not show inside a
+            // label either: over the fill the text stands on the background
+            // (its gray is not 4.5:1 on the fill in the light theme).
+            int hit;
+            if (k->type == CHART_LINE || k->type == CHART_MOUNTAIN)
+                hit = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.line, TRUE);
+            else
+                hit = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.up, TRUE) +
                       CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.down, TRUE);
             if (hit) {
-                printf("FAIL level labels %s: %d candle px inside the label at %d,%d-%d,%d\n", k->name, hit,
+                printf("FAIL level labels %s: %d px of the price's marks inside the label at %d,%d-%d,%d\n", k->name, hit,
                        box[b].left, box[b].top, box[b].right, box[b].bottom);
                 bad++;
+            }
+            if (k->type == CHART_MOUNTAIN) {
+                int fill = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.mountain, TRUE);
+                if (fill) {
+                    printf("FAIL level labels %s: %d px of the mountain's fill inside the label at %d,%d-%d,%d\n",
+                           k->name, fill, box[b].left, box[b].top, box[b].right, box[b].bottom);
+                    bad++;
+                }
             }
             // And no other level's line through it: the label's own line
             // lies 2 rows under it or 3 over it, outside the box.
@@ -871,8 +924,345 @@ static int CheckLevelLabels(void) {
         }
         SceneClose(&sc);
     }
-    if (!bad) printf("ok   level labels: %d labels in %d cases, none struck by a candle\n", labels, cases);
+    if (!bad) printf("ok   level labels: %d labels in %d cases, none struck by the price's marks\n", labels, cases);
     return bad;
+}
+
+// --- Phase 49: the chart types ---
+// The display the frame was drawn from, and the engine's candle geometry
+// from it: slot, body width, the mark's stroke (ChartPx(dpi, 1), no wider
+// than the body), and x and y as ChartDrawBody computes them.
+typedef struct { double dStart, slot, maxP, range; int bodyW, w, vs, vc; } Marks;
+
+static void MarksOf(const Scene* sc, Marks* m) {
+    double dc = (sc->st.dispCount < 1.0) ? 1.0 : sc->st.dispCount;
+    m->dStart = sc->st.dispStart;
+    m->slot = (double)sc->g.cw / dc;
+    m->bodyW = (int)(m->slot * 0.62);
+    if (m->bodyW < 1) m->bodyW = 1;
+    if (m->bodyW > ChartPx(sc->k->dpi, 18)) m->bodyW = ChartPx(sc->k->dpi, 18);
+    m->w = ChartPx(sc->k->dpi, 1);
+    if (m->w > m->bodyW) m->w = m->bodyW;
+    m->maxP = sc->st.dispMax;
+    m->range = sc->st.dispMax - sc->st.dispMin;
+    if (m->range < 1e-9) m->range = 1.0;
+    GetView(&sc->st, sc->in.count, &m->vs, &m->vc);
+}
+
+static int MarkX(const Scene* sc, const Marks* m, int i) {
+    return sc->g.left + (int)(((double)i - m->dStart + 0.5) * m->slot);
+}
+
+static int MarkY(const Scene* sc, const Marks* m, double p) {
+    return sc->g.top + (int)(((m->maxP - p) / m->range) * (double)sc->g.ch);
+}
+
+// Is x exactly Blend(bg, c, t) for some t in 1..254? (pitfall 87)
+static BOOL OnBlendLine(COLORREF bg, COLORREF c, COLORREF x) {
+    for (int t = 1; t < 255; t++) if (Blend(bg, c, t) == x) return TRUE;
+    return FALSE;
+}
+
+static unsigned long long HashCase(const Case* k) {
+    ChartStyle sty;
+    Surface s;
+    unsigned long long h = 0;
+    if (!ChartStyleCreate(&sty, k->dpi, k->light ? &ChartThemeLight : NULL)) return 0;
+    if (SurfaceOpen(&s, k->W, k->H)) {
+        DrawCase(s.dc, k, &sty, NULL, NULL);
+        h = Fnv(s.px, k->W * k->H);
+        SurfaceClose(&s);
+    }
+    ChartStyleDestroy(&sty);
+    return h;
+}
+
+// Each type is drawn as its own marks, and on its own scale:
+//  - every typed case differs from the same case drawn as candles;
+//  - the line and the mountain scale on the closes (the display the frame
+//    snapped to, and PriceRangeFor), the bars on high and low;
+//  - the line: pixels of clr.line along the closes, and no candle colors in
+//    the price pane (the last-price line's row aside);
+//  - the mountain: the fill under the line and never above it;
+//  - OHLC: the open's tick on the left and the close's on the right, and no
+//    body between them;
+//  - the colors: the mountain is Blend(bg, line), and neither is on a text
+//    role's blend line (pitfall 87).
+static int CheckChartTypes(void) {
+    int bad = 0, typed = 0;
+    // The colors, both themes.
+    const ChartTheme* th[2] = { &ChartThemeDark, &ChartThemeLight };
+    for (int t = 0; t < 2; t++) {
+        const ChartTheme* c = th[t];
+        const COLORREF text[] = { c->text, c->dim, c->axis, c->up, c->down, c->session, c->prev,
+                                  c->sma, c->ema, c->vwap, c->rsi, c->alert, c->alertText,
+                                  c->onAlert, c->onHot, c->quote, c->onAccent,
+                                  RGB(0xFF, 0xFF, 0xFF) };   // the dark watermark's ink
+        int nt = (int)(sizeof(text) / sizeof(text[0])), on = 0;
+        for (int r = 0; r < nt; r++) {
+            if (c->line == text[r] || c->mountain == text[r] ||
+                OnBlendLine(c->bg, text[r], c->line) || OnBlendLine(c->bg, text[r], c->mountain)) on++;
+        }
+        BOOL fillOk = OnBlendLine(c->bg, c->line, c->mountain);
+        if (on || !fillOk) {
+            printf("FAIL chart types %s: line/mountain on %d text blend line(s), mountain %s Blend(bg, line)\n",
+                   t ? "light" : "dark", on, fillOk ? "is" : "is NOT");
+            bad++;
+        } else printf("ok   chart types %s: mountain = Blend(bg, line), off every text role's blend line\n",
+                      t ? "light" : "dark");
+    }
+    // The axis per type, straight from PriceRangeFor.
+    {
+        MakeCandles(s_candles, 360, HOUR_MS, 0.0);
+        double mn0, mx0, mn, mx, cmn = s_candles[60].close, cmx = cmn;
+        for (int i = 61; i < 360; i++) {
+            if (s_candles[i].close < cmn) cmn = s_candles[i].close;
+            if (s_candles[i].close > cmx) cmx = s_candles[i].close;
+        }
+        double pad = (cmx - cmn) * 0.08;
+        PriceRange(s_candles, 60, 300, &mn0, &mx0);
+        int wrong = 0;
+        for (int t = 0; t < CHART_TYPE_COUNT; t++) {
+            PriceRangeFor(s_candles, 60, 300, t, &mn, &mx);
+            BOOL closes = (t == CHART_LINE || t == CHART_MOUNTAIN);
+            double emn = closes ? cmn - pad : mn0, emx = closes ? cmx + pad : mx0;
+            if (fabs(mn - emn) > 1e-6 || fabs(mx - emx) > 1e-6) {
+                printf("FAIL chart types: PriceRangeFor type %d gives %.2f..%.2f, expected %.2f..%.2f\n",
+                       t, mn, mx, emn, emx);
+                wrong++;
+            }
+        }
+        if (wrong) bad++;
+        else printf("ok   chart types: PriceRangeFor - line and mountain on the closes, candles and OHLC on high/low\n");
+    }
+    for (int i = 0; i < NCASES; i++) {
+        const Case* k = &CASES[i];
+        if (k->type == CHART_CANDLES) continue;
+        typed++;
+        Case asCandles = *k;
+        asCandles.type = CHART_CANDLES;
+        unsigned long long hT = HashCase(k), h0 = HashCase(&asCandles);
+        if (hT == h0) {
+            printf("FAIL chart types %s: the same picture as the candles\n", k->name);
+            bad++;
+        }
+        Scene sc;
+        if (!SceneOpen(&sc, k)) { printf("FAIL chart types %s: no scene\n", k->name); bad++; continue; }
+        Marks m;
+        MarksOf(&sc, &m);
+        const ChartRect* g = &sc.g;
+        int n = sc.in.count;
+        // The display the frame snapped to.
+        double emn, emx;
+        PriceRange(s_candles, m.vs, m.vc, &emn, &emx);
+        if (k->type == CHART_LINE || k->type == CHART_MOUNTAIN) {
+            double cmn = s_candles[m.vs].close, cmx = cmn;
+            for (int j = m.vs + 1; j < m.vs + m.vc; j++) {
+                if (s_candles[j].close < cmn) cmn = s_candles[j].close;
+                if (s_candles[j].close > cmx) cmx = s_candles[j].close;
+            }
+            emn = cmn - (cmx - cmn) * 0.08;
+            emx = cmx + (cmx - cmn) * 0.08;
+        }
+        if (fabs(sc.st.dispMin - emn) > 1e-6 || fabs(sc.st.dispMax - emx) > 1e-6) {
+            printf("FAIL chart types %s: the axis is %.2f..%.2f, expected %.2f..%.2f\n",
+                   k->name, sc.st.dispMin, sc.st.dispMax, emn, emx);
+            bad++;
+        }
+        int yLast = MarkY(&sc, &m, s_candles[n - 1].close);
+        if (k->type == CHART_LINE || k->type == CHART_MOUNTAIN) {
+            int lineN = CountPx(&sc, g->left, g->top, g->right, g->bottom + 1, sc.sty.clr.line, TRUE);
+            int candleN = 0;
+            if (k->hoverX < 0) {   // the hover box's close row is up or down
+                for (int y = g->top; y <= g->bottom; y++) {
+                    if (y == yLast) continue;
+                    candleN += CountPx(&sc, g->left, y, g->right, y + 1, sc.sty.clr.up, TRUE) +
+                               CountPx(&sc, g->left, y, g->right, y + 1, sc.sty.clr.down, TRUE);
+                }
+            }
+            if (lineN < g->cw / 2 || candleN) {
+                printf("FAIL chart types %s: %d px of the line (want >= %d), %d px of candle colors\n",
+                       k->name, lineN, g->cw / 2, candleN);
+                bad++;
+            }
+        }
+        if (k->type == CHART_MOUNTAIN) {
+            // Columns at the candles' centers: no fill above the line, and
+            // the fill below it (the grid, the levels, the alert lines and
+            // the bars behind the price stand on it, so most, not all).
+            int above = 0, belowN = 0, belowFill = 0, cols = 0;
+            int yEnd = g->bottom;
+            if (k->volF > 0.0 && g->volBottom <= g->bottom) yEnd -= ChartVolBarsH(g) + 1;
+            int step = (m.vc > 40) ? m.vc / 40 : 1;
+            for (int j = m.vs + 1; j < m.vs + m.vc - 1; j += step) {
+                int x = MarkX(&sc, &m, j);
+                if (x < g->left || x >= g->right) continue;
+                int y0 = MarkY(&sc, &m, s_candles[j - 1].close), y1 = MarkY(&sc, &m, s_candles[j].close);
+                int y2 = MarkY(&sc, &m, s_candles[j + 1].close);
+                int yMin = y0 < y1 ? y0 : y1, yMax = y0 > y1 ? y0 : y1;
+                if (y2 < yMin) yMin = y2;
+                if (y2 > yMax) yMax = y2;
+                yMin -= 2 * m.w; yMax += 2 * m.w;
+                cols++;
+                above += CountPx(&sc, x, g->top, x + 1, yMin, sc.sty.clr.mountain, TRUE);
+                if (yEnd - yMax >= 10) {
+                    belowN += yEnd - yMax;
+                    belowFill += CountPx(&sc, x, yMax + 1, x + 1, yEnd + 1, sc.sty.clr.mountain, TRUE);
+                }
+            }
+            if (above || belowN == 0 || belowFill * 10 < belowN * 7) {
+                printf("FAIL chart types %s: %d columns, %d px of fill above the line, %d of %d px under it\n",
+                       k->name, cols, above, belowFill, belowN);
+                bad++;
+            }
+        }
+        if (k->type == CHART_OHLC && m.bodyW >= 5) {
+            // Candles far enough from the crosshair's box and the view's
+            // edges; ticks where the open and the close are, and nothing of
+            // the candle's color where a body would be.
+            int samples = 0, tickOk = 0, bodyless = 0, bodyN = 0;
+            for (int j = m.vs + 1; j < m.vs + m.vc - 1; j++) {
+                const Candle* c = &s_candles[j];
+                COLORREF col = (c->close >= c->open) ? sc.sty.clr.up : sc.sty.clr.down;
+                int cx = MarkX(&sc, &m, j), x0 = cx - m.bodyW / 2, x1 = x0 + m.bodyW - 1;
+                if (x0 < g->left || x1 >= g->right) continue;
+                // The hover box stands 12 px beside the crosshair, on either side.
+                int boxR = ChartPx(k->dpi, 12 + HOVER_BOX_W + 2);
+                if (k->hoverX >= 0 && x1 >= k->hoverX - boxR && x0 <= k->hoverX + boxR) continue;
+                int yO = MarkY(&sc, &m, c->open), yC = MarkY(&sc, &m, c->close);
+                samples++;
+                if (PxAt(&sc, x0, yO) == col && PxAt(&sc, x1, yC) == col) tickOk++;
+                int yA = (yO < yC ? yO : yC) + m.w + 1, yB = (yO < yC ? yC : yO) - m.w - 1;
+                if (yB - yA >= 2) {
+                    bodyN++;
+                    int ym = (yA + yB) / 2;
+                    if (PxAt(&sc, x0, ym) != col && PxAt(&sc, x1, ym) != col) bodyless++;
+                }
+            }
+            if (samples == 0 || tickOk * 10 < samples * 9 || bodyN == 0 || bodyless * 10 < bodyN * 9) {
+                printf("FAIL chart types %s: ticks on %d of %d bars, no body in %d of %d\n",
+                       k->name, tickOk, samples, bodyless, bodyN);
+                bad++;
+            }
+        }
+        SceneClose(&sc);
+    }
+    // The averages' legend over the mountain stands on the background: in
+    // the legend's box, no fill. Precondition (pitfall 127): the line rises
+    // into the legend's rows under the legend's columns - closes drawn above
+    // the legend's bottom, so without the rule the fill would be in the box.
+    {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase("mountain_light_560x300"))) { printf("FAIL chart types: no scene\n"); return bad + 1; }
+        const ChartRect* g = &sc.g;
+        int dpi = sc.k->dpi, ly = g->top + ChartPx(dpi, 4), lh = ChartPx(dpi, 15);
+        int lx0 = INT_MAX, lx1 = -1;
+        for (int y = ly; y < ly + lh; y++)
+            for (int x = g->left; x < g->right; x++) {
+                COLORREF c = PxAt(&sc, x, y);
+                if (c == sc.sty.clr.sma || c == sc.sty.clr.ema || c == sc.sty.clr.vwap) {
+                    if (x < lx0) lx0 = x;
+                    if (x > lx1) lx1 = x;
+                }
+            }
+        int inLegend = (lx1 >= lx0) ? CountPx(&sc, lx0, ly, lx1 + 1, ly + lh, sc.sty.clr.mountain, TRUE) : -1;
+        Marks m;
+        MarksOf(&sc, &m);
+        int reach = 0;   // closes under the legend's columns drawn above its bottom
+        for (int j = m.vs; j < m.vs + m.vc; j++) {
+            int x = MarkX(&sc, &m, j);
+            if (x >= lx0 && x <= lx1 && MarkY(&sc, &m, s_candles[j].close) < ly + lh) reach++;
+        }
+        if (reach == 0 || inLegend != 0) {
+            printf("FAIL chart types: %d closes rise into the legend (%d..%d), %d px of fill inside it\n",
+                   reach, lx0, lx1, inLegend);
+            bad++;
+        } else printf("ok   chart types: %d closes rise into the legend's box, and no fill shows in it\n", reach);
+        SceneClose(&sc);
+    }
+    if (!bad) printf("ok   chart types: %d typed cases - own marks, own scale, none drawn as candles\n", typed);
+    return bad;
+}
+
+// --- Phase 49 (the app's half): the desktop's line follows the height ---
+// DeskLineW keeps the panel's 1 px line to 16 px stamp on the desktop's own
+// stamp: 1 px at 1080, 2 at 1600, 3 at 2160. And the picture: a line pixel
+// of a line two pixels wide has line pixels beside it AND above or below it
+// wherever the line runs, at any slope; a 1 px line has one or the other,
+// both only at a bend. The 1080 case is the control - the measure has to
+// tell a 1 px line from a 2 px one, or the 1600 case proves nothing.
+static double LineThick(const char* name) {
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase(name))) return -1.0;
+    const ChartRect* g = &sc.g;
+    COLORREF c = sc.sty.clr.line;
+    int all = 0, both = 0;
+    for (int y = g->top + 1; y < g->bottom; y++) {
+        for (int x = g->left + 1; x < g->right - 1; x++) {
+            if (PxAt(&sc, x, y) != c) continue;
+            all++;
+            BOOL h = PxAt(&sc, x - 1, y) == c || PxAt(&sc, x + 1, y) == c;
+            BOOL v = PxAt(&sc, x, y - 1) == c || PxAt(&sc, x, y + 1) == c;
+            if (h && v) both++;
+        }
+    }
+    SceneClose(&sc);
+    return all ? (double)both / (double)all : -1.0;
+}
+
+static int CheckDeskLine(void) {
+    int bad = 0;
+    if (DeskLineW(1080) != 1 || DeskLineW(1600) != 2 || DeskLineW(2160) != 3 || DeskLineW(600) != 1) {
+        printf("FAIL desktop line: DeskLineW gives %d %d %d %d at 600, 1080, 1600, 2160 px (want 1 1 2 3)\n",
+               DeskLineW(600), DeskLineW(1080), DeskLineW(1600), DeskLineW(2160));
+        bad++;
+    }
+    double t1 = LineThick("line_desktop_1920x1080"), t2 = LineThick("line_desktop_3840x1600");
+    if (t1 < 0.0 || t2 < 0.0 || t1 > 0.4 || t2 < 0.8) {
+        printf("FAIL desktop line: %.2f of the line's pixels are thick at 1080 (want <= 0.40, 1 px), %.2f at 1600 (want >= 0.80, 2 px)\n",
+               t1, t2);
+        bad++;
+    } else printf("ok   desktop line: 1 px at 1080 (%.2f of its pixels thick), 2 px at 1600 (%.2f)\n", t1, t2);
+    return bad;
+}
+
+// --- Phase 49: draw time per type (--perf, not part of the run) ---
+// TickC's whole buffer, 6000 1m candles, all in view at 3840x1600 - the
+// densest frame the app can draw - once as a panel with the volume pane and
+// the averages, once as the desktop. The types are drawn round robin, so
+// the machine's state is shared; the median of 21 draws per type.
+static void PerfTypes(void) {
+    static const char* const NAME[CHART_TYPE_COUNT] = { "candles", "ohlc", "line", "mountain" };
+    for (int desk = 0; desk < 2; desk++) {
+        double ms[CHART_TYPE_COUNT][21];
+        ChartStyle sty;
+        Surface s;
+        if (!ChartStyleCreate(&sty, 96, NULL) || !SurfaceOpen(&s, 3840, 1600)) { printf("perf: no surface\n"); return; }
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        for (int r = -2; r < 21; r++) {
+            for (int t = 0; t < CHART_TYPE_COUNT; t++) {
+                Case k = { "perf", 3840, 1600, desk, MIN_MS, MAX_CANDLES, FALSE, 0, 0,
+                           desk ? 0.0 : 1.0, desk ? 0.0 : 1.0, -1, -1, FALSE, 96, FALSE, FALSE };
+                k.type = t;
+                LARGE_INTEGER a, b;
+                QueryPerformanceCounter(&a);
+                DrawCase(s.dc, &k, &sty, NULL, NULL);
+                QueryPerformanceCounter(&b);
+                if (r >= 0) ms[t][r] = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+            }
+        }
+        for (int t = 0; t < CHART_TYPE_COUNT; t++) {
+            for (int i = 1; i < 21; i++)
+                for (int j = i; j > 0 && ms[t][j] < ms[t][j - 1]; j--) {
+                    double tmp = ms[t][j]; ms[t][j] = ms[t][j - 1]; ms[t][j - 1] = tmp;
+                }
+            printf("perf %-7s 3840x1600, %d candles, %-8s median %.2f ms (min %.2f, max %.2f)\n",
+                   desk ? "desktop" : "panel", MAX_CANDLES, NAME[t], ms[t][10], ms[t][0], ms[t][20]);
+        }
+        SurfaceClose(&s);
+        ChartStyleDestroy(&sty);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -880,7 +1270,8 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--update") == 0) update = TRUE;
         else if (strcmp(argv[i], "--bmp") == 0) bmp = TRUE;
-        else { printf("usage: chart_golden [--update] [--bmp]\n"); return 2; }
+        else if (strcmp(argv[i], "--perf") == 0) { PerfTypes(); return 0; }
+        else { printf("usage: chart_golden [--update] [--bmp] [--perf]\n"); return 2; }
     }
 
     // Paths next to the exe, which lives in tests\.
@@ -898,7 +1289,7 @@ int main(int argc, char** argv) {
     int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor() +
                         CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms() +
                         CheckGhostRank() + CheckGhostRow() + CheckLegendAlert() + CheckVolTag() +
-                        CheckLevelLabels();
+                        CheckLevelLabels() + CheckChartTypes() + CheckDeskLine();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -966,6 +1357,6 @@ int main(int argc, char** argv) {
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
     if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis, hover time, time forms,\n"
-                              "ghost rank and row, legend alert, volume tag, level labels)\n", contrastFails);
+                              "ghost rank and row, legend alert, volume tag, level labels, chart types)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }
