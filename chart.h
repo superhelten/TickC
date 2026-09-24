@@ -148,8 +148,8 @@ typedef struct {
     // which takes the series' color on Bloomberg, where the candles and the
     // bars keep up/down with bg on it.
     COLORREF gridDot, axisLine, stamp, onStamp;
-    // fillCell: the cell a level name or the averages' legend stands on
-    // where the mountain's fill covers it. The dark theme's navy carries
+    // fillCell: the cell a level name (until phase 52 also the averages'
+    // one-line legend) stands on where the mountain's fill covers it. The dark theme's navy carries
     // every such text at 4.5:1 (the cell is the fill itself, and only cuts
     // the lines through the text); the light fill does not, so there it is
     // the background, as in phase 49.
@@ -555,11 +555,14 @@ BOOL      RsiValueAt(const Candle* c, int n, int idx, double* out);
 int       PriceDecimals(double step);
 void      FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch);
 // A moment as a clock (phase 45): "HH:MM" local under 1 day, the UTC date
-// "YYYY-MM-DD" from 1 day up. The chart's own labels go through the same
-// helper in chart.c, with the date where a day begins.
+// "YYYY-MM-DD" from 1 day up. The hover box and the statistics box use the
+// same helper in chart.c with the date; the time axis has its own two rows
+// (phase 52).
 void      FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs, wchar_t* out, size_t cch);
 // The widest time-axis label for the interval in the font selected into hdc
-// (phase 45): the spacing of the labels is measured on it.
+// (phase 45): the spacing of the labels is measured on it. Phase 52: the
+// fine row's forms - a clock under 1 day, the day, every month's name, the
+// year.
 int       ChartTimeLabelW(HDC hdc, long long intervalMs);
 long long ChartUtcOffsetMs(void);
 void      FormatVolume(double v, wchar_t* out, size_t cch);

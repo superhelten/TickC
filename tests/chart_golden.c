@@ -2197,6 +2197,10 @@ static BOOL UnitKey(long long t, long long ivMs, int unit, long long* key) {
 // rows [y0, y1), grouped where they lie at most join px apart.
 static int InkGroups(const Scene* sc, int x0, int x1, int y0, int y1, int join, int* gl, int* gr, int max) {
     int n = 0, last = -1000;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > sc->s.W) x1 = sc->s.W;
+    if (y1 > sc->s.H) y1 = sc->s.H;   // a band too low for its rows (found by a mutation)
     for (int x = x0; x < x1; x++) {
         int ink = 0;
         for (int y = y0; y < y1 && !ink; y++) {
