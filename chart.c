@@ -1544,6 +1544,78 @@ static BOOL FillHitRect(const PriceMarks* m, const RECT* rc) {
     return FALSE;
 }
 
+// Phase 51: does the mountain's fill cover all of rc? It does when the line
+// over rc's columns stays above rc's top everywhere - FillHitRect's test
+// the other way round, on the line's lowest point, a pixel on the safe side.
+static BOOL FillUnderRect(const PriceMarks* m, const RECT* rc) {
+    if (m->type != CHART_MOUNTAIN || m->slot <= 0.0 || rc->bottom > m->bottom + 1) return FALSE;
+    int first = (m->i0 > 0) ? m->i0 - 1 : 0;
+    int last  = (m->i1 < m->n) ? m->i1 : m->n - 1;
+    int a = (int)floor(m->dStart + (double)(rc->left - m->left) / m->slot) - 1;
+    int b = (int)ceil(m->dStart + (double)(rc->right - m->left) / m->slot) + 1;
+    if (a < first) a = first;
+    if (b > last) b = last;
+    BOOL any = FALSE;
+    for (int i = a; i < b; ++i) {
+        POINT p = LinePoint(m->candles, i,     m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        POINT q = LinePoint(m->candles, i + 1, m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        int xa = (p.x > rc->left) ? p.x : rc->left;
+        int xb = (q.x < rc->right - 1) ? q.x : rc->right - 1;
+        if (xa > xb) continue;
+        double yMax;
+        if (q.x == p.x) {
+            yMax = (p.y > q.y) ? p.y : q.y;
+        } else {
+            double ya = p.y + (double)(q.y - p.y) * (double)(xa - p.x) / (double)(q.x - p.x);
+            double yb = p.y + (double)(q.y - p.y) * (double)(xb - p.x) / (double)(q.x - p.x);
+            yMax = (ya > yb) ? ya : yb;
+        }
+        any = TRUE;
+        if (yMax + (double)m->lineW >= (double)rc->top) return FALSE;
+    }
+    return any;
+}
+
+// Phase 51: is rc free for the view's high or low label? Inside the price
+// pane's plot - left of right, so never in the price column, where the stamp
+// and the tags stand; no horizontal line through its rows or the row above
+// (the levels, the alerts, the ghost's and the afterglow's, and the last
+// price's from its candle to the axis); none of the chart type's marks in it
+// (MarksHitRect); clear of the text placed before it (the legend, the level
+// names, the other label) and of the hover box, grown by a pixel so the two
+// do not touch. The mountain's fill is not a collider: the label's text
+// color is 9.7:1 on the navy and 12.2:1 on the light blue.
+// rows[i] runs from rowX0[i] to the axis: the levels from today's first
+// candle, the rest from the plot's left edge.
+typedef struct {
+    const PriceMarks* pm;
+    int left, top, right, bottom;
+    const int* rows;
+    const int* rowX0;
+    int nRows;
+    int yLast, xLast;
+    const RECT* placed;
+    int nPlaced;
+    RECT hover;   // empty: no hover box
+} HiLoRoom;
+
+static BOOL HiLoFree(const HiLoRoom* r, const RECT* rc) {
+    if (rc->left < r->left || rc->right > r->right || rc->top < r->top || rc->bottom > r->bottom) return FALSE;
+    for (int i = 0; i < r->nRows; ++i)
+        if (r->rows[i] >= rc->top - 1 && r->rows[i] <= rc->bottom && rc->right > r->rowX0[i]) return FALSE;
+    if (r->yLast >= rc->top - 1 && r->yLast <= rc->bottom && rc->right > r->xLast) return FALSE;
+    if (MarksHitRect(r->pm, rc)) return FALSE;
+    RECT tmp;
+    for (int i = 0; i < r->nPlaced; ++i)
+        if (IntersectRect(&tmp, rc, &r->placed[i])) return FALSE;
+    if (r->hover.right > r->hover.left) {
+        RECT hv = r->hover;
+        InflateRect(&hv, 1, 1);
+        if (IntersectRect(&tmp, rc, &hv)) return FALSE;
+    }
+    return TRUE;
+}
+
 // The chart body: everything from the chart geometry down. The header and the
 // status text are the app's (DrawHeader / DrawEmptyState in tickc.c), the
 // background is ChartDrawBackground. Reads the DISPLAY in st, the data in in,
@@ -2467,6 +2539,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 #ifdef TICKER_PROBE
     if (!(indT > 0 && !in->desktop)) st->probeLblMask = 0;
 #endif
+    // The text placed in the plot so far, for the level names and (phase 51)
+    // the view's high and low after them: each gives way to what is here.
+    RECT placed[LVL_COUNT + 3];
+    int  nPlaced = 0;
     if (indT > 0 && !in->desktop) {
         RECT rcLegend = { 0, 0, 0, 0 };   // empty when the legend did not fit
         wchar_t lg[96];
@@ -2531,6 +2607,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             if (struck) SetBkMode(hdc, TRANSPARENT);
             rcLegend.left = lx; rcLegend.top = ly;
             rcLegend.right = lx + sz3.cx; rcLegend.bottom = ly + szAll.cy;
+            placed[nPlaced++] = rcLegend;
         }
 
         // --- Labels on the level lines (phase 29) ---
@@ -2555,9 +2632,6 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         st->probeLblMask = 0;
 #endif
         if (right - left >= PX(200)) {
-            RECT placed[LVL_COUNT + 1];
-            int  nPlaced = 0;
-            if (rcLegend.right > rcLegend.left) placed[nPlaced++] = rcLegend;
             for (int q = 0; q < LVL_COUNT; ++q) {
                 if (yLine[q] == INT_MIN) continue;
                 SIZE szN = { 0, 0 };
@@ -2623,6 +2697,149 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         QueryPerformanceFrequency(&lblQf);
         st->probeLblUs = (lblQ1.QuadPart - lblQ0.QuadPart) * 1000000LL / lblQf.QuadPart;
 #endif
+    }
+
+    // --- Where the hover box will stand (phase 51) ---
+    // Decided here, before the view's high and low are placed - they keep
+    // off it - and drawn last, over everything, in the crosshair block.
+    // Bound to the VISIBLE surface, not to the target view - the two come
+    // apart in the middle of an animation.
+    //
+    // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
+    // With the indicators on (phase 27) three more rows are added: SMA, EMA
+    // and VWAP at the candle under the crosshair - the same numbers the
+    // legend shows, since legendIdx IS hoverIdx when this block runs (same
+    // condition). The rows stay as long as the lines are visible (indT > 0)
+    // and fade with them, in the lines' own colors; an average that is not
+    // defined at the candle gets a dash, as in the legend.
+    const int indRows = (indT > 0) ? 3 : 0;
+    const int rsiRows = (bandOn && rsiT > 0) ? 1 : 0;   // phase 39
+    const int LINE_H = PX(13), BOX_W = PX(HOVER_BOX_W);
+    const int BOX_H = PX(4) + (6 + indRows + rsiRows) * LINE_H + PX(5);
+    BOOL hoverOn = FALSE;
+    int  hx = 0, hy = 0;
+    RECT rcBox = { 0, 0, 0, 0 };
+    if (st->hoverIdx >= 0 && st->hoverIdx < n) {
+        double hrel = (double)st->hoverIdx - dStart;
+        if (hrel >= 0.0 && hrel < dCount) {
+            hoverOn = TRUE;
+            hx = left + (int)((hrel + 0.5) * slot);
+            hy = st->hoverY;
+            if (hoverInBand) {                 // phase 39: the horizontal lives in the band
+                if (hy < bt) hy = bt;
+                if (hy > bb) hy = bb;
+            } else if (hoverInVol) {           // phase 43: or in the volume pane
+                if (hy < vt) hy = vt;
+                if (hy > vb) hy = vb;
+            } else {
+                if (hy < top) hy = top;
+                if (hy > bottom) hy = bottom;
+            }
+            int bx0 = hx + PX(12);
+            if (bx0 + BOX_W > right) bx0 = hx - PX(12) - BOX_W;   // flip to the left at the edge
+            if (bx0 < left) bx0 = left;
+            // Phase 44: the top clamp comes last, so it wins. On a short panel
+            // with both panes and the averages (290 px: 126 px of price, a
+            // 139 px box) the bottom clamp put the box over the header's quote
+            // line and under the toolbar the app draws after the chart; now it
+            // hangs into the pane below, which is the chart's own.
+            int by0 = hy - BOX_H / 2;
+            if (by0 + BOX_H > bottom) by0 = bottom - BOX_H;
+            if (by0 < top) by0 = top;
+            SetRect(&rcBox, bx0, by0, bx0 + BOX_W, by0 + BOX_H);
+        }
+    }
+
+    // --- The view's high and low (phase 51) ---
+    // Bloomberg marks the period's high and low. Here: the highest and the
+    // lowest price of the candles whose middle is in view, in the prices the
+    // axis scales on (PriceRangeFor) - high and low for the candles and the
+    // bars, the close for the line and the mountain - as "H 63030.12" and
+    // "L 52884.10" by their points. The high's label stands above its point,
+    // centered on it and kept inside the plot: nothing of the price is above
+    // the view's high, so the marks cannot strike it there. Else to the right
+    // of the point, else to the left, halfway down it. The low's the same way
+    // below. A label that fits nowhere (HiLoFree) is not drawn: the smallest
+    // panels, where the 8 % headroom is less than a line of text, lose them
+    // first. In the text color, and at least two decimals (more where the
+    // axis needs them). Panel only (phase 14), placed after the legend and
+    // the level names and giving way to them, as they give way to each
+    // other; the high before the low.
+#ifdef TICKER_PROBE
+    st->probeHiLoMask = 0;
+#endif
+    if (!in->desktop && right - left >= PX(200)) {
+        BOOL closes = (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+        int    iHL[2] = { -1, -1 };
+        double vHL[2] = { 0.0, 0.0 };
+        for (int i = i0; i < i1; ++i) {
+            double fx = ((double)i - dStart + 0.5) * slot;
+            if (fx < 0.0 || (double)left + fx >= (double)right) continue;
+            const Candle* c = &in->candles[i];
+            double hv = closes ? c->close : c->high, lv = closes ? c->close : c->low;
+            if (iHL[0] < 0 || hv > vHL[0]) { iHL[0] = i; vHL[0] = hv; }
+            if (iHL[1] < 0 || lv < vHL[1]) { iHL[1] = i; vHL[1] = lv; }
+        }
+        int rows[LVL_COUNT + ALERT_MAX + 2], rowX0[LVL_COUNT + ALERT_MAX + 2], nRows = 0;
+        for (int q = 0; q < LVL_COUNT; ++q)
+            if (yLine[q] != INT_MIN) { rows[nRows] = yLine[q]; rowX0[nRows++] = lvlXs; }
+        for (int a = 0; a < in->alertCount && a < ALERT_MAX; ++a) {
+            int ya = AlertY(st, &g, fabs(in->alerts[a]));
+            if (ya >= top && ya <= bottom) { rows[nRows] = ya; rowX0[nRows++] = left; }
+        }
+        if (yGhostLine != INT_MIN) { rows[nRows] = yGhostLine; rowX0[nRows++] = left; }
+        if (in->alertFlashF > 0.0) {
+            int yf = AlertY(st, &g, in->alertFlashLevel);
+            if (yf >= top && yf <= bottom) { rows[nRows] = yf; rowX0[nRows++] = left; }
+        }
+        int yLastL = top + (int)(((maxP - in->candles[n - 1].close) / range) * ch);
+        int xLastL = left + (int)(((double)(n - 1) - dStart + 0.5) * slot);
+        if (xLastL < left)  xLastL = left;
+        if (xLastL > right) xLastL = right;
+        HiLoRoom room = { &pm, left, top, right, bottom, rows, rowX0, nRows, yLastL, xLastL, placed, 0, rcBox };
+        int dec = PriceDecimals(range / 4.0);
+        if (dec < 2) dec = 2;
+        SelectObject(hdc, sty->fontAxis);
+        SetTextColor(hdc, sty->clr.text);
+        for (int s = 0; s < 2; ++s) {
+            if (iHL[s] < 0) continue;
+            wchar_t hl[48];
+            swprintf_s(hl, 48, L"%s %.*f", s ? L"L" : L"H", dec, vHL[s]);
+            int len = (int)wcslen(hl);
+            SIZE sz = { 0, 0 };
+            GetTextExtentPoint32W(hdc, hl, len, &sz);
+            int px = left + (int)(((double)iHL[s] - dStart + 0.5) * slot);
+            int py = top + (int)(((maxP - vHL[s]) / range) * ch);
+            int xc = px - sz.cx / 2;
+            if (xc > right - PX(2) - sz.cx) xc = right - PX(2) - sz.cx;
+            if (xc < left + PX(2)) xc = left + PX(2);
+            int yc = s ? py + PX(3) : py - PX(2) - sz.cy;   // below the low, above the high
+            int ym = py - sz.cy / 2;
+            RECT cand[3];
+            SetRect(&cand[0], xc, yc, xc + sz.cx, yc + sz.cy);
+            SetRect(&cand[1], px + PX(6), ym, px + PX(6) + sz.cx, ym + sz.cy);
+            SetRect(&cand[2], px - PX(6) - sz.cx, ym, px - PX(6), ym + sz.cy);
+            room.nPlaced = nPlaced;
+            for (int c = 0; c < 3; ++c) {
+                if (!HiLoFree(&room, &cand[c])) continue;
+                // On a cell of what lies under it - the mountain's fill
+                // when the fill covers the whole cell, else the background:
+                // the averages' curves and VWAP pass anywhere and would run
+                // through the digits (seen at 15m, where the low sat on
+                // three of them); the cell cuts them, and the grid's dots,
+                // as the legend's opaque text cuts a level line.
+                SetBkColor(hdc, FillUnderRect(&pm, &cand[c]) ? sty->clr.mountain : sty->clr.bg);
+                SetBkMode(hdc, OPAQUE);
+                ExtTextOutW(hdc, cand[c].left, cand[c].top, 0, NULL, hl, len, NULL);
+                SetBkMode(hdc, TRANSPARENT);
+                if (nPlaced < LVL_COUNT + 3) placed[nPlaced++] = cand[c];
+#ifdef TICKER_PROBE
+                st->probeHiLoMask |= (1 << s);
+#endif
+                break;
+            }
+        }
+        SetTextColor(hdc, sty->clr.axis);
     }
 
     // --- Last price: dashed line + axis stamp ---
@@ -2762,25 +2979,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // apart in the middle of an animation.
 #ifdef TICKER_PROBE
     st->probeCrossTag = 0;
-    st->probeHiLoMask = 0;   // phase 51: no high/low labels yet
 #endif
-    if (st->hoverIdx < 0 || st->hoverIdx >= n) return;
-    double hrel = (double)st->hoverIdx - dStart;
-    if (hrel < 0.0 || hrel >= dCount) return;
+    if (!hoverOn) return;   // phase 51: decided with the box's place, above
 
     const Candle* hc = &in->candles[st->hoverIdx];
-    int hx = left + (int)((hrel + 0.5) * slot);
-    int hy = st->hoverY;
-    if (hoverInBand) {                 // phase 39: the horizontal lives in the band
-        if (hy < bt) hy = bt;
-        if (hy > bb) hy = bb;
-    } else if (hoverInVol) {           // phase 43: or in the volume pane
-        if (hy < vt) hy = vt;
-        if (hy > vb) hy = vb;
-    } else {
-        if (hy < top) hy = top;
-        if (hy > bottom) hy = bottom;
-    }
 
     HPEN hPrev = (HPEN)SelectObject(hdc, sty->penCross);
     MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, axisB);   // through every pane
@@ -2839,30 +3041,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     wchar_t tbuf[24];
     FormatTimeAs(hc->openTime, in->intervalMs, in->utcOffsetMs, TIME_BOX, tbuf, 24);
 
-    // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
-    // With the indicators on (phase 27) three more rows are added: SMA, EMA
-    // and VWAP at the candle under the crosshair - the same numbers the
-    // legend shows, since legendIdx IS hoverIdx when this block runs (same
-    // condition). The rows stay as long as the lines are visible (indT > 0)
-    // and fade with them, in the lines' own colors; an average that is not
-    // defined at the candle gets a dash, as in the legend.
-    const int indRows = (indT > 0) ? 3 : 0;
-    const int rsiRows = (bandOn && rsiT > 0) ? 1 : 0;   // phase 39
-    const int LINE_H = PX(13), BOX_W = PX(HOVER_BOX_W);
-    const int BOX_H = PX(4) + (6 + indRows + rsiRows) * LINE_H + PX(5);
-    int bx = hx + PX(12);
-    if (bx + BOX_W > right) bx = hx - PX(12) - BOX_W;   // flip to the left at the edge
-    if (bx < left) bx = left;
-    // Phase 44: the top clamp comes last, so it wins. On a short panel with
-    // both panes and the averages (290 px: 126 px of price, a 139 px box) the
-    // bottom clamp put the box over the header's quote line and under the
-    // toolbar the app draws after the chart; now it hangs into the pane
-    // below, which is the chart's own.
-    int by = hy - BOX_H / 2;
-    if (by + BOX_H > bottom) by = bottom - BOX_H;
-    if (by < top) by = top;
-
-    RECT rcBox = { bx, by, bx + BOX_W, by + BOX_H };
+    // The box's place and size are rcBox, computed before the view's high
+    // and low were placed (phase 51).
+    int bx = rcBox.left, by = rcBox.top;
     FillRect(hdc, &rcBox, sty->brBox);
     FrameRect(hdc, &rcBox, sty->brBoxEdge);
 
