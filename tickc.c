@@ -3190,15 +3190,21 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
 
 // The VOL toggle (phase 22). Not through ApplyConfigChoice: that empties
 // the buffer and bumps configGen, and the volume is already in the candles -
-// this is a pure drawing choice. Called from the pill, the V key and the tray
+// this is a drawing choice, not a data one. Called from the pill, the V key and the tray
 // menu, so desktop mode can switch without a panel (like phase 17). If the
 // surface is visible, dispVolF is eased by the timer; otherwise it snaps, so
 // a panel opened later does not play an animation nobody asked for.
+// Phase 43: the volume is a pane, so the choice is geometry, as the RSI
+// band's is - the price pane changes height at once, the watermark centered
+// in it is rebuilt, and the hover is dropped.
 static void SetShowVolume(AppContext* ctx, BOOL on) {
     if (ShowVolNow(ctx) == on) return;
     if (g_desktopMode) ctx->showVolDesk = on;   // phase 26: one choice per mode
     else               ctx->showVol     = on;
     SaveConfig(ctx);
+    ctx->wmValid = FALSE;
+    ctx->ch.hoverIdx = -1;
+    ctx->axisHotY = -1;
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
         StartAnim(ctx->hPopup);
         InvalidateRect(ctx->hPopup, NULL, FALSE);
@@ -4351,11 +4357,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     // The VOL toggle (phase 22): dispVolF eases towards 0 or 1,
                     // regardless of whether there are candles - a toggle just
                     // before an interval switch must also settle. The snap is a
-                    // quarter pixel of the band height, as for the others.
+                    // quarter pixel of the bars' height, as for the others.
                     {
                         double vfT = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
                         if (g_Ctx.ch.dispVolF != vfT) {
-                            double bandPx = (double)gE.ch * VOL_FRAC;
+                            double bandPx = (double)ChartVolBarsH(&gE);
                             double snapF  = (bandPx > 1.0) ? SNAP_PX / bandPx : 1.0;
                             g_Ctx.ch.dispVolF = AnimStep(g_Ctx.ch.dispVolF, vfT, dt,
                                                       ANIM_TAU_VIEW, snapF);
@@ -4373,10 +4379,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         if (snapY <= 0.0) snapY = 1e-9;
 
                         // The volume scale eases like the price axis: a quarter
-                        // pixel of the band height in volume units (phase 21).
+                        // pixel of the bars' height in volume units (phase 21;
+                        // phase 43: the pane's, when the volume has one).
                         // Without easing the bars would jump the moment a larger
                         // candle entered the view, while the candles glide.
-                        double snapV = SNAP_PX * tVol / ((double)gE.ch * VOL_FRAC);
+                        int volPx = ChartVolBarsH(&gE);
+                        double snapV = SNAP_PX * tVol / (double)(volPx > 1 ? volPx : 1);
                         if (snapV <= 0.0) snapV = 1e-9;
 
                         struct { double* v; double t; double snap; } eases[5] = {

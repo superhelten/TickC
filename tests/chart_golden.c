@@ -98,6 +98,15 @@ static const Case CASES[] = {
     // labels need the longer steps NiceTimeStep got (60 days, 26 weeks).
     { "range_1y_1d",            1280, 720, FALSE, DAY_MS,       400, TRUE,  365,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE },
     { "range_5y_1w",            1280, 720, FALSE, WEEK_MS,      300, TRUE,  261,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE },
+    // Phase 43: the volume pane. The crosshair in the pane (the volume tag),
+    // both panes on a 560x300 panel (the smallest size where both fit), the
+    // light theme with both panes and the pointer in the volume pane, and the
+    // desktop with the volume on. rsi_15m_400x250 is the fallback: no room
+    // for two panes, so the bars stand behind the candles, as before.
+    { "vol_1h_pane_hover",      1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 650, FALSE,  96, FALSE, FALSE },
+    { "vol_rsi_15m_560x300",     560, 300, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, TRUE },
+    { "vol_light_rsi_hover",    1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 900, 530, FALSE,  96, TRUE,  TRUE },
+    { "vol_desktop_1920x1080",  1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 1.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -358,6 +367,10 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     CP("quote line values",       quote,     bg),
     CP("range cells",             text,      boxEdge),
     CP("range cell selected",     onAccent,  accent),
+    // Phase 43: the volume legend stands over the bars, and the value tag
+    // carries the close's colors on the box (the hover box's close row).
+    CP("volume legend, up bar",   text,      volUp),
+    CP("volume legend, down bar", text,      volDown),
 };
 
 static double RelLum(COLORREF c) {

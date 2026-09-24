@@ -439,22 +439,44 @@ ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band, BOOL vol
     g.cw     = g.right - g.left;
     g.ch     = g.bottom - g.top;
     // The RSI band (phase 39) takes the bottom of the surface; the price pane
-    // ends RSI_GAP above it. Left out when the price pane would get too low.
+    // ends PANE_GAP above it. Left out when the price pane would get too low.
+    // Both panes are sized from the whole chart height (ch0), so the volume
+    // pane is as tall with the band as without it.
+    int ch0 = g.ch, gap = ChartPx(dpi, PANE_GAP);
     g.bandTop = g.bandBottom = g.bottom;
     if (band) {
-        int gap = ChartPx(dpi, RSI_GAP);
-        int bh = (int)((double)g.ch * RSI_BAND_FRAC);
+        int bh = (int)((double)ch0 * RSI_BAND_FRAC);
         if (bh < ChartPx(dpi, RSI_BAND_MIN)) bh = ChartPx(dpi, RSI_BAND_MIN);
-        if (g.ch - bh - gap >= ChartPx(dpi, RSI_PANE_MIN)) {
+        if (g.ch - bh - gap >= ChartPx(dpi, PRICE_PANE_MIN)) {
             g.bandTop = g.bottom - bh;
             g.bottom  = g.bandTop - gap;
             g.ch      = g.bottom - g.top;
         }
     }
-    // The volume pane (phase 43): none yet, the bars stand behind the candles.
-    (void)vol;
+    // The volume pane (phase 43) goes over the band, under the price - the
+    // Bloomberg order. Without room the bars stand behind the candles, and
+    // volTop = volBottom = bottom says so.
     g.volTop = g.volBottom = g.bottom;
+    if (vol) {
+        int vh = (int)((double)ch0 * VOL_PANE_FRAC);
+        if (vh < ChartPx(dpi, VOL_PANE_MIN)) vh = ChartPx(dpi, VOL_PANE_MIN);
+        if (g.ch - vh - gap >= ChartPx(dpi, PRICE_PANE_MIN)) {
+            g.volBottom = g.bottom;
+            g.volTop    = g.bottom - vh;
+            g.bottom    = g.volTop - gap;
+            g.ch        = g.bottom - g.top;
+        }
+    }
     return g;
+}
+
+// The tallest volume bar in pixels (phase 43): the pane under its top line
+// and headroom, or VOL_FRAC of the price pane when the bars stand behind the
+// candles. The drawing and the app's easing of the volume scale both read it.
+int ChartVolBarsH(const ChartRect* g) {
+    if (g->volBottom > g->bottom)
+        return g->volBottom - g->volTop - ChartPx(g->dpi, VOL_PANE_PAD);
+    return (int)((double)g->ch * VOL_FRAC);
 }
 
 // The lowest pane's bottom row (phase 43): where the hit test, the vertical
@@ -834,6 +856,63 @@ static BOOL DrawVwap(HDC hdc, const ChartData* in, const ChartRect* g, COLORREF 
     return haveLegend;
 }
 
+// The volume bars (phase 21), standing on row base and at most hMax tall:
+// the pane's bottom (phase 43) or, without room for a pane, the price pane's
+// bottom behind the candles. The scale is dispVolMax - the DISPLAY, which is
+// eased in WM_TIMER - not the target, otherwise the bars jump while the
+// candles glide. The direction is the candle's own (close vs open), the same
+// rule as the candle color and a different one from the last-price line's
+// (see there). The bottom row is y = base, inclusive, as for wicks and grid
+// line 4 (pitfall 33); FillRect is exclusive at the bottom, hence base + 1.
+//
+// One PolyPolygon per color and batch of VOL_BATCH bars, with NULL_PEN: the
+// polygon fill leaves out the right and bottom edges like Rectangle, so the
+// corners [x0, x1) x [base + 1 - h, base + 1) fill exactly the same pixels
+// FillRect would have.
+//
+// WINDING, not ALTERNATE: with more candles than pixels (vc > cw) slot is
+// below 1, bodyW is clamped to 1, and neighboring candles land on the same
+// cx. Two identical rectangles in the same batch CANCEL each other under
+// ALTERNATE (even/odd), so the bar disappears. FillRect overdrew; polygon
+// fill counts edges. With WINDING and the same winding direction on all the
+// rectangles they add up, and the union - the tallest - remains. Measured in
+// the probe: two identical rectangles give 0 pixels under ALTERNATE and
+// w x h under WINDING.
+//
+// dispVolF (phase 22) is the toggle's display, 0..1: the bars sink when the
+// volume is switched off, and rise again. At 1.0 the factor is exact.
+static void DrawVolumeBars(HDC hdc, const ChartState* st, const ChartData* in,
+                           const ChartStyle* sty, int left, double dStart, double slot,
+                           int bodyW, int i0, int i1, int base, int hMax) {
+    if (st->dispVolMax <= 0.0 || st->dispVolF <= 0.0 || hMax <= 0) return;
+    int oldFill = SetPolyFillMode(hdc, WINDING);
+    HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
+    for (int pass = 0; pass < 2; ++pass) {          // 0 = up, 1 = down
+        SelectObject(hdc, pass == 0 ? sty->brVolUp : sty->brVolDown);
+        int k = 0;
+        for (int i = i0; i < i1; ++i) {
+            const Candle* c = &in->candles[i];
+            if ((c->close >= c->open) != (pass == 0)) continue;
+            int h = (int)(c->volume / st->dispVolMax * (double)hMax * st->dispVolF + 0.5);
+            if (h <= 0) continue;
+            if (h > hMax) h = hMax;   // mid-easing a candle can lie above the scale
+            int cx = left + (int)(((double)i - dStart + 0.5) * slot);
+            int x0 = cx - bodyW / 2, x1 = x0 + bodyW;
+            int y0 = base + 1 - h, y1 = base + 1;
+            POINT* p = &s_volPts[k * 4];
+            p[0].x = x0; p[0].y = y0;
+            p[1].x = x1; p[1].y = y0;
+            p[2].x = x1; p[2].y = y1;
+            p[3].x = x0; p[3].y = y1;
+            s_volCnt[k++] = 4;
+            if (k == VOL_BATCH) { PolyPolygon(hdc, s_volPts, s_volCnt, k); k = 0; }
+        }
+        if (k > 0) PolyPolygon(hdc, s_volPts, s_volCnt, k);
+    }
+    SelectObject(hdc, oldPenV);
+    SetPolyFillMode(hdc, oldFill);
+}
+
 // The RSI line in the band (phase 39). Fed from candle 0 over the whole
 // buffer (infinite memory, see RsiStep); points only for [i0 - 1, i1], the
 // same x as the candles and the same batches as DrawIndicator. *legendVal is
@@ -1050,6 +1129,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     int dpi = (sty->dpi > 0) ? sty->dpi : CHART_DPI_BASE;
     ChartRect g = ChartGeometry(W, H, in->desktop, dpi, in->band, in->vol);
     BOOL bandOn = (g.bandBottom > g.bottom);   // phase 39
+    BOOL volPane = (g.volBottom > g.bottom);   // phase 43: the volume has a pane
     int  axisB  = ChartPanesBottom(&g);   // the lowest pane: the time axis sits under it
     // The tags on the price axis: [y - tagHalf, y + tagHalf), and two tags
     // closer than tagH collide (16 px at 96 dpi).
@@ -1126,63 +1206,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     if (i0 < 0) i0 = 0;
     if (i1 > n) i1 = n;
 
-    // --- Volume bars (phase 21) ---
-    // Behind the candles, in the bottom VOL_FRAC of the surface, inside the
-    // same clip. The scale is dispVolMax - the DISPLAY, which is eased in
-    // WM_TIMER - not the target, otherwise the bars jump while the candles
-    // glide. The direction is the candle's own (close vs open), the same rule
-    // as the candle color and a different one from the last-price line's
-    // (see there). The bottom row is y = bottom, inclusive, as for wicks and
-    // grid line 4 (pitfall 33); FillRect is exclusive at the bottom, hence
-    // bottom + 1. No geometry or hit-test code is touched: the bars are an
-    // overlay in the candles' own surface.
-    //
-    // One PolyPolygon per color and batch of VOL_BATCH bars, with NULL_PEN:
-    // the polygon fill leaves out the right and bottom edges like Rectangle,
-    // so the corners [x0, x1) x [bottom + 1 - h, bottom + 1) fill exactly the
-    // same pixels FillRect would have.
-    //
-    // WINDING, not ALTERNATE: with more candles than pixels (vc > cw) slot is
-    // below 1, bodyW is clamped to 1, and neighboring candles land on the
-    // same cx. Two identical rectangles in the same batch CANCEL each other
-    // under ALTERNATE (even/odd), so the bar disappears. FillRect overdrew;
-    // polygon fill counts edges. With WINDING and the same winding direction
-    // on all the rectangles they add up, and the union - the tallest -
-    // remains. Measured in the probe: two identical rectangles give 0 pixels
-    // under ALTERNATE and w x h under WINDING.
-    //
-    // dispVolF (phase 22) is the VOL toggle's display, 0..1: the bars sink
-    // into the bottom when switched off, and rise again. At 1.0 the factor
-    // is exact, so the pixels are the same as before the toggle existed.
-    if (st->dispVolMax > 0.0 && st->dispVolF > 0.0) {
-        int bandH = (int)((double)ch * VOL_FRAC);
-        int oldFill = SetPolyFillMode(hdc, WINDING);
-        HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
-        for (int pass = 0; pass < 2; ++pass) {          // 0 = up, 1 = down
-            SelectObject(hdc, pass == 0 ? sty->brVolUp : sty->brVolDown);
-            int k = 0;
-            for (int i = i0; i < i1; ++i) {
-                const Candle* c = &in->candles[i];
-                if ((c->close >= c->open) != (pass == 0)) continue;
-                int h = (int)(c->volume / st->dispVolMax * (double)bandH * st->dispVolF + 0.5);
-                if (h <= 0) continue;
-                if (h > bandH) h = bandH;   // mid-easing a candle can lie above the scale
-                int cx = left + (int)(((double)i - dStart + 0.5) * slot);
-                int x0 = cx - bodyW / 2, x1 = x0 + bodyW;
-                int y0 = bottom + 1 - h, y1 = bottom + 1;
-                POINT* p = &s_volPts[k * 4];
-                p[0].x = x0; p[0].y = y0;
-                p[1].x = x1; p[1].y = y0;
-                p[2].x = x1; p[2].y = y1;
-                p[3].x = x0; p[3].y = y1;
-                s_volCnt[k++] = 4;
-                if (k == VOL_BATCH) { PolyPolygon(hdc, s_volPts, s_volCnt, k); k = 0; }
-            }
-            if (k > 0) PolyPolygon(hdc, s_volPts, s_volCnt, k);
-        }
-        SelectObject(hdc, oldPenV);
-        SetPolyFillMode(hdc, oldFill);
-    }
+    // --- Volume bars behind the candles (phase 21) ---
+    // Only when the volume is on and has no pane of its own (phase 43: the
+    // smallest panels with the RSI band): in the bottom VOL_FRAC of the price
+    // pane, inside its clip. With a pane the bars are drawn there, below.
+    if (in->vol && !volPane)
+        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1,
+                       bottom, ChartVolBarsH(&g));
 
     // --- Alert lines (phase 23) ---
     // Behind the candles and above the bars, inside the same clip, from left
@@ -1382,9 +1412,30 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // margin on the right.
     SelectClipRgn(hdc, NULL);
 
+    // --- Volume pane (phase 43) ---
+    // Under the price pane and over the RSI band, the Bloomberg order, with
+    // its own clip and a grid line on its top edge - the band's shape. The
+    // region follows the choice at once; the bars rise and sink with
+    // dispVolF, and the tag and legend fade with it.
+    int vt = g.volTop, vb = g.volBottom, vbH = ChartVolBarsH(&g);
+    int volT = (int)(st->dispVolF * 255.0 + 0.5);
+    if (volPane) {
+        HPEN hOldV = (HPEN)SelectObject(hdc, sty->penGrid);
+        MoveToEx(hdc, left, vt, NULL);
+        LineTo(hdc, edge, vt);
+        SelectObject(hdc, hOldV);
+        IntersectClipRect(hdc, left, vt, edge, vb + 1);
+        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1, vb, vbH);
+        SelectClipRgn(hdc, NULL);
+    }
+    // Which pane the pointer is in. The gap above a pane belongs to it, so
+    // the horizontal always stands in a pane (phase 43: three of them).
+    BOOL hoverInVol  = volPane && st->hoverY > bottom && st->hoverY <= vb;
+    BOOL hoverInBand = bandOn && st->hoverY > (volPane ? vb : bottom);
+
     // --- RSI band (phase 39) ---
     // Under the price pane, with its own clip. A grid line on its top edge
-    // separates it from the volume bars above; the 70 and 30 levels are
+    // separates it from the pane above; the 70 and 30 levels are
     // dashed in the crosshair's gray, like the session levels; the line is
     // the theme's rsi. The content fades with dispRsiF, the region does not:
     // it is geometry, which the hit tests read without state.
@@ -1418,7 +1469,6 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     }
     // The pointer is in the band (or its gap): the crosshair's horizontal and
     // its tag belong there, not to the price pane.
-    BOOL hoverInBand = bandOn && st->hoverY > bottom;
     // The band's column has the price column's rank: the tag with the last
     // RSI first (like the stamp), then the crosshair's tag - not drawn within
     // tagH of the value tag, where only a strip of its number would show -
@@ -1436,6 +1486,28 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             if (hyB < bt) hyB = bt;
             if (hyB > bb) hyB = bb;
             if (yRsiV == INT_MIN || abs(hyB - yRsiV) >= tagH) yBandCross = hyB;
+        }
+    }
+    // The volume pane's column (phase 43) has the band's rank: the tag with
+    // the last candle's volume first, at the top of its bar, then the
+    // crosshair's tag, not within tagH of it. No scale labels: the pane's
+    // top is the view's largest volume, and the legend reads the rest.
+    int yVolV = INT_MIN, yVolCross = INT_MIN;
+    const Candle* lastV = &in->candles[n - 1];
+    if (volPane && volT > 0 && st->dispVolMax > 0.0 && vbH > 0) {
+        int hv = (int)(lastV->volume / st->dispVolMax * (double)vbH * st->dispVolF + 0.5);
+        if (hv > vbH) hv = vbH;
+        yVolV = vb + 1 - hv;
+        if (yVolV < vt + tagHalf) yVolV = vt + tagHalf;
+        if (yVolV > vb - tagHalf) yVolV = vb - tagHalf;
+    }
+    if (hoverInVol && st->hoverIdx >= 0 && st->hoverIdx < n) {
+        double hrV = (double)st->hoverIdx - dStart;
+        if (hrV >= 0.0 && hrV < dCount) {
+            int hyV = st->hoverY;
+            if (hyV < vt) hyV = vt;
+            if (hyV > vb) hyV = vb;
+            if (yVolV == INT_MIN || abs(hyV - yVolV) >= tagH) yVolCross = hyV;
         }
     }
 
@@ -1478,7 +1550,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         // 16 px of the stamp the crosshair tag is not drawn (the last price is
         // the number that must never be cut), and then nothing yields to it
         // either.
-        if (st->hoverIdx >= 0 && st->hoverIdx < n && !hoverInBand) {
+        if (st->hoverIdx >= 0 && st->hoverIdx < n && !hoverInBand && !hoverInVol) {
             double hrelT = (double)st->hoverIdx - dStart;
             if (hrelT >= 0.0 && hrelT < dCount) {
                 int hyT = st->hoverY;
@@ -1644,6 +1716,44 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.rsi, rsiT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, buf, (int)wcslen(buf), NULL);
             if (struckB) SetBkMode(hdc, TRANSPARENT);
+        }
+        SetTextColor(hdc, sty->clr.axis);
+    }
+
+    // --- Volume pane: value tag and legend (phase 43) ---
+    // Panel only, like the band's. The tag carries the last candle's volume
+    // in its direction's color on the box surface - the hover box's close
+    // row - and the legend in the top left corner the volume at the
+    // crosshair, else at the last visible candle, whole or not at all. The
+    // legend is in the text color: the bars' muted colors are not text, and
+    // the text reads over them.
+    if (volPane && volT > 0 && !in->desktop) {
+        SelectObject(hdc, sty->fontAxis);
+        if (yVolV != INT_MIN) {
+            BOOL upV = (lastV->close >= lastV->open);
+            RECT rcV = { edge + 1, yVolV - tagHalf, axR + PX(3), yVolV + tagHalf };
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.box, volT));
+            FillRect(hdc, &rcV, (HBRUSH)GetStockObject(DC_BRUSH));
+            FormatVolume(lastV->volume, buf, 64);
+            SetTextColor(hdc, Blend(sty->clr.bg, upV ? sty->clr.up : sty->clr.down, volT));
+            RECT rcVT = { axL, yVolV - tagHalf, axR, yVolV + tagHalf };
+            DrawTextW(hdc, buf, -1, &rcVT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+        int volLegendIdx = i1 - 1;
+        if (st->hoverIdx >= 0 && st->hoverIdx < n) {
+            double hrL = (double)st->hoverIdx - dStart;
+            if (hrL >= 0.0 && hrL < dCount) volLegendIdx = st->hoverIdx;
+        }
+        wchar_t vtxt[24];
+        if (volLegendIdx >= 0) FormatVolume(in->candles[volLegendIdx].volume, vtxt, 24);
+        else                   wcscpy_s(vtxt, 24, L"-");
+        swprintf_s(buf, 64, L"Vol  %s", vtxt);
+        SIZE lszV = { 0, 0 };
+        GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &lszV);
+        int lxV = left + PX(6), lyV = vt + PX(3);
+        if (lxV + lszV.cx <= right - PX(6) && lyV + lszV.cy <= vb) {
+            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.text, volT));
+            ExtTextOutW(hdc, lxV, lyV, 0, NULL, buf, (int)wcslen(buf), NULL);
         }
         SetTextColor(hdc, sty->clr.axis);
     }
@@ -1927,13 +2037,16 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     if (hoverInBand) {                 // phase 39: the horizontal lives in the band
         if (hy < bt) hy = bt;
         if (hy > bb) hy = bb;
+    } else if (hoverInVol) {           // phase 43: or in the volume pane
+        if (hy < vt) hy = vt;
+        if (hy > vb) hy = vb;
     } else {
         if (hy < top) hy = top;
         if (hy > bottom) hy = bottom;
     }
 
     HPEN hPrev = (HPEN)SelectObject(hdc, sty->penCross);
-    MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, axisB);   // through the band too
+    MoveToEx(hdc, hx, top, NULL);      LineTo(hdc, hx, axisB);   // through every pane
     // Same bridge as the last-price line: the horizontal reaches the axis,
     // otherwise there would be a gap between the cross and its label.
     MoveToEx(hdc, left, hy, NULL);     LineTo(hdc, edge, hy);
@@ -1949,6 +2062,19 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         SetTextColor(hdc, sty->clr.text);
         RECT rcTagBT = { axL, hy - tagHalf, axR, hy + tagHalf };
         DrawTextW(hdc, buf, -1, &rcTagBT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
+
+    // In the volume pane the tag carries the volume at the pointer: the
+    // pane's top is dispVolMax, its bottom row zero, as the bars stand.
+    if (yVolCross != INT_MIN && !in->desktop && vbH > 0 && st->dispVolMax > 0.0) {
+        double lv = st->dispVolMax * (double)(vb + 1 - hy) / (double)vbH;
+        FormatVolume(lv, buf, 64);
+        RECT rcTagV = { edge + 1, hy - tagHalf, axR + PX(3), hy + tagHalf };
+        FillRect(hdc, &rcTagV, sty->brBoxEdge);
+        SelectObject(hdc, sty->fontAxis);
+        SetTextColor(hdc, sty->clr.text);
+        RECT rcTagVT = { axL, hy - tagHalf, axR, hy + tagHalf };
+        DrawTextW(hdc, buf, -1, &rcTagVT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
     // Price label on the right axis where the pointer is. Not when it would
