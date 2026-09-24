@@ -163,6 +163,7 @@ static const Case CASES[] = {
     { "line_light_15m_alerts",  1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
     { "line_dpi192_1m",         2560,1440, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,1400, 600, FALSE, 192, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
     { "line_desktop_1920x1080", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
+    { "line_desktop_3840x1600", 3840,1600, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE },
     { "mountain_1h_1280x720",   1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_light_1h_hover",1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_15m_alerts",    1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
@@ -1183,6 +1184,48 @@ static int CheckChartTypes(void) {
     return bad;
 }
 
+// --- Phase 49 (the app's half): the desktop's line follows the height ---
+// DeskLineW keeps the panel's 1 px line to 16 px stamp on the desktop's own
+// stamp: 1 px at 1080, 2 at 1600, 3 at 2160. And the picture: a line pixel
+// of a line two pixels wide has line pixels beside it AND above or below it
+// wherever the line runs, at any slope; a 1 px line has one or the other,
+// both only at a bend. The 1080 case is the control - the measure has to
+// tell a 1 px line from a 2 px one, or the 1600 case proves nothing.
+static double LineThick(const char* name) {
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase(name))) return -1.0;
+    const ChartRect* g = &sc.g;
+    COLORREF c = sc.sty.clr.line;
+    int all = 0, both = 0;
+    for (int y = g->top + 1; y < g->bottom; y++) {
+        for (int x = g->left + 1; x < g->right - 1; x++) {
+            if (PxAt(&sc, x, y) != c) continue;
+            all++;
+            BOOL h = PxAt(&sc, x - 1, y) == c || PxAt(&sc, x + 1, y) == c;
+            BOOL v = PxAt(&sc, x, y - 1) == c || PxAt(&sc, x, y + 1) == c;
+            if (h && v) both++;
+        }
+    }
+    SceneClose(&sc);
+    return all ? (double)both / (double)all : -1.0;
+}
+
+static int CheckDeskLine(void) {
+    int bad = 0;
+    if (DeskLineW(1080) != 1 || DeskLineW(1600) != 2 || DeskLineW(2160) != 3 || DeskLineW(600) != 1) {
+        printf("FAIL desktop line: DeskLineW gives %d %d %d %d at 600, 1080, 1600, 2160 px (want 1 1 2 3)\n",
+               DeskLineW(600), DeskLineW(1080), DeskLineW(1600), DeskLineW(2160));
+        bad++;
+    }
+    double t1 = LineThick("line_desktop_1920x1080"), t2 = LineThick("line_desktop_3840x1600");
+    if (t1 < 0.0 || t2 < 0.0 || t1 > 0.4 || t2 < 0.8) {
+        printf("FAIL desktop line: %.2f of the line's pixels are thick at 1080 (want <= 0.40, 1 px), %.2f at 1600 (want >= 0.80, 2 px)\n",
+               t1, t2);
+        bad++;
+    } else printf("ok   desktop line: 1 px at 1080 (%.2f of its pixels thick), 2 px at 1600 (%.2f)\n", t1, t2);
+    return bad;
+}
+
 // --- Phase 49: draw time per type (--perf, not part of the run) ---
 // TickC's whole buffer, 6000 1m candles, all in view at 3840x1600 - the
 // densest frame the app can draw - once as a panel with the volume pane and
@@ -1246,7 +1289,7 @@ int main(int argc, char** argv) {
     int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor() +
                         CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms() +
                         CheckGhostRank() + CheckGhostRow() + CheckLegendAlert() + CheckVolTag() +
-                        CheckLevelLabels() + CheckChartTypes();
+                        CheckLevelLabels() + CheckChartTypes() + CheckDeskLine();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];

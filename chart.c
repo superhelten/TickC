@@ -431,6 +431,17 @@ int DeskAxisW(int H, int dpi) {
     return ChartPx(dpi, AXIS_LBL_GAP) + AXIS_Y_CHARS * cw + ChartPx(dpi, AXIS_PAD_R);
 }
 
+// Phase 49: the price line's width on the desktop, from the surface's height
+// like the stamp. The panel draws a 1 px line beside a 16 px stamp; the
+// desktop keeps that ratio to its own stamp (DeskPillH), so 1080 px keeps 1
+// px, 1600 gets 2 and 2160 3. At 3840x1600 a 1 px line was a hairline where
+// the candles stand 9 px wide, and it is the line the wallpaper shows by
+// default.
+int DeskLineW(int H) {
+    int w = DeskPillH(H) / 16;
+    return (w < 1) ? 1 : w;
+}
+
 // The panel's price column at dpi (phase 36): PAD_R at 96. The character
 // width follows the axis font the same way as on the desktop - em 15 gives 9
 // px, and the width is rounded up - so eight characters always fit.
@@ -1554,7 +1565,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     int ctype = ChartTypeOf(st);
     int markW = PX(1);
     if (markW > bodyW) markW = bodyW;
-    PriceMarks pm = { ctype, in->candles, n, i0, i1, left, top, bottom, ch, bodyW, markW, PX(1),
+    // The line's width: the pen's, ChartPx(dpi, 1), on the panel; on the
+    // desktop it follows the surface's height (DeskLineW).
+    int lineW = in->desktop ? DeskLineW(H) : PX(1);
+    PriceMarks pm = { ctype, in->candles, n, i0, i1, left, top, bottom, ch, bodyW, markW, lineW,
                       dStart, slot, maxP, range };
 
     // --- The mountain's fill (phase 49) ---
@@ -1767,10 +1781,17 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                     PatBlt(hdc, r[q].left, r[q].top, r[q].right - r[q].left, r[q].bottom - r[q].top, PATCOPY);
         }
     } else {
-        // The line, and the mountain's line over its fill (phase 49).
-        HGDIOBJ oldPenL = SelectObject(hdc, sty->penLine);
+        // The line, and the mountain's line over its fill (phase 49). On a
+        // desktop surface high enough for a wider line, a pen of that width
+        // for this frame - the same kind of pen penLine is at 144 dpi and
+        // up (a solid wide pen, round joins, centred on the points), made
+        // and deleted here because the style does not know the height.
+        HPEN penDesk = NULL;
+        if (in->desktop && lineW > 1) penDesk = CreatePen(PS_SOLID, lineW, sty->clr.line);
+        HGDIOBJ oldPenL = SelectObject(hdc, penDesk ? penDesk : sty->penLine);
         DrawPriceLine(hdc, in->candles, n, &g, dStart, slot, i0, i1, maxP, range, FALSE);
         SelectObject(hdc, oldPenL);
+        if (penDesk) DeleteObject(penDesk);
     }
 
     // --- Moving averages (phase 25) ---

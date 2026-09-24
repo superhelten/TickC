@@ -147,7 +147,9 @@ typedef struct {
     HBRUSH brVolPaneUp, brVolPaneDown;   // phase 45
     // Phase 49: the price line of the line and mountain types, clr.line and
     // ChartPx(dpi, 1) wide - the one line the engine scales with the dpi
-    // (see below), so it is a pen of its own and not DC_PEN.
+    // (see below), so it is a pen of its own and not DC_PEN. On a desktop
+    // surface 1280 px or higher the frame draws the line with a wider pen
+    // of its own instead (DeskLineW).
     HPEN   penLine;
     int    dpi;               // phase 36: the fonts are built for it; 96 = 100 %
     ChartTheme clr;             // phase 38: the colors, copied from the theme
@@ -387,6 +389,7 @@ int       ChartAxisW(int dpi);
 int       DeskPillH(int H);
 int       DeskPillFontH(int H);
 int       DeskAxisW(int H, int dpi);
+int       DeskLineW(int H);   // phase 49: the price line's width on the desktop
 int       HitCandle(const ChartState* st, int n, const ChartRect* g, int mx, int my);
 int       AlertY(const ChartState* st, const ChartRect* g, double level);
 double    AlertPriceAtY(const ChartState* st, const ChartRect* g, int y);
