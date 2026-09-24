@@ -3569,6 +3569,18 @@ static void SetLightTheme(AppContext* ctx, BOOL on) {
 // only UI-owned fields; the lock is taken only to read the reference price.
 // ---------------------------------------------------------------------------
 
+// The alert of the current symbol at level, within half a cent, -1 = none.
+// One place for "the same level": AlertAdd refuses a duplicate with it, and
+// AxisAlertAt below treats the pointer as on that alert with it - the two
+// must never disagree (phase 46).
+static int AlertAtLevel(const AppContext* ctx, double level) {
+    int s = ctx->symIdx;
+    for (int i = 0; i < ctx->alertCount[s]; ++i) {
+        if (fabs(fabs(ctx->alerts[s][i]) - level) < 0.005) return i;
+    }
+    return -1;
+}
+
 // Sets an alert at level for the current symbol. The side is decided against
 // the reference price NOW: the last candle's close when the chart has data
 // (that is the one the user sees the stamp for), otherwise lastPrice. FALSE
@@ -3587,9 +3599,7 @@ static BOOL AlertAdd(AppContext* ctx, double level) {
     LeaveCriticalSection(&ctx->lock);
     if (ref <= 0.0 || level == ref) return FALSE;
 
-    for (int i = 0; i < ctx->alertCount[s]; ++i) {
-        if (fabs(fabs(ctx->alerts[s][i]) - level) < 0.005) return FALSE;
-    }
+    if (AlertAtLevel(ctx, level) >= 0) return FALSE;
     ctx->alerts[s][ctx->alertCount[s]++] = (level > ref) ? level : -level;
     SaveAlerts(ctx);
     if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
@@ -3671,13 +3681,33 @@ static void CheckAlerts(AppContext* ctx, double price) {
     }
 }
 
+// Which alert is the pointer at my in the price column on? The tag under it
+// (AlertAxisHit, the phase 23 rule), or else the alert the ROUNDED price
+// there already is. Zoomed far in on a small symbol one cent is ~50 px, and
+// a pointer 9-15 px from a tag rounds to that tag's own level: the ghost
+// stood amber on the alert's row (phase 46 draws it on the rounded price's
+// row), and a click was refused by AlertAdd as a duplicate - a preview of an
+// alert that could not be set. Now that pointer is on the alert: red tag, no
+// ghost, and the click removes it, exactly as on the tag. Only an alert whose
+// tag is drawn counts, as in AlertAxisHit. Hover and click both come here,
+// so what is shown is what a click does (pitfall 14).
+static int AxisAlertAt(const ChartRect* g, int my) {
+    int s = g_Ctx.symIdx;
+    int hit = AlertAxisHit(&g_Ctx.ch, g, g_Ctx.alerts[s], g_Ctx.alertCount[s], my);
+    if (hit >= 0) return hit;
+    int i = AlertAtLevel(&g_Ctx, AlertPriceAtY(&g_Ctx.ch, g, my));
+    if (i < 0) return -1;
+    int y = AlertY(&g_Ctx.ch, g, fabs(g_Ctx.alerts[s][i]));
+    return (y >= g->top && y <= g->bottom) ? i : -1;
+}
+
 // Click in the price column: on a tag removes it, on empty surface sets a new
 // one at the rounded price there. Hover is recomputed at once - the pointer
 // sits on the new tag, and a posted click has no WM_MOUSEMOVE ahead of it.
 // Its own function because WM_LBUTTONDBLCLK also lands here (pitfall 38):
 // a fast double-click is set + remove, not set + reset the view.
 static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
-    int hit = AlertAxisHit(&g_Ctx.ch, g, g_Ctx.alerts[g_Ctx.symIdx], g_Ctx.alertCount[g_Ctx.symIdx], my);
+    int hit = AxisAlertAt(g, my);
     g_Ctx.alertFresh = 0.0;
     if (hit >= 0) {
         AlertRemove(&g_Ctx, hit);
@@ -3686,7 +3716,7 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
         g_Ctx.alertFresh = g_Ctx.alerts[s][g_Ctx.alertCount[s] - 1];
     }
     g_Ctx.axisHotY = my;
-    g_Ctx.alertHot = AlertAxisHit(&g_Ctx.ch, g, g_Ctx.alerts[g_Ctx.symIdx], g_Ctx.alertCount[g_Ctx.symIdx], my);
+    g_Ctx.alertHot = AxisAlertAt(g, my);
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -4209,7 +4239,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (!g_Ctx.overlayOpen && !g_Ctx.panning && g_Ctx.ch.dispValid &&
                     mx > g.edge && my >= g.top && my <= g.bottom) {
                     axY  = my;
-                    aHot = AlertAxisHit(&g_Ctx.ch, &g, g_Ctx.alerts[g_Ctx.symIdx], g_Ctx.alertCount[g_Ctx.symIdx], my);
+                    aHot = AxisAlertAt(&g, my);
                 }
                 // The cursor has left the newly set tag: from now on it is
                 // a tag like all the others, and turns red next time.
