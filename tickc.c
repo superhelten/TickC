@@ -48,6 +48,8 @@
 // ID block; the time ranges are "periods" here to keep the two apart.
 #define ID_TRAY_PERIOD_FIRST   1300
 #define ID_TRAY_RANGE_W        100
+// The chart types (phase 49): item t is FIRST + t, t a CHART_* value.
+#define ID_TRAY_TYPE_FIRST     1400
 #define TIMER_INTERVAL   3000 // 3 seconds
 
 // --- Popup / chart ---
@@ -219,6 +221,8 @@ C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
 C_ASSERT(RANGE_COUNT + 1 <= ID_TRAY_RANGE_W);   // + 1: "None" (phase 47)
 C_ASSERT(ID_TRAY_INTERVAL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_PERIOD_FIRST);
+C_ASSERT(ID_TRAY_PERIOD_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_TYPE_FIRST);   // phase 49
+C_ASSERT(CHART_TYPE_COUNT <= ID_TRAY_RANGE_W);
 
 #define ALERT_TAU_FLASH    900.0  // the afterglow when an alert fires (ms)
 
@@ -592,6 +596,12 @@ static BOOL ShowIndNow(const AppContext* ctx) {
 static BOOL ShowRsiNow(const AppContext* ctx) {
     return g_desktopMode ? ctx->showRsiDesk : ctx->showRsi;
 }
+// The chart type for the mode we are in (phase 49). ch.chartType, which the
+// engine draws and scales with, is set from this wherever the choice or the
+// mode changes (SetChartType, SetDesktopMode, WinMain), never on its own.
+static int ChartTypeNow(const AppContext* ctx) {
+    return g_desktopMode ? ctx->chartTypeDesk : ctx->chartType;
+}
 // The chart's rectangle for a W x H surface in the mode we are in (phase 43).
 // Painting, the watermark and every hit test go through here: the panes
 // under the price follow two choices, and a call site that forgot one would
@@ -892,6 +902,14 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->showRsiDesk = FALSE;
     ctx->lightTheme     = FALSE;   // phase 40: dark in both modes
     ctx->lightThemeDesk = FALSE;
+    // Phase 49: the panel keeps the candles it has always drawn; the desktop
+    // surface draws the close as a line. The surface is the wallpaper and
+    // must stay calm (phase 14, pitfall 85): a line is one quiet stroke where
+    // the candles are hundreds of green and red bodies, it hides nothing -
+    // the mountain's opaque fill would cover the watermark - and at
+    // 3840x1600 it draws in 1.0 ms against 6.3 for the candles.
+    ctx->chartType     = CHART_CANDLES;
+    ctx->chartTypeDesk = CHART_LINE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0; *outDpi = 0;
 
@@ -917,6 +935,11 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD srd = RegReadDword(k, L"ShowRsiDesktop", 0);
     DWORD lt  = RegReadDword(k, L"LightTheme", 0);       // phase 40, dark by default
     DWORD ltd = RegReadDword(k, L"LightThemeDesktop", 0);
+    // Phase 49: the type itself, not + 1 - RangeIndex adds 1 only because
+    // "no range" (-1) is a value; every type is a value, and a missing entry
+    // falls back to the mode's default, as ShowVolume's does.
+    DWORD ct  = RegReadDword(k, L"ChartType", CHART_CANDLES);
+    DWORD ctd = RegReadDword(k, L"ChartTypeDesktop", CHART_LINE);
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
     ctx->showInd = (si != 0);
@@ -926,6 +949,10 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->showRsiDesk = (srd != 0);
     ctx->lightTheme     = (lt != 0);
     ctx->lightThemeDesk = (ltd != 0);
+    // A value out of range (a hand edit, a newer version's type) keeps the
+    // default, as the indices below do.
+    if (ct  < (DWORD)CHART_TYPE_COUNT) ctx->chartType     = (int)ct;
+    if (ctd < (DWORD)CHART_TYPE_COUNT) ctx->chartTypeDesk = (int)ctd;
 
     // Bounds check. A registry edited by hand, or left behind by a newer
     // version with more symbols, must not be able to index outside the
@@ -1187,6 +1214,9 @@ static void SaveConfig(const AppContext* ctx) {
     DWORD lt = ctx->lightTheme ? 1 : 0, ltd = ctx->lightThemeDesk ? 1 : 0;
     RegSetValueExW(k, L"LightTheme",        0, REG_DWORD, (const BYTE*)&lt, sizeof(lt));
     RegSetValueExW(k, L"LightThemeDesktop", 0, REG_DWORD, (const BYTE*)&ltd, sizeof(ltd));
+    DWORD ct = (DWORD)ctx->chartType, ctd = (DWORD)ctx->chartTypeDesk;   // phase 49
+    RegSetValueExW(k, L"ChartType",        0, REG_DWORD, (const BYTE*)&ct, sizeof(ct));
+    RegSetValueExW(k, L"ChartTypeDesktop", 0, REG_DWORD, (const BYTE*)&ctd, sizeof(ctd));
     RegCloseKey(k);
 }
 
@@ -2490,6 +2520,15 @@ static const wchar_t* const SET_LABEL[SET_COUNT] = {
 // phase 44 the tray said "Volume bars", "Indicators" and "RSI band".
 static const wchar_t* const SET_KEY[SET_COUNT] = { L"V", L"M", L"I", L"T" };
 #define SET_CHART_ROWS   3   // SET_VOL..SET_RSI under CHART, the rest under APPEARANCE
+// The chart types (phase 49) in the engine's CHART_* order: the names in the
+// settings menu's CHART TYPE rows and in the tray menu's "Chart type" list,
+// from one table as the settings are. The key C steps through them in this
+// order; it has no row of its own to stand on, so the menu shows it in the
+// section's heading and the tray on the submenu's item.
+static const wchar_t* const CHART_TYPE_LABEL[CHART_TYPE_COUNT] = {
+    L"Candles", L"OHLC bars", L"Line", L"Mountain",
+};
+#define CHART_TYPE_KEY   L"C"
 
 static BOOL SettingOn(const AppContext* ctx, int k) {
     switch (k) {
@@ -2505,6 +2544,7 @@ static void SetShowVolume(AppContext* ctx, BOOL on);
 static void SetShowIndicators(AppContext* ctx, BOOL on);
 static void SetShowRsi(AppContext* ctx, BOOL on);
 static void SetLightTheme(AppContext* ctx, BOOL on);
+static void SetChartType(AppContext* ctx, int t);   // phase 49
 static void SettingToggle(AppContext* ctx, int k) {
     BOOL on = !SettingOn(ctx, k);
     switch (k) {
@@ -2547,7 +2587,7 @@ static void RequestHistory(AppContext* ctx) {
 
 
 
-#define OVL_ROWS_MAX  16
+#define OVL_ROWS_MAX  20    // phase 49: 16 until the chart types' four rows
 #define OVL_ROW_H     22
 #define OVL_COL_W     104
 #define OVL_PAD       10
@@ -2562,13 +2602,18 @@ static void RequestHistory(AppContext* ctx) {
 #define OVL_SYMDD_W   84
 #define OVL_SET_W     208   // the settings menu (phase 42)
 #define OVL_SET_FIRST (SYMBOL_COUNT + INTERVAL_COUNT)   // its rows follow the choices
-C_ASSERT(OVL_SET_FIRST + SET_COUNT <= OVL_ROWS_MAX);
+// The chart types' rows (phase 49), after the settings'. A section of their
+// own, last: the rows above keep their places and their order for the
+// pointer and the arrows, and a radio group reads as one block.
+#define OVL_TYPE_FIRST (OVL_SET_FIRST + SET_COUNT)
+C_ASSERT(OVL_TYPE_FIRST + CHART_TYPE_COUNT <= OVL_ROWS_MAX);
 
 typedef struct {
     RECT box;                    // the whole overlay
     RECT rows[OVL_ROWS_MAX];     // one per choice
     int  count;                  // SYMBOL_COUNT, INTERVAL_COUNT, then SET_COUNT (phase 42)
     RECT symHdr, ivHdr;          // the headings (the settings menu: CHART, APPEARANCE)
+    RECT typeHdr;                // phase 49: the settings menu's CHART TYPE
 } OverlayRects;
 
 static void OverlayLayout(int W, int H, OverlayRects* r) {
@@ -2622,20 +2667,26 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
             const int pad = Dp(OVL_DD_PAD), rowH = Dp(OVL_ROW_H), hdrH = Dp(OVL_HDR_H), bw = Dp(OVL_SET_W);
             int bx = a->right - bw, by = a->bottom + Dp(2);
             if (bx < 0) bx = 0;
-            int bh = pad * 2 + hdrH * 2 + SET_COUNT * rowH;
+            // Phase 49: a third section, CHART TYPE, with a row per type.
+            // 45 + 238 px at 96 dpi: a panel lower than 283 px cuts the
+            // last rows off, as the box is cut at H (C and the tray menu
+            // still reach them).
+            int bh = pad * 2 + hdrH * 3 + (SET_COUNT + CHART_TYPE_COUNT) * rowH;
             if (by + bh > H) bh = H - by;
             r->box.left = bx; r->box.top = by;
             r->box.right = bx + bw; r->box.bottom = by + bh;
-            r->count = OVL_SET_FIRST + SET_COUNT;
+            r->count = OVL_TYPE_FIRST + CHART_TYPE_COUNT;
             int y = by + pad;
-            for (int k = 0; k < SET_COUNT; ++k) {
-                if (k == 0 || k == SET_CHART_ROWS) {
-                    RECT* h = (k == 0) ? &r->symHdr : &r->ivHdr;
+            for (int k = 0; k < SET_COUNT + CHART_TYPE_COUNT; ++k) {
+                if (k == 0 || k == SET_CHART_ROWS || k == SET_COUNT) {
+                    RECT* h = (k == 0) ? &r->symHdr : (k == SET_COUNT) ? &r->typeHdr : &r->ivHdr;
                     h->left = bx + pad; h->right = bx + bw - pad;
                     h->top = y; h->bottom = y + hdrH;
+                    if (h->bottom > r->box.bottom) h->bottom = r->box.bottom;
+                    if (h->top >= h->bottom) { h->left = h->right = h->top = h->bottom = 0; }
                     y += hdrH;
                 }
-                RECT* q = &r->rows[OVL_SET_FIRST + k];
+                RECT* q = &r->rows[OVL_SET_FIRST + k];   // the types follow at OVL_TYPE_FIRST
                 q->left = bx + pad; q->right = bx + bw - pad;
                 q->top = y; q->bottom = y + rowH;
                 if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
@@ -2749,9 +2800,40 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
         DrawTextW(hdc, set ? L"CHART" : L"SYMBOL",        -1, &h1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         DrawTextW(hdc, set ? L"APPEARANCE" : L"INTERVAL", -1, &h2, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
+    // Phase 49: CHART TYPE, with its key right-aligned where the rows above
+    // have theirs - C steps through the four rows under it, it picks none
+    // of them, so it stands on the heading and not on a row.
+    if (r.typeHdr.right > r.typeHdr.left) {
+        RECT h3 = r.typeHdr, k3 = r.typeHdr;
+        h3.left += Dp(6);
+        k3.right -= Dp(8);
+        DrawTextW(hdc, L"CHART TYPE", -1, &h3, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        DrawTextW(hdc, CHART_TYPE_KEY, -1, &k3, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+    }
 
     for (int i = 0; i < r.count; ++i) {
         if (r.rows[i].right <= r.rows[i].left) continue;   // not in this layout
+        if (i >= OVL_TYPE_FIRST) {
+            // A chart type (phase 49): a radio group, so the current type is
+            // marked as a selection is everywhere else (phase 45) - the
+            // accent row with light text - and not with a check box, which
+            // would read as four switches. The label lines up with the
+            // settings' labels above it.
+            int t = i - OVL_TYPE_FIRST;
+            BOOL cur = (t == ChartTypeNow(ctx));
+            if (cur) {
+                SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.accent, a));
+                FillRect(hdc, &r.rows[i], (HBRUSH)GetStockObject(DC_BRUSH));
+            } else if (i == ctx->overlayHot) {
+                HBRUSH brHot = CreateSolidBrush(Blend(ctx->sty.clr.bg, ctx->sty.clr.boxEdge, a / 2));
+                FillRect(hdc, &r.rows[i], brHot);
+                DeleteObject(brHot);
+            }
+            RECT t1 = r.rows[i]; t1.left += Dp(6) + Dp(11) + Dp(8);
+            SetTextColor(hdc, Blend(ctx->sty.clr.bg, cur ? ctx->sty.clr.onAccent : ctx->sty.clr.text, a));
+            DrawTextW(hdc, CHART_TYPE_LABEL[t], -1, &t1, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            continue;
+        }
         if (i >= OVL_SET_FIRST) {
             // A setting (phase 42): a check box and its label. Checked is
             // the accent with a white tick, as the selected range cell.
@@ -3776,6 +3858,26 @@ static void SetLightTheme(AppContext* ctx, BOOL on) {
     if (ctx->hPopup) InvalidateRect(ctx->hPopup, NULL, FALSE);
 }
 
+// The chart type (phase 49), for the mode we are in: from the settings menu,
+// the C key and the tray menu. A drawing choice like the overlays, so not
+// through ApplyConfigChoice - the candles stay. The price axis has a new
+// target (the line and the mountain scale on the closes, PriceRangeFor), and
+// on a visible surface the clock eases it there, as after a wheel notch;
+// dispValid is left alone, or the axis would jump. Hidden, nothing is
+// eased: the next open snaps (TogglePopup clears dispValid, and SyncDisp
+// reads ch.chartType). No geometry changes, so the watermark stays.
+static void SetChartType(AppContext* ctx, int t) {
+    if (t < 0 || t >= CHART_TYPE_COUNT || ChartTypeNow(ctx) == t) return;
+    if (g_desktopMode) ctx->chartTypeDesk = t;
+    else               ctx->chartType     = t;
+    ctx->ch.chartType = t;
+    SaveConfig(ctx);
+    if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
+        StartAnim(ctx->hPopup);
+        InvalidateRect(ctx->hPopup, NULL, FALSE);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Price alerts (phase 23). Everything here runs on the UI thread and touches
 // only UI-owned fields; the lock is taken only to read the reference price.
@@ -3983,6 +4085,13 @@ static void OpenOverlay(HWND hwnd, int kind, BOOL byKey) {
 // and the menu closes; -1 - a click outside every row - closes it without a
 // change.
 static void OverlayPick(HWND hwnd, int hit) {
+    // A chart type (phase 49) is picked like a setting: the menu stays open,
+    // and the chart behind it eases to the new axis.
+    if (hit >= OVL_TYPE_FIRST) {
+        SetChartType(&g_Ctx, hit - OVL_TYPE_FIRST);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
     if (hit >= OVL_SET_FIRST) {
         SettingToggle(&g_Ctx, hit - OVL_SET_FIRST);
         InvalidateRect(hwnd, NULL, FALSE);
@@ -4969,7 +5078,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // view, min and max x100, as the clock computes it - -1 with
                 // an empty buffer. With 31/32 a probe sees that the display
                 // settles on the target of the type drawn.
-                case 90: r = g_desktopMode ? g_Ctx.chartTypeDesk : g_Ctx.chartType; break;
+                case 90: r = ChartTypeNow(&g_Ctx); break;
                 case 91: r = g_Ctx.ch.chartType; break;
                 case 92: case 93:
                     if (g_Ctx.candleCount > 0 && pvc > 0) {
@@ -5117,7 +5226,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     tn = g_Ctx.candleCount;
                     GetView(&g_Ctx.ch, g_Ctx.candleCount, &tvs, &tvc);
                     if (tn > 0 && tvc > 0) {
-                        PriceRange(g_Ctx.candles, tvs, tvc, &tMin, &tMax);
+                        // Phase 49: the axis of the type drawn - the same
+                        // PriceRangeFor as SyncDisp's snap. With PriceRange
+                        // here a line would snap to its closes on the first
+                        // frame and then ease out to the wicks' high and low.
+                        PriceRangeFor(g_Ctx.candles, tvs, tvc, g_Ctx.ch.chartType, &tMin, &tMax);
                         tVol = VolumeMax(g_Ctx.candles, tvs, tvc);   // phase 21
                     }
                     LeaveCriticalSection(&g_Ctx.lock);
@@ -5520,7 +5633,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // - symbol, interval, settings - or, in the right-click picker,
             // to the other column. S, B and G go to their menu, or close it
             // when it is the one open. The keys a menu shows work in it: 1..7
-            // in the intervals, V M I T in the settings. Esc closes, below.
+            // in the intervals, V M I T and C (phase 49) in the settings. Esc
+            // closes, below.
             if (!g_desktopMode && g_Ctx.overlayOpen && !ctrl) {
                 RECT rcK;
                 GetClientRect(hwnd, &rcK);
@@ -5577,6 +5691,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                             return 0;
                         }
                     }
+                    // C (phase 49): the next chart type, the menu open, as
+                    // the key the CHART TYPE heading shows.
+                    if (wParam == (WPARAM)CHART_TYPE_KEY[0]) {
+                        OverlayPick(hwnd, OVL_TYPE_FIRST + (ChartTypeNow(&g_Ctx) + 1) % CHART_TYPE_COUNT);
+                        return 0;
+                    }
                 }
             }
             // Navigation in the chart (phase 20), through the same
@@ -5627,6 +5747,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // T (phase 40): the light theme, as the tray menu's item.
                 if (!ctrl && wParam == 'T') {
                     SetLightTheme(&g_Ctx, ThemeNow(&g_Ctx) != &APP_THEME_LIGHT);
+                    return 0;
+                }
+                // C (phase 49): the next chart type - candles, OHLC bars,
+                // line, mountain and round again. Without Ctrl, which stays
+                // free. A held C does not spin through them (auto-repeat is
+                // dropped above for every letter), and a drag owns the keys.
+                if (!ctrl && wParam == 'C') {
+                    SetChartType(&g_Ctx, (ChartTypeNow(&g_Ctx) + 1) % CHART_TYPE_COUNT);
                     return 0;
                 }
                 // Shift+1..8 (phase 41): the ranges in the pills' order.
@@ -6303,6 +6431,9 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     ctx->ch.dispVolF = ShowVolNow(ctx) ? 1.0 : 0.0;
     ctx->ch.dispIndF = ShowIndNow(ctx) ? 1.0 : 0.0;
     ctx->ch.dispRsiF = ShowRsiNow(ctx) ? 1.0 : 0.0;
+    // And the chart type (phase 49), before TogglePopup: the new surface's
+    // first frame snaps its axis with it (SyncDisp).
+    ctx->ch.chartType = ChartTypeNow(ctx);
 
     TogglePopup(ctx, hInst);
 }
@@ -6361,6 +6492,20 @@ static HMENU BuildRangeMenu(void) {
     return h;
 }
 
+// The chart types (phase 49): a radio group, checked on the mode's type, the
+// names the settings menu's CHART TYPE rows have. The key, C, is on the
+// submenu's own item (see BuildTrayMenu): it steps through the list and
+// picks no one item of it.
+static HMENU BuildChartTypeMenu(void) {
+    HMENU h = CreatePopupMenu();
+    if (!h) return NULL;
+    for (int t = 0; t < CHART_TYPE_COUNT; t++)
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_TYPE_FIRST + t), CHART_TYPE_LABEL[t]);
+    CheckMenuRadioItem(h, ID_TRAY_TYPE_FIRST, ID_TRAY_TYPE_FIRST + CHART_TYPE_COUNT - 1,
+                       (UINT)(ID_TRAY_TYPE_FIRST + ChartTypeNow(&g_Ctx)), MF_BYCOMMAND);
+    return h;
+}
+
 // One of the settings menu's choices as a tray item (phase 45): the same
 // name and key as the gear menu's row, and the same check - SettingOn reads
 // the mode's choice, as the tray items always did. The key only in panel
@@ -6380,6 +6525,7 @@ static void AppendSettingItem(HMENU h, UINT id, int k) {
 //       Symbol       S    >   (o) BTC/USDT  ( ) ETH/USDT  ...
 //       Interval     B    >   (o) 1m  1   ( ) 5m  2  ...
 //       Range             >   (o) 1D  Shift+1  ...  ( ) None
+//       Chart type   C    >   (o) Candles  ( ) OHLC bars  ( ) Line  ( ) Mountain
 //       Volume ... Light theme   V M I T, checked
 //       Clear price alerts (n)
 //   ---------------------------
@@ -6421,6 +6567,11 @@ static HMENU BuildTrayMenu(void) {
         if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  g_desktopMode ? L"Interval" : L"Interval\tB");
         HMENU hRg = BuildRangeMenu();   // phase 41
         if (hRg)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRg,  L"Range");
+        // Phase 49: the chart type for the mode we are in - on the desktop
+        // the surface's own, which the tray is the only way to change.
+        HMENU hCt = BuildChartTypeMenu();
+        if (hCt)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hCt,
+                              g_desktopMode ? L"Chart type" : L"Chart type\t" CHART_TYPE_KEY);
         // The VOL toggle (phase 22; desktop mode has no toolbar), the MA
         // toggle (phase 25; since phase 27 also VWAP and today's high/low),
         // the RSI band (phase 39) and the light theme (phase 40), each for
@@ -6615,6 +6766,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     if (r == RANGE_COUNT) r = -1;
                     if (r == g_Ctx.rangeIdx && (r < 0 || g_Ctx.rangeWant > 0)) return 0;
                     SelectRange(&g_Ctx, r);
+                    return 0;
+                }
+                // The chart types (phase 49), a radio group: the checked one
+                // picked again changes nothing (SetChartType).
+                if (id >= ID_TRAY_TYPE_FIRST && id < ID_TRAY_TYPE_FIRST + CHART_TYPE_COUNT) {
+                    SetChartType(&g_Ctx, id - ID_TRAY_TYPE_FIRST);
                     return 0;
                 }
             }
@@ -7197,6 +7354,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.ch.dispVolF = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
     g_Ctx.ch.dispIndF = ShowIndNow(&g_Ctx) ? 1.0 : 0.0;
     g_Ctx.ch.dispRsiF = ShowRsiNow(&g_Ctx) ? 1.0 : 0.0;
+    // The chart type (phase 49), for the same reason: the first frame
+    // draws and scales with it. A duplicate reads the panel's from the
+    // registry here, as it reads the theme and the overlays - SaveConfig
+    // writes every change at once, so that is the type of the panel that
+    // [ + ] was clicked on, unless that panel was itself a duplicate whose
+    // own changes are never saved.
+    g_Ctx.ch.chartType = ChartTypeNow(&g_Ctx);
     // The price alerts (phase 23). After the --dup parsing: LoadAlerts skips
     // duplicates, and g_isDuplicate is known only here. Before the thread:
     // the first price must be checked against the alerts from the last run.
