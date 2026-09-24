@@ -39,6 +39,7 @@
 #define ID_TRAY_INDICATORS 1007   // moving averages on/off (phase 25)
 #define ID_TRAY_RSI      1008   // the RSI band on/off (phase 39)
 #define ID_TRAY_THEME    1009   // the light theme on/off (phase 40)
+#define ID_TRAY_OPEN     1010   // show the panel, the bold default item (phase 47)
 // Symbol and interval from the tray menu (phase 17). Item i gets FIRST + i.
 // The ranges are 100 wide; #error below the tables ensures they never overlap.
 #define ID_TRAY_SYMBOL_FIRST   1100
@@ -192,7 +193,9 @@ static const IntervalDef INTERVALS[] = {
 // size can be picked afterwards and the range stays - 1M on 1h is 720
 // candles - unless it cannot be shown there (fewer than MIN_VIEW candles,
 // or more than the buffer holds: 1Y on 1m), which ends it. YTD counts from
-// 1 January 00:00 UTC; Max is as much as the exchange and the buffer give.
+// 1 January 00:00 UTC and grows with the year (phase 47: it is anchored,
+// the others are durations - see RangeWantAt); Max is as much as the
+// exchange and the buffer give.
 #define RANGE_DAYS_YTD  (-1)
 #define RANGE_DAYS_MAX  (-2)
 typedef struct { const wchar_t* label; int days; long long ivMs; } RangeDef;
@@ -213,7 +216,7 @@ static const RangeDef RANGES[] = {
 C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
-C_ASSERT(RANGE_COUNT    <= ID_TRAY_RANGE_W);
+C_ASSERT(RANGE_COUNT + 1 <= ID_TRAY_RANGE_W);   // + 1: "None" (phase 47)
 C_ASSERT(ID_TRAY_INTERVAL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_PERIOD_FIRST);
 
 #define ALERT_TAU_FLASH    900.0  // the afterglow when an alert fires (ms)
@@ -303,6 +306,10 @@ typedef struct {
     // stay there after the backfill.
     int  rangeIdx;
     int  rangeWant;
+    // The home is year-to-date (phase 47), set with rangeWant: the worker
+    // thread counts YTD's want again with every candle it merges, as the
+    // year grows. Lock-protected like rangeWant, which it qualifies.
+    BOOL rangeYtd;
     // The trading day (phase 42): Binance's statistics for the UTC day, as
     // Bloomberg's quote line shows the day's open, high, low and volume.
     // UTC, so it is the day HOD/LOD/PDC draw. Lock-protected: the worker
@@ -330,6 +337,11 @@ typedef struct {
     // and the hover. ch.viewStart/viewCount/followLive are lock-protected like
     // candles[]; the rest is UI-owned. See chart.h.
     ChartState ch;
+    // The pointer's x when the crosshair was last set from it (phase 47);
+    // ch.hoverY is its y. UI-owned. The display eases after a wheel notch,
+    // a double-click or a new candle, and the candle under a resting pointer
+    // changes with it: the clock asks HitCandle again at this point.
+    int  hoverX;
     BOOL panning;        // dragging the chart sideways right now
     int  panAnchorX;     // mouse X when the panning started
 
@@ -367,7 +379,7 @@ typedef struct {
     // --- Worker thread ---
     // The lock covers candles[], candleCount, viewStart, viewCount,
     // followLive, lastPrice, hPopup, frontShift, histPending, histDone,
-    // rangeWant (phase 41) and hSession (phase 44: WinMain closes it at exit
+    // rangeWant (phase 41), rangeYtd (phase 47) and hSession (phase 44: WinMain closes it at exit
     // while the worker may still run). hConnect is the worker's alone.
     // Everything else is touched only by the UI thread.
     CRITICAL_SECTION lock;
@@ -417,6 +429,12 @@ typedef struct {
     // the worker thread. Hit detection hangs on THIS, not on any fade
     // level - the buttons have no fade, they change color instantly.
     int    btnHot;
+    // The caption button the left button went down on, -1 for none (phase
+    // 47). It acts on the release, and only if the release is on the same
+    // button - Windows' own caption buttons: a press can be taken back by
+    // sliding off. While it is down, it lights only while the pointer is on
+    // it, and nothing else in the panel takes hover. UI-owned.
+    int    btnDown;
     // The toolbar in the header's row 2 (phase 22). tbHot is the pill the
     // mouse is over, -1 for none - same rule as btnHot: logical state, no
     // fade. showVol is the user's choice and is saved in the registry;
@@ -638,6 +656,9 @@ static DWORD    g_probeAccessType   = 0;
 static int      g_probeEmptyMsg     = 0;
 // 79 on the panel: the seconds that status text counts down (-1 = none).
 static int      g_probeEmptySecs    = -1;
+// Phase 47, 85 on the panel: ticks of the animation clock since start. A
+// timer that should be dead but is not shows as a count that keeps rising.
+static volatile LONG g_probeAnimTicks = 0;
 #endif
 
 
@@ -653,6 +674,50 @@ static long long NowUnixMs(void) {
 // statistics and today's session (phase 27) are counted in.
 static long long UtcDayNow(void) {
     return NowUnixMs() / 86400000LL;
+}
+
+// How many candles of ivMs a range's home view holds (phase 41; split out
+// of RangeWantFor in phase 47, so the worker thread can ask too). days is a
+// RANGES[].days value; 0 when the range cannot be shown at this bar size
+// (fewer than MIN_VIEW candles, or more than the buffer holds).
+//
+// A duration rounds UP (phase 47): 5Y is 1826 days, 260.86 weeks, and the
+// truncation gave 260 - the view ended short of the five years the table
+// promises (261). 1Y on 1w is 53 weeks now, for the same reason.
+//
+// YTD is anchored, not a duration: from the candle 1 January 00:00 UTC opens
+// in to the newest one, which opens at lastOpenMs. The count grows by one
+// with each new day at 1d - up to phase 46 it was computed once, and a
+// followed view kept that count, so every midnight UTC pushed 1 January out
+// while the header still said YTD. Rounded up, so the week that began before
+// 1 January is in at 1w. With no candle yet (lastOpenMs 0: the buffer is
+// being emptied for a new bar size), up to now by the clock - the same count
+// once the forming candle is the newest. A buffer whose newest candle is
+// from before 1 January (the year has just turned) counts nothing: 0.
+static int RangeWantAt(int days, long long ivMs, long long lastOpenMs) {
+    if (ivMs <= 0) return 0;
+    if (days == RANGE_DAYS_MAX) return MAX_CANDLES;
+    long long want;
+    if (days == RANGE_DAYS_YTD) {
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        SYSTEMTIME jan = { 0 };
+        jan.wYear = st.wYear; jan.wMonth = 1; jan.wDay = 1;
+        FILETIME ft;
+        if (!SystemTimeToFileTime(&jan, &ft)) return 0;
+        ULONGLONG t = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        long long jan1 = (long long)((t - 116444736000000000ULL) / 10000ULL);
+        if (lastOpenMs <= 0)
+            want = (NowUnixMs() - jan1) / ivMs + 1;   // + 1: the candle still forming
+        else if (lastOpenMs < jan1)
+            want = 0;
+        else
+            want = (lastOpenMs - jan1 + ivMs - 1) / ivMs + 1;
+    } else {
+        want = ((long long)days * 86400000LL + ivMs - 1) / ivMs;
+    }
+    if (want < MIN_VIEW || want > MAX_CANDLES) return 0;
+    return (int)want;
 }
 
 // ---------------------------------------------------------------------------
@@ -1340,6 +1405,16 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     // first opening showed 8 candles instead of 300, in every build since
     // phase 1 - and every duplicate from [ + ] opens just before it has data.
     if (ctx->ch.followLive) {
+        // YTD (phase 47) holds one more candle with each new day, so 1
+        // January stays the first; a duration (1D ... 5Y) keeps its count
+        // and moves on. At the turn of the year the count is 0 until a week
+        // of the new one is in: the home is left, and the view keeps its
+        // size, as after a pan. The cell goes out and the header shows the
+        // span; R or the cell asks again, and ends the range then.
+        if (ctx->rangeWant > 0 && ctx->rangeYtd && ctx->candleCount > 0) {
+            ctx->rangeWant = RangeWantAt(RANGE_DAYS_YTD, ctx->intervalMs,
+                                         ctx->candles[ctx->candleCount - 1].openTime);
+        }
         if (ctx->rangeWant > 0) {
             // At home in a range (phase 41): as many as it wants, up to what
             // the buffer holds - the backfill brings the rest.
@@ -2183,6 +2258,25 @@ static int ButtonHit(const RECT* btns, int x, int y) {
     return -1;
 }
 
+// The caption button at (x, y) on a panel W wide (phase 47). Maximized, the
+// panel's top and right edges are the screen's, and the buttons reach them
+// as Windows' own do (Fitts's law): a pointer flung into the top right
+// corner is on the close cross. Before, the 6 px above the buttons and the
+// 8 px right of the cross were caption, and the fling moved the window
+// instead. Restored, those margins are the resize border, and the boxes are
+// the drawn ones. Every hit test of the buttons comes here - WM_NCHITTEST,
+// hover, press, release and the double-click - while the drawing keeps
+// ButtonLayout's boxes (pitfall 14: one source for what a click hits).
+static int ButtonHitAt(int W, BOOL zoomed, int x, int y) {
+    RECT b[BTN_COUNT];
+    ButtonLayout(W, b);
+    if (zoomed) {
+        for (int i = 0; i < BTN_COUNT; ++i) b[i].top = 0;
+        b[BTN_CLOSE].right = W;
+    }
+    return ButtonHit(b, x, y);
+}
+
 // The button row's combined rectangle. Derived from ButtonLayout, not computed
 // anew - pitfall 14 applies here too: if we invalidate a different area than
 // the one we paint, a button is left un-updated.
@@ -2654,8 +2748,25 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
             DeleteObject(brHot);
         }
         COLORREF fg = active ? ctx->sty.clr.onAccent : ctx->sty.clr.text;
-        SetTextColor(hdc, Blend(ctx->sty.clr.bg, fg, a));
         RECT t = r.rows[i]; t.left += Dp(6);
+        // The interval's key, 1..7 (phase 47), right-aligned as the
+        // settings' keys are (phase 45): the keys pick an interval with the
+        // list closed and open. Dim, and on the accent row its own text
+        // color. Left out if the label would reach it, as there.
+        if (!isSym) {
+            wchar_t key[2] = { (wchar_t)(L'1' + idx), 0 };
+            RECT k1 = r.rows[i]; k1.right -= Dp(8);
+            SIZE ks = { 0, 0 }, ls = { 0, 0 };
+            GetTextExtentPoint32W(hdc, key, 1, &ks);
+            GetTextExtentPoint32W(hdc, lbl, (int)wcslen(lbl), &ls);
+            k1.left = k1.right - ks.cx;
+            if (t.left + ls.cx + Dp(HDR_GAP) <= k1.left) {
+                SetTextColor(hdc, Blend(ctx->sty.clr.bg, active ? ctx->sty.clr.onAccent : ctx->sty.clr.dim, a));
+                DrawTextW(hdc, key, 1, &k1, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+                t.right = k1.left - Dp(HDR_GAP);
+            }
+        }
+        SetTextColor(hdc, Blend(ctx->sty.clr.bg, fg, a));
         DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
@@ -2863,8 +2974,18 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         // hover color can be left underneath, whatever the DC held before.
         // Both paths in PaintPopup come here, so the fast path and the slow
         // one still paint identically.
-        FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->sty.brBox)
-                             : ctx->sty.brBg);
+        // Pressed (phase 47: the button acts on the release) is one step
+        // stronger than hover, as on Windows' caption buttons: the range
+        // cells' surface, and the close cross's red a fifth toward the
+        // background.
+        if (hot && ctx->btnDown == i) {
+            SetDCBrushColor(hdc, (i == BTN_CLOSE) ? Blend(ctx->sty.clr.bg, ctx->sty.clr.hot, 204)
+                                                  : ctx->sty.clr.boxEdge);
+            FillRect(hdc, r, (HBRUSH)GetStockObject(DC_BRUSH));
+        } else {
+            FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->sty.brBox)
+                                 : ctx->sty.brBg);
+        }
 
         SelectObject(hdc, hot ? ((i == BTN_CLOSE) ? ctx->penBtnWhite : ctx->penBtnHot)
                               : ctx->penBtn);
@@ -3412,26 +3533,11 @@ static void StartAnim(HWND hwnd) {
 }
 
 // How many candles a range's home view holds at a bar size (phase 41); 0
-// when the range cannot be shown there. See RANGES.
-static int RangeWantFor(int r, long long ivMs) {
-    if (r < 0 || r >= RANGE_COUNT || ivMs <= 0) return 0;
-    if (RANGES[r].days == RANGE_DAYS_MAX) return MAX_CANDLES;
-    long long want;
-    if (RANGES[r].days == RANGE_DAYS_YTD) {
-        SYSTEMTIME st;
-        GetSystemTime(&st);
-        SYSTEMTIME jan = { 0 };
-        jan.wYear = st.wYear; jan.wMonth = 1; jan.wDay = 1;
-        FILETIME ft;
-        if (!SystemTimeToFileTime(&jan, &ft)) return 0;
-        ULONGLONG t = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-        long long jan1 = (long long)((t - 116444736000000000ULL) / 10000ULL);
-        want = (NowUnixMs() - jan1) / ivMs + 1;   // + 1: the candle still forming
-    } else {
-        want = (long long)RANGES[r].days * 86400000LL / ivMs;
-    }
-    if (want < MIN_VIEW || want > MAX_CANDLES) return 0;
-    return (int)want;
+// when the range cannot be shown there. See RANGES and RangeWantAt.
+// lastOpenMs is the newest candle's open, 0 when there is none.
+static int RangeWantFor(int r, long long ivMs, long long lastOpenMs) {
+    if (r < 0 || r >= RANGE_COUNT) return 0;
+    return RangeWantAt(RANGES[r].days, ivMs, lastOpenMs);
 }
 
 // Switches symbol or interval. Bumps configGen and empties the buffer in the
@@ -3465,8 +3571,9 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     // SAME critical section as the emptying: the next MergeCandles fills the
     // view, and with rangeWant set after the lock it would first get the
     // 300-candle default. A range that cannot be shown at the new bar size
-    // ends here.
-    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs);
+    // ends here. The buffer is empty, so YTD counts by the clock.
+    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs, 0);
+    ctx->rangeYtd  = (ctx->rangeIdx >= 0 && RANGES[ctx->rangeIdx].days == RANGE_DAYS_YTD);
     if (ctx->rangeWant == 0) ctx->rangeIdx = -1;
     LeaveCriticalSection(&ctx->lock);
 
@@ -3720,6 +3827,25 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
+// The price column's hover for a pointer at row axY, -1 = not in the column.
+// WM_MOUSEMOVE sets it, and from phase 47 the clock too, whenever the axis
+// eases under a pointer that rests: a tag that slid away from the pointer
+// stayed red - "a click removes me" - while the click, which asks
+// AxisAlertAt afresh, set a new alert. A fresh tag the pointer is no longer
+// on becomes a tag like the others, whichever of the two moved. TRUE when
+// what is drawn changes.
+static BOOL AxisHoverSet(const ChartRect* g, int axY) {
+    int aHot = (axY >= 0) ? AxisAlertAt(g, axY) : -1;
+    if (g_Ctx.alertFresh != 0.0 &&
+        (aHot < 0 || g_Ctx.alerts[g_Ctx.symIdx][aHot] != g_Ctx.alertFresh)) {
+        g_Ctx.alertFresh = 0.0;
+    }
+    BOOL changed = (axY != g_Ctx.axisHotY || aHot != g_Ctx.alertHot);
+    g_Ctx.axisHotY = axY;
+    g_Ctx.alertHot = aHot;
+    return changed;
+}
+
 // Click on a pill in the toolbar. Only WM_LBUTTONDOWN reaches here: from
 // phase 44 WM_LBUTTONDBLCLK swallows the second click of a double-click on a
 // cell (it deselected the range the first click picked). Before that both
@@ -3728,18 +3854,62 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
 // configGen and the thread are handled exactly as from the overlay and the
 // tray menu; a click on the active interval is a no-op there. The symbol cell
 // opens the existing overlay - no new menu, no new hit-test code.
+// Opens a menu: 0 the picker, 1 the interval dropdown, 2 the settings menu,
+// 3 the symbol dropdown. From the keyboard (phase 47) the row the arrows
+// start from is the current choice, as in a Windows dropdown - the accent
+// row, so the list opens showing where Enter would leave things - or the
+// first setting; from the mouse, none, until the pointer is on a row.
+static void OpenOverlay(HWND hwnd, int kind, BOOL byKey) {
+    g_Ctx.overlayKind = kind;
+    g_Ctx.overlayOpen = TRUE;
+    g_Ctx.overlayHot  = !byKey ? -1
+                      : (kind == 1) ? SYMBOL_COUNT + g_Ctx.ivIdx
+                      : (kind == 2) ? OVL_SET_FIRST
+                      : g_Ctx.symIdx;
+    g_Ctx.ch.hoverIdx = -1;
+    g_Ctx.tbHot       = -1;   // no cell lights up while the overlay owns the mouse
+    StartAnim(hwnd);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// A row of the open menu is picked, by a click or by Enter (phase 47: one
+// path for both). A setting toggles and the menu stays open (phase 42), so
+// several can be changed in one visit; a symbol or an interval is applied
+// and the menu closes; -1 - a click outside every row - closes it without a
+// change.
+static void OverlayPick(HWND hwnd, int hit) {
+    if (hit >= OVL_SET_FIRST) {
+        SettingToggle(&g_Ctx, hit - OVL_SET_FIRST);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+    if (hit >= 0) ApplyConfigChoice(&g_Ctx, hit);
+    g_Ctx.overlayOpen = FALSE;
+    g_Ctx.overlayHot  = -1;
+    StartAnim(hwnd);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// The next row of the open menu from row from, one step in dir (+1 down, -1
+// up), skipping the rows this layout leaves empty (the symbol rows of the
+// interval dropdown, for one). From -1 - nothing highlighted - the first or
+// the last. The ends stop, as in a dropdown list; they do not wrap.
+static int OverlayStep(const OverlayRects* r, int from, int dir) {
+    int i = from;
+    for (int k = 0; k < r->count; ++k) {
+        i = (i < 0) ? ((dir > 0) ? 0 : r->count - 1) : i + dir;
+        if (i < 0 || i >= r->count) return from;
+        if (r->rows[i].right > r->rows[i].left) return i;
+    }
+    return from;
+}
+
 static void OnToolbarClick(HWND hwnd, int th) {
     if (th == TBAR_SYM || th == TBAR_IV || th == TBAR_GEAR) {
         // The symbol dropdown (phase 45; the two-column picker before), the
         // interval dropdown (phase 41) or the settings menu (phase 42). The
         // picker (kind 0) is the right-click's alone now.
-        g_Ctx.overlayKind = (th == TBAR_IV) ? 1 : (th == TBAR_GEAR) ? 2 : 3;
-        g_Ctx.overlayOpen = TRUE;
-        g_Ctx.overlayHot  = -1;
-        g_Ctx.ch.hoverIdx    = -1;
-        g_Ctx.tbHot       = -1;   // no cell lights up while the overlay owns the mouse
-        StartAnim(hwnd);
-        InvalidateRect(hwnd, NULL, FALSE);
+        OpenOverlay(hwnd, (th == TBAR_IV) ? 1 : (th == TBAR_GEAR) ? 2 : 3, FALSE);
     } else if (th >= TBAR_RANGE_FIRST && th < TBAR_IV) {
         SelectRange(&g_Ctx, th - TBAR_RANGE_FIRST);
     }
@@ -3755,7 +3925,9 @@ static void OnToolbarClick(HWND hwnd, int th) {
 // double-click, Esc and opening the panel all go back to it.
 static void ResetView(AppContext* ctx) {
     EnterCriticalSection(&ctx->lock);
-    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs);
+    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs,
+                                  (ctx->candleCount > 0) ? ctx->candles[ctx->candleCount - 1].openTime : 0);
+    ctx->rangeYtd  = (ctx->rangeIdx >= 0 && RANGES[ctx->rangeIdx].days == RANGE_DAYS_YTD);
     if (ctx->rangeWant == 0) ctx->rangeIdx = -1;
     int home = (ctx->rangeWant > 0) ? ctx->rangeWant : DEFAULT_VIEW;
     ctx->ch.viewCount  = 0;
@@ -3787,10 +3959,11 @@ static BOOL ViewIsDefault(AppContext* ctx) {
 // It sets its default bar size - through ApplyConfigChoice, which empties
 // the buffer and sets the want in one critical section - or, at the same
 // bar size, eases the view home from where it is. Picking the range that is
-// already selected, while at home, ends it: the free 300-candle view.
+// already selected, while at home, ends it: the free 300-candle view. -1
+// (the tray menu's "None", phase 47) ends the selected one from anywhere.
 static void SelectRange(AppContext* ctx, int r) {
-    if (r < 0 || r >= RANGE_COUNT) return;
-    if (ctx->rangeIdx == r && ctx->rangeWant > 0) {
+    if (r < -1 || r >= RANGE_COUNT) return;
+    if (r < 0 || (ctx->rangeIdx == r && ctx->rangeWant > 0)) {
         ctx->rangeIdx = -1;
         ResetView(ctx);
     } else {
@@ -3821,6 +3994,7 @@ static void SelectRange(AppContext* ctx, int r) {
 static void HidePanel(HWND hwnd) {
     g_Ctx.ch.hoverIdx = -1;
     g_Ctx.btnHot   = -1;
+    g_Ctx.btnDown  = -1;   // phase 47
     g_Ctx.tbHot    = -1;
     g_Ctx.alertHot = -1;
     g_Ctx.axisHotY = -1;
@@ -3887,6 +4061,7 @@ static void SpawnInstance(HWND hwnd) {
 // (Ctrl+N, Ctrl+M, F11, Ctrl+W) take the same path as the click. Up to phase
 // 43 the second click of a double-click came here too; from phase 44
 // WM_LBUTTONDBLCLK swallows it, so [ + ] no longer starts two instances.
+// From phase 47 the click comes from WM_LBUTTONUP, the keys at once.
 static void OnButtonClick(HWND hwnd, int bh) {
     switch (bh) {
         case BTN_NEW:
@@ -4065,19 +4240,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // the same rectangle, so x can be used directly against
                 // ButtonLayout and OverlayLayout.
                 //
-                // The symbol dropdown (phase 45) opens inside this band, over
-                // the range field: its box is client area while it is open,
-                // or a click in a gap between two range cells would start a
-                // window move instead of picking a symbol (pitfall 21).
-                // overlayOpen, not the fade level (pitfall 12).
-                if (g_Ctx.overlayOpen) {
-                    OverlayRects ob;
-                    OverlayLayout(w, h, &ob);
-                    if (PtInRect2(&ob.box, x, y)) return HTCLIENT;
-                }
-                RECT btns[BTN_COUNT];
-                ButtonLayout(w, btns);
-                if (ButtonHit(btns, x, y) >= 0) return HTCLIENT;
+                // While a menu is open the whole band is client area (phase
+                // 47; phase 45 made the open box so, for the symbol dropdown
+                // that opens over the range field). Everywhere else the first
+                // click closes the menu and does nothing more, but on free
+                // header area it was caption: a click there moved the window
+                // with the menu open, and a double-click maximized it. Now
+                // WM_LBUTTONDOWN gets it and closes the menu. overlayOpen,
+                // not the fade level (pitfall 12). The resize border above
+                // keeps resizing.
+                if (g_Ctx.overlayOpen) return HTCLIENT;
+                if (ButtonHitAt(w, IsZoomed(hwnd), x, y) >= 0) return HTCLIENT;
                 // The pills in the toolbar (phase 22) are buttons of the
                 // same kind, with the same requirement: HTCLIENT, otherwise
                 // they are painted and dead, and a click on 5m moves the
@@ -4165,6 +4338,16 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_SIZE:
             g_Ctx.wmValid = FALSE;   // the bitmap is built for the previous size
             InvalidateRect(hwnd, NULL, FALSE);
+            // Restored (phase 47): minimized, the client has no chart, so
+            // the clock skips the easing and dies - an ease cut off by the
+            // minimize stood frozen after the restore until the next fetch,
+            // and an offline counter stood still. The clock picks both up;
+            // with nothing left to move it dies on its first tick. Only for
+            // the published surface: CreateWindowExW sends WM_SIZE too, and a
+            // desktop surface that fails to attach is destroyed before it is
+            // published - its WM_NCDESTROY would not reset animRunning, and
+            // the next surface's clock would never start.
+            if (wParam != SIZE_MINIMIZED && hwnd == g_Ctx.hPopup) StartAnim(hwnd);
             return 0;
 
         case WM_MOUSEMOVE: {
@@ -4192,11 +4375,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // that passes over the header would light the close cross red in
             // the middle of the panning, without it being possible to click
             // it.
+            //
+            // A pressed caption button (phase 47) lights only while the
+            // pointer is on it - slid off, the release will not act - and
+            // owns the mouse until the release: the early return below keeps
+            // the pills, the price column and the crosshair dark, as Windows
+            // does while its own caption button is held.
             {
-                RECT btns[BTN_COUNT];
-                ButtonLayout(rc.right, btns);
-                int bh = (g_Ctx.overlayOpen || g_Ctx.panning)
-                         ? -1 : ButtonHit(btns, mx, my);
+                int bh = ButtonHitAt(rc.right, IsZoomed(hwnd), mx, my);
+                if (g_Ctx.btnDown >= 0) {
+                    if (bh != g_Ctx.btnDown) bh = -1;
+                } else if (g_Ctx.overlayOpen || g_Ctx.panning) {
+                    bh = -1;
+                }
                 if (bh != g_Ctx.btnHot) {
                     g_Ctx.btnHot = bh;
                     // Only the button row is dirty. PaintPopup has a fast
@@ -4207,6 +4398,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     ButtonStrip(rc.right, &strip);
                     InvalidateRect(hwnd, &strip, FALSE);
                 }
+                if (g_Ctx.btnDown >= 0) return 0;
             }
 
             // Pill hover (phase 22). Same place and same guards as the
@@ -4234,24 +4426,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // x > edge: the column x = edge is the line's last pixel, the
             // tags start at edge + 1. The whole surface is dirty: the ghost
             // line runs straight across the chart, like the crosshair.
+            // The cursor that has left the newly set tag makes it a tag like
+            // all the others, red next time (AxisHoverSet).
             {
-                int axY = -1, aHot = -1;
+                int axY = -1;
                 if (!g_Ctx.overlayOpen && !g_Ctx.panning && g_Ctx.ch.dispValid &&
                     mx > g.edge && my >= g.top && my <= g.bottom) {
-                    axY  = my;
-                    aHot = AxisAlertAt(&g, my);
+                    axY = my;
                 }
-                // The cursor has left the newly set tag: from now on it is
-                // a tag like all the others, and turns red next time.
-                if (g_Ctx.alertFresh != 0.0 &&
-                    (aHot < 0 || g_Ctx.alerts[g_Ctx.symIdx][aHot] != g_Ctx.alertFresh)) {
-                    g_Ctx.alertFresh = 0.0;
-                }
-                if (axY != g_Ctx.axisHotY || aHot != g_Ctx.alertHot) {
-                    g_Ctx.axisHotY = axY;
-                    g_Ctx.alertHot = aHot;
-                    InvalidateRect(hwnd, NULL, FALSE);
-                }
+                if (AxisHoverSet(&g, axY)) InvalidateRect(hwnd, NULL, FALSE);
             }
 
             // The guard comes after the TrackMouseEvent arming above. If we
@@ -4310,6 +4493,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                                                ? g_Ctx.ch.viewCount : g_Ctx.candleCount);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, mx, my);
                     g_Ctx.ch.hoverY   = my;
+                    g_Ctx.hoverX      = mx;
                 }
                 LeaveCriticalSection(&g_Ctx.lock);
                 if (atWall) RequestHistory(&g_Ctx);   // phase 18
@@ -4322,6 +4506,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int idx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, mx, my);
             LeaveCriticalSection(&g_Ctx.lock);
 
+            g_Ctx.hoverX = mx;   // phase 47: the clock asks again here while the display eases
             if (idx != g_Ctx.ch.hoverIdx || (idx >= 0 && my != g_Ctx.ch.hoverY)) {
                 g_Ctx.ch.hoverIdx = idx;
                 g_Ctx.ch.hoverY   = my;
@@ -4333,7 +4518,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // Ctrl + mouse wheel zooms about the point under the cursor. Note
         // that lParam here is SCREEN coordinates, unlike WM_MOUSEMOVE.
         case WM_MOUSEWHEEL: {
-            if (g_Ctx.overlayOpen) return 0;
+            // Not during a drag either (phase 47): the drag measures from its
+            // anchor, so a notch moved the view only until the next mouse
+            // move, which put it back where the finger says - a jump each way.
+            if (g_Ctx.overlayOpen || g_Ctx.panning) return 0;
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);   // lParam is SCREEN coordinates here
 
@@ -4380,7 +4568,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // A view that moved has left the range's home (phase 41).
                 GetView(&g_Ctx.ch, g_Ctx.candleCount, &ws1, &wc1);
                 if (ws1 != ws0 || wc1 != wc0) g_Ctx.rangeWant = 0;
+                // The candle under the pointer NOW; the display has not
+                // moved yet. From phase 47 the clock asks again on every
+                // eased frame, so the crosshair stays under the pointer and
+                // lands on the candle there - before, it rode the candle it
+                // started on away from a pointer that had not moved.
                 g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, pt.x, pt.y);
+                g_Ctx.ch.hoverY   = pt.y;
+                g_Ctx.hoverX      = pt.x;
             }
             LeaveCriticalSection(&g_Ctx.lock);
 
@@ -4496,6 +4691,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     ChartRect gH = PanelGeometry(rcH.right, rcH.bottom);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gH, LOWORD(lParam), HIWORD(lParam));
                     g_Ctx.ch.hoverY   = HIWORD(lParam);
+                    g_Ctx.hoverX      = LOWORD(lParam);
                     InvalidateRect(hwnd, NULL, FALSE);
                     r = g_Ctx.ch.hoverIdx;
                     break;
@@ -4606,6 +4802,50 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // g_probeEmptyMsg.
                 case 78: r = g_probeEmptyMsg; break;
                 case 79: r = g_probeEmptySecs; break;
+                // 80-86 (phase 47): the animation clock is running; the pan
+                // anchor (the view a drag measures from); the menu row under
+                // the pointer or the keyboard; the candle a pointer at
+                // (LOWORD, HIWORD) of lParam would be on now, and the alert a
+                // pointer at row lParam in the price column would be on now -
+                // both without touching the hover, so a probe can compare
+                // them with what the hover says; the clock's ticks since
+                // start; the client size, width << 16 | height.
+                case 80: r = g_Ctx.animRunning; break;
+                case 81: r = g_Ctx.ch.panAnchorView; break;
+                case 82: r = g_Ctx.overlayHot; break;
+                case 83: case 84: {
+                    RECT rcP;
+                    GetClientRect(hwnd, &rcP);
+                    ChartRect gP = PanelGeometry(rcP.right, rcP.bottom);
+                    r = (wParam == 83)
+                        ? HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gP, LOWORD(lParam), HIWORD(lParam))
+                        : AxisAlertAt(&gP, (int)lParam);
+                    break;
+                }
+                case 85: r = (LRESULT)g_probeAnimTicks; break;
+                case 86: {
+                    RECT rcS;
+                    GetClientRect(hwnd, &rcS);
+                    r = ((LRESULT)rcS.right << 16) | (rcS.bottom & 0xFFFF);
+                    break;
+                }
+                // 106 (phase 47): WRITING. A backfill of lParam candles (1-50)
+                // lands, as PrependCandles does it for the worker, with no
+                // repaint after it: the shift is pending until the next frame
+                // or timer tick, the moment a drag can start in.
+                case 106: {
+                    int k = (int)lParam;
+                    if (k < 1 || k > 50 || g_Ctx.candleCount <= 0 ||
+                        g_Ctx.candleCount + k > MAX_CANDLES) break;
+                    Candle pre[50];
+                    for (int i = 0; i < k; ++i) {
+                        pre[i] = g_Ctx.candles[0];
+                        pre[i].openTime -= (long long)(k - i) * g_Ctx.intervalMs;
+                    }
+                    PrependCandles(&g_Ctx, pre, k);
+                    r = g_Ctx.candleCount;
+                    break;
+                }
                 case 74: case 75: case 76: case 77: {
                     RECT rcV;
                     GetClientRect(hwnd, &rcV);
@@ -4652,6 +4892,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // place, and dies once everything has settled - at rest no timer runs.
         case WM_TIMER:
             if (wParam == TIMER_ANIM_ID) {
+#ifdef TICKER_PROBE
+                InterlockedIncrement(&g_probeAnimTicks);
+#endif
                 ULONGLONG now = GetTickCount64();
                 double dt = (double)(now - g_Ctx.lastAnimTick);
                 g_Ctx.lastAnimTick = now;
@@ -4764,12 +5007,33 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                             { &g_Ctx.ch.dispMax,    tMax,        snapY },
                             { &g_Ctx.ch.dispVolMax, tVol,        snapV },
                         };
+                        BOOL viewMoved = FALSE, axisMoved = FALSE;
                         for (int e = 0; e < 5; ++e) {
                             if (*eases[e].v == eases[e].t) continue;
                             *eases[e].v = AnimStep(*eases[e].v, eases[e].t, dt,
                                                    ANIM_TAU_VIEW, eases[e].snap);
                             redraw = TRUE;
                             if (*eases[e].v != eases[e].t) settled = FALSE;
+                            if (e < 2) viewMoved = TRUE;
+                            else if (e < 4) axisMoved = TRUE;
+                        }
+
+                        // The hover follows the display under a pointer that
+                        // rests (phase 47). The candles slide under it after a
+                        // wheel notch, a double-click or a new candle, and the
+                        // crosshair rode the candle it was set on away from
+                        // the pointer until the next mouse move; the keys
+                        // clear it instead, which stays so. The price axis
+                        // rescales under a pointer in the price column, and
+                        // an alert tag that slid away stayed red. Same
+                        // functions as the mouse move and the click, on the
+                        // display just eased (pitfall 14). Not during a drag,
+                        // whose moves set both themselves.
+                        if (!g_Ctx.panning) {
+                            if (viewMoved && g_Ctx.ch.hoverIdx >= 0)
+                                g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, tn, &gE, g_Ctx.hoverX, g_Ctx.ch.hoverY);
+                            if (axisMoved && g_Ctx.axisHotY >= 0 && !g_Ctx.overlayOpen)
+                                AxisHoverSet(&gE, g_Ctx.axisHotY);
                         }
                     }
                 }
@@ -4789,7 +5053,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // the same way. Before, only a fetch repainted it, so the
                 // number stood still for the whole backoff - "retrying in
                 // 12s" for twelve seconds - while no candle has come yet.
-                if (emptyFails > 0 && IsWindowVisible(hwnd)) {
+                // Not while minimized (phase 47): IsWindowVisible stays TRUE
+                // for a minimized window, and the clock ticked 60 times a
+                // second for a countdown nobody could see. WM_SIZE starts it
+                // again on restore.
+                BOOL onScreen = IsWindowVisible(hwnd) && !IsIconic(hwnd);
+                if (emptyFails > 0 && onScreen) {
                     int in_s = (retryTick > now) ? (int)((retryTick - now + 999) / 1000) : 0;
                     if (in_s != g_Ctx.emptySecsShown) {
                         g_Ctx.emptySecsShown = in_s;
@@ -4800,10 +5069,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
                 // IsWindowVisible is decisive: without it a disconnected
                 // line keeps the clock alive on a hidden panel, and we tick 60
-                // times a second without painting anything. TogglePopup starts
-                // it again when the panel is shown.
-                if (okTick != 0 && now - okTick > STALE_AFTER &&
-                    IsWindowVisible(hwnd)) {
+                // times a second without painting anything - and IsIconic
+                // for a minimized one (phase 47, onScreen above). TogglePopup
+                // starts it again when the panel is shown, WM_SIZE when it is
+                // restored.
+                if (okTick != 0 && now - okTick > STALE_AFTER && onScreen) {
                     int secs = (int)((now - okTick) / 1000);
                     if (secs != g_Ctx.staleSecsShown) {
                         g_Ctx.staleSecsShown = secs;
@@ -4842,9 +5112,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
-                RECT btns[BTN_COUNT];
-                ButtonLayout(rcD.right, btns);
-                if (ButtonHit(btns, mx, my) >= 0) return 0;
+                if (ButtonHitAt(rcD.right, IsZoomed(hwnd), mx, my) >= 0) return 0;
                 RECT tb[TBAR_COUNT];
                 ToolbarLayout(rcD.right, tb);
                 if (ToolbarHit(tb, mx, my) >= 0) return 0;
@@ -4863,6 +5131,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     EnterCriticalSection(&g_Ctx.lock);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gd, mx, my);
                     g_Ctx.ch.hoverY   = my;
+                    g_Ctx.hoverX      = mx;
                     LeaveCriticalSection(&g_Ctx.lock);
                     StartAnim(hwnd);
                     InvalidateRect(hwnd, NULL, FALSE);
@@ -4880,18 +5149,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 GetClientRect(hwnd, &rcO);
                 OverlayRects orr;
                 OverlayLayout(rcO.right, rcO.bottom, &orr);
-                int hit = OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-                if (hit >= OVL_SET_FIRST) {
-                    // A setting (phase 42): toggled, and the menu stays open.
-                    SettingToggle(&g_Ctx, hit - OVL_SET_FIRST);
-                    InvalidateRect(hwnd, NULL, FALSE);
-                    return 0;
-                }
-                if (hit >= 0) ApplyConfigChoice(&g_Ctx, hit);
-                g_Ctx.overlayOpen = FALSE;   // a click outside closes without change
-                g_Ctx.overlayHot  = -1;
-                StartAnim(hwnd);
-                InvalidateRect(hwnd, NULL, FALSE);
+                // A setting toggles and the menu stays open (phase 42); a
+                // click outside every row closes without change.
+                OverlayPick(hwnd, OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)));
                 return 0;
             }
             RECT rc;
@@ -4899,13 +5159,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int dx = GET_X_LPARAM(lParam), dy = GET_Y_LPARAM(lParam);
             // The buttons. After the overlay - the first click closes the
             // overlay, even when it hits a button - and before panning, which
-            // in any case only applies to the chart area.
+            // in any case only applies to the chart area. From phase 47 the
+            // press only arms the button, drawn pressed; WM_LBUTTONUP acts if
+            // it comes on the same button. Capture brings the release here
+            // wherever the pointer has gone.
             {
-                RECT btns[BTN_COUNT];
-                ButtonLayout(rc.right, btns);
-                int bh = ButtonHit(btns, dx, dy);
+                int bh = ButtonHitAt(rc.right, IsZoomed(hwnd), dx, dy);
                 if (bh >= 0) {
-                    OnButtonClick(hwnd, bh);
+                    g_Ctx.btnDown = bh;
+                    g_Ctx.btnHot  = bh;
+                    SetCapture(hwnd);
+                    RECT strip;
+                    ButtonStrip(rc.right, &strip);
+                    InvalidateRect(hwnd, &strip, FALSE);
                     return 0;
                 }
             }
@@ -4932,8 +5198,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= ChartPanesBottom(&gg)) {
                 // Start panning. SetCapture ensures we get the mouse release
                 // even if the pointer leaves the window along the way.
+                // The shift is applied BEFORE the anchor is taken, as the
+                // move handler does (phase 47). viewStart is already in the
+                // new buffer's indices; a backfill that landed after the
+                // last frame left its shift pending, and the first move
+                // would have applied it to this anchor again - the view
+                // jumped by the backfill, up to 360 candles.
                 int vs, vc;
                 EnterCriticalSection(&g_Ctx.lock);
+                ApplyFrontShift(&g_Ctx.ch, g_Ctx.frontShift);
                 GetView(&g_Ctx.ch, g_Ctx.candleCount, &vs, &vc);
                 g_Ctx.ch.viewCount     = vc;
                 LeaveCriticalSection(&g_Ctx.lock);
@@ -4970,6 +5243,22 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
 
         case WM_LBUTTONUP:
+            // A caption button acts here (phase 47), on the button it was
+            // pressed on or not at all. btnDown goes first: ReleaseCapture
+            // sends WM_CAPTURECHANGED, which must find nothing to cancel.
+            if (g_Ctx.btnDown >= 0) {
+                int bd = g_Ctx.btnDown;
+                g_Ctx.btnDown = -1;
+                ReleaseCapture();
+                RECT rcU;
+                GetClientRect(hwnd, &rcU);
+                int hit = ButtonHitAt(rcU.right, IsZoomed(hwnd), GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+                RECT strip;
+                ButtonStrip(rcU.right, &strip);
+                InvalidateRect(hwnd, &strip, FALSE);
+                if (hit == bd) OnButtonClick(hwnd, bd);
+                return 0;
+            }
             if (g_Ctx.panning) {
                 g_Ctx.panning = FALSE;
                 ReleaseCapture();
@@ -4995,6 +5284,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 g_Ctx.panning = FALSE;
                 SetCursor(g_Ctx.curArrow);
             }
+            // A pressed caption button (phase 47) is taken back the same way:
+            // its release will never come here.
+            if (g_Ctx.btnDown >= 0 && (HWND)lParam != hwnd) {
+                g_Ctx.btnDown = -1;
+                g_Ctx.btnHot  = -1;
+                RECT rcC;
+                GetClientRect(hwnd, &rcC);
+                RECT strip;
+                ButtonStrip(rcC.right, &strip);
+                InvalidateRect(hwnd, &strip, FALSE);
+            }
             return 0;
 
         case WM_KEYDOWN: {
@@ -5012,12 +5312,21 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // held 1..7 refetched the interval, a held Esc walked through all
             // its layers and hid the panel. Only the navigation keys (arrows,
             // PgUp/PgDn, Home/End, + and -) keep repeating: holding them is
-            // how one scrolls. Letters, digits, F11 and Esc are commands.
+            // how one scrolls. Letters, digits, F11 and Esc are commands, and
+            // Enter and Space, which pick a menu row (phase 47) - a held
+            // Enter toggled a setting at the repeat rate.
             if ((lParam & 0x40000000) &&
-                (wParam == VK_F11 || wParam == VK_ESCAPE ||
+                (wParam == VK_F11 || wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_SPACE ||
                  (wParam >= '0' && wParam <= '9') || (wParam >= 'A' && wParam <= 'Z'))) {
                 return 0;
             }
+            // A drag owns the keyboard as it owns the mouse (phase 47). The
+            // navigation keys and the toggles were blocked, but R and Esc
+            // reset the view under the finger - the next move put it back -
+            // Esc could hide the panel with the button still down, and
+            // Ctrl+0 resized the window mid-drag. The drag ends at the
+            // release, or when capture is lost.
+            if (g_Ctx.panning) return 0;
             BOOL ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             BOOL shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;   // phase 41
             // Ctrl+0: back to factory geometry, centered on the monitor the
@@ -5048,6 +5357,73 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     return 0;
                 }
             }
+            // An open menu from the keyboard (phase 47; up to phase 46 only
+            // Esc reached it, and the symbol could not be changed from the
+            // keyboard at all). Up and Down move the highlighted row, Home
+            // and End go to the ends, Enter or Space picks the row as a click
+            // would, Left and Right go to the next menu in the header's order
+            // - symbol, interval, settings - or, in the right-click picker,
+            // to the other column. S, B and G go to their menu, or close it
+            // when it is the one open. The keys a menu shows work in it: 1..7
+            // in the intervals, V M I T in the settings. Esc closes, below.
+            if (!g_desktopMode && g_Ctx.overlayOpen && !ctrl) {
+                RECT rcK;
+                GetClientRect(hwnd, &rcK);
+                OverlayRects ok;
+                OverlayLayout(rcK.right, rcK.bottom, &ok);
+                int kind = g_Ctx.overlayKind, hot = g_Ctx.overlayHot, to = -2;
+                switch (wParam) {
+                    case VK_DOWN: to = OverlayStep(&ok, hot, +1); break;
+                    case VK_UP:   to = OverlayStep(&ok, hot, -1); break;
+                    case VK_HOME: to = OverlayStep(&ok, -1, +1); break;
+                    case VK_END:  to = OverlayStep(&ok, -1, -1); break;
+                    case VK_RETURN: case VK_SPACE:
+                        if (hot >= 0) OverlayPick(hwnd, hot);
+                        return 0;
+                    case VK_LEFT: case VK_RIGHT: {
+                        BOOL right = (wParam == VK_RIGHT);
+                        if (kind == 0) {
+                            int n = right ? INTERVAL_COUNT : SYMBOL_COUNT;
+                            int row = (hot < 0) ? (right ? g_Ctx.ivIdx : g_Ctx.symIdx)
+                                    : (hot < SYMBOL_COUNT) ? hot : hot - SYMBOL_COUNT;
+                            if (row >= n) row = n - 1;
+                            to = (right ? SYMBOL_COUNT : 0) + row;
+                            break;
+                        }
+                        static const int ORDER[3] = { 3, 1, 2 };
+                        int at = (kind == 3) ? 0 : (kind == 1) ? 1 : 2;
+                        OpenOverlay(hwnd, ORDER[(at + (right ? 1 : 2)) % 3], TRUE);
+                        return 0;
+                    }
+                    case 'S': case 'B': case 'G': {
+                        int want = (wParam == 'S') ? 3 : (wParam == 'B') ? 1 : 2;
+                        if (want == kind) OverlayPick(hwnd, -1);
+                        else              OpenOverlay(hwnd, want, TRUE);
+                        return 0;
+                    }
+                    default: break;
+                }
+                if (to != -2) {
+                    if (to != hot) {
+                        g_Ctx.overlayHot = to;
+                        InvalidateRect(hwnd, NULL, FALSE);
+                    }
+                    return 0;
+                }
+                if ((kind == 0 || kind == 1) && !shift &&
+                    wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
+                    OverlayPick(hwnd, SYMBOL_COUNT + (int)(wParam - '1'));
+                    return 0;
+                }
+                if (kind == 2) {
+                    for (int k = 0; k < SET_COUNT; ++k) {
+                        if (wParam == (WPARAM)SET_KEY[k][0]) {
+                            OverlayPick(hwnd, OVL_SET_FIRST + k);
+                            return 0;
+                        }
+                    }
+                }
+            }
             // Navigation in the chart (phase 20), through the same
             // PanView/ZoomView as the wheel. Left/right is one wheel notch
             // (vc / 8 candles), PgUp/PgDn a whole view, Home the oldest candle
@@ -5071,6 +5447,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // stays free.
                 if (!ctrl && wParam == 'V') {
                     SetShowVolume(&g_Ctx, !ShowVolNow(&g_Ctx));
+                    return 0;
+                }
+                // S, B and G (phase 47): the header's three menus - the
+                // symbol, the interval (the bar size) and the settings - as
+                // a click on their cell opens them, with the current row
+                // highlighted for the arrows. Not I, the RSI band's key
+                // since phase 39.
+                if (!ctrl && (wParam == 'S' || wParam == 'B' || wParam == 'G')) {
+                    OpenOverlay(hwnd, (wParam == 'S') ? 3 : (wParam == 'B') ? 1 : 2, TRUE);
                     return 0;
                 }
                 // M (phase 25): the MA pill. Without Ctrl - Ctrl+M minimizes.
@@ -5400,6 +5785,17 @@ static int PanelDpi(HWND hwnd) {
 static void ApplyPanelStyle(AppContext* ctx, int dpi) {
     const AppTheme* th = ThemeNow(ctx);
     if (ctx->sty.fontSmall && ctx->sty.dpi == dpi && ctx->theme == th) return;
+    // The back buffer goes FIRST (phase 47). The header, the overlay and the
+    // empty chart leave fontSmall - and the header hFontQuote - selected in
+    // it between frames, and DeleteObject on a font that is selected in a DC
+    // fails by contract. Up to phase 46 only bbValid was cleared, though the
+    // comments said the buffer was dropped. Measured, the GDI count did not
+    // grow over 50 theme switches or 20 dpi changes, with or without this -
+    // GDI seems to reclaim the font when the DC lets it go - but the contract
+    // is what is written here, not what one build of Windows does. The
+    // buffer is built again on the next frame: one allocation per theme or
+    // dpi change.
+    FreeBackBuffer(ctx);
     ChartStyleDestroy(&ctx->sty);
     ChartStyleCreate(&ctx->sty, dpi, th->chart);
     ctx->theme = th;
@@ -5445,6 +5841,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ctx->overlayF    = 0.0;
             ctx->overlayHot  = -1;
             ctx->btnHot      = -1;
+            ctx->btnDown     = -1;   // phase 47
             ctx->tbHot       = -1;
             SaveWindowPlacement(ctx->hPopup);
             ShowWindow(ctx->hPopup, SW_HIDE);
@@ -5546,6 +5943,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     // we do not control, and a red close button lingering on reopening is
     // not worth depending on it.
     ctx->btnHot      = -1;
+    ctx->btnDown     = -1;      // phase 47, same reason
     ctx->alertHot    = -1;      // phase 23, same reason
     ctx->axisHotY    = -1;
     ctx->ch.dispValid   = FALSE;   // the panel opens finished, does not glide into place
@@ -5644,6 +6042,7 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     ctx->animRunning   = FALSE;
     ctx->trackingMouse = FALSE;
     ctx->panning       = FALSE;
+    ctx->btnDown       = -1;   // phase 47: its capture went with the window
     ctx->bbValid       = FALSE;
     // The watermark is keyed on (W, H, symIdx, ivIdx), not on mode, and the
     // cache lives in ctx - it survives the window being created again. Since
@@ -5677,43 +6076,66 @@ static HMENU BuildSymbolMenu(void) {
     return h;
 }
 
+// The keys (phase 47): 1..7 pick the intervals in the panel, as the list
+// under the interval cell shows. In desktop mode the surface takes no keys,
+// and the menu shows none (see BuildTrayMenu).
 static HMENU BuildIntervalMenu(void) {
     HMENU h = CreatePopupMenu();
     if (!h) return NULL;
-    for (int i = 0; i < INTERVAL_COUNT; i++)
-        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_INTERVAL_FIRST + i), INTERVALS[i].label);
+    for (int i = 0; i < INTERVAL_COUNT; i++) {
+        wchar_t lbl[24];
+        if (g_desktopMode) swprintf_s(lbl, 24, L"%s", INTERVALS[i].label);
+        else               swprintf_s(lbl, 24, L"%s\t%d", INTERVALS[i].label, i + 1);
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_INTERVAL_FIRST + i), lbl);
+    }
     CheckMenuRadioItem(h, ID_TRAY_INTERVAL_FIRST, ID_TRAY_INTERVAL_FIRST + INTERVAL_COUNT - 1,
                        (UINT)(ID_TRAY_INTERVAL_FIRST + g_Ctx.ivIdx), MF_BYCOMMAND);
     return h;
 }
 
-// The ranges (phase 41). The checked one is the selected range; picking it
-// again ends it, like a second click on its pill.
+// The ranges (phase 41). The checked one is the selected range. Phase 47
+// adds "None", checked when no range is selected: up to phase 46 a range
+// was ended by picking its checked item again, like a second click on its
+// pill - which a radio group does not suggest. Picking the checked item now
+// does what a radio item does (see WM_COMMAND). Shift+1..8 in the panel.
 static HMENU BuildRangeMenu(void) {
     HMENU h = CreatePopupMenu();
     if (!h) return NULL;
-    for (int i = 0; i < RANGE_COUNT; i++)
-        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_PERIOD_FIRST + i), RANGES[i].label);
-    if (g_Ctx.rangeIdx >= 0)
-        CheckMenuRadioItem(h, ID_TRAY_PERIOD_FIRST, ID_TRAY_PERIOD_FIRST + RANGE_COUNT - 1,
-                           (UINT)(ID_TRAY_PERIOD_FIRST + g_Ctx.rangeIdx), MF_BYCOMMAND);
+    for (int i = 0; i < RANGE_COUNT; i++) {
+        wchar_t lbl[24];
+        if (g_desktopMode) swprintf_s(lbl, 24, L"%s", RANGES[i].label);
+        else               swprintf_s(lbl, 24, L"%s\tShift+%d", RANGES[i].label, i + 1);
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_PERIOD_FIRST + i), lbl);
+    }
+    AppendMenuW(h, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_PERIOD_FIRST + RANGE_COUNT), L"None");
+    CheckMenuRadioItem(h, ID_TRAY_PERIOD_FIRST, ID_TRAY_PERIOD_FIRST + RANGE_COUNT,
+                       (UINT)(ID_TRAY_PERIOD_FIRST + ((g_Ctx.rangeIdx >= 0) ? g_Ctx.rangeIdx : RANGE_COUNT)),
+                       MF_BYCOMMAND);
     return h;
 }
 
 // One of the settings menu's choices as a tray item (phase 45): the same
 // name and key as the gear menu's row, and the same check - SettingOn reads
-// the mode's choice, as the tray items always did.
+// the mode's choice, as the tray items always did. The key only in panel
+// mode (phase 47): the desktop surface takes no keys.
 static void AppendSettingItem(HMENU h, UINT id, int k) {
     wchar_t lbl[48];
-    swprintf_s(lbl, 48, L"%s\t%s", SET_LABEL[k], SET_KEY[k]);
+    if (g_desktopMode) swprintf_s(lbl, 48, L"%s", SET_LABEL[k]);
+    else               swprintf_s(lbl, 48, L"%s\t%s", SET_LABEL[k], SET_KEY[k]);
     AppendMenuW(h, MF_STRING | (SettingOn(&g_Ctx, k) ? MF_CHECKED : MF_UNCHECKED), id, lbl);
 }
 
 // The tray menu. A separate function so the check marks and content can be
 // tested without a tray icon.
 //
-//       Symbol            >   (o) BTC/USDT  ( ) ETH/USDT  ...
-//       Interval          >   (o) 1m  ( ) 5m  ...
+//       Show panel                   (bold, the default; not in desktop mode)
+//   ---------------------------
+//       Symbol       S    >   (o) BTC/USDT  ( ) ETH/USDT  ...
+//       Interval     B    >   (o) 1m  1   ( ) 5m  2  ...
+//       Range             >   (o) 1D  Shift+1  ...  ( ) None
+//       Volume ... Light theme   V M I T, checked
+//       Clear price alerts (n)
 //   ---------------------------
 //   [x] Desktop mode
 //       Default view      Ctrl+0     (grayed in desktop mode)
@@ -5728,15 +6150,29 @@ static void AppendSettingItem(HMENU h, UINT id, int k) {
 // when the panel is closed. It does get symbol and interval, though: the
 // overlay already lets it switch its own view, and SaveConfig skips
 // duplicates itself. The autostart check is read from the Run key every
-// time.
+// time. The keys after a tab are the panel's, and from phase 47 only panel
+// mode shows them: the desktop surface takes no keys. There is no "New
+// panel" item: Ctrl+N and [ + ] cascade from the panel's own place, which
+// the tray does not have when the panel has never been opened.
 static HMENU BuildTrayMenu(void) {
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return NULL;
+    // Phase 47: the panel as the bold default item, first - the Windows
+    // convention for a tray menu, and the item that says what the left click
+    // does. It shows the panel, never hides it (ShowPanel, as a second start
+    // does). Not in desktop mode, where the click does nothing either.
+    if (!g_desktopMode) {
+        AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, L"Show panel");
+        SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    }
     {
         HMENU hSym = BuildSymbolMenu();
         HMENU hIv  = BuildIntervalMenu();
-        if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
-        if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Interval");
+        // S and B open the same lists in the panel (phase 47); desktop mode
+        // shows no keys.
+        if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, g_desktopMode ? L"Symbol" : L"Symbol\tS");
+        if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  g_desktopMode ? L"Interval" : L"Interval\tB");
         HMENU hRg = BuildRangeMenu();   // phase 41
         if (hRg)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRg,  L"Range");
         // The VOL toggle (phase 22; desktop mode has no toolbar), the MA
@@ -5767,7 +6203,7 @@ static HMENU BuildTrayMenu(void) {
                     ID_TRAY_DESKTOP, L"Desktop mode");
     }
     AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_GRAYED : MF_ENABLED),
-                ID_TRAY_RESET, L"Default view	Ctrl+0");
+                ID_TRAY_RESET, g_desktopMode ? L"Default view" : L"Default view\tCtrl+0");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     if (!g_isDuplicate) {
         AppendMenuW(hMenu, MF_STRING | (AutostartPresent() ? MF_CHECKED : MF_UNCHECKED),
@@ -5905,6 +6341,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 AlertsClear(&g_Ctx);
                 return 0;
             }
+            // The bold default item (phase 47). Not in desktop mode, where it
+            // is not in the menu: a posted message does not care about that.
+            if (LOWORD(wParam) == ID_TRAY_OPEN) {
+                if (!g_desktopMode) ShowPanel(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+                return 0;
+            }
             {
                 // Symbol and interval (phase 17). Range check first: a posted
                 // ID outside the tables is a silent no-op, not an index.
@@ -5918,8 +6360,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (id - ID_TRAY_INTERVAL_FIRST));
                     return 0;
                 }
-                if (id >= ID_TRAY_PERIOD_FIRST && id < ID_TRAY_PERIOD_FIRST + RANGE_COUNT) {
-                    SelectRange(&g_Ctx, id - ID_TRAY_PERIOD_FIRST);
+                // The ranges and "None" (phase 47) as a radio group: the
+                // checked item picked again changes nothing - up to phase 46
+                // it ended the range, as a second click on its pill does -
+                // and a range whose view has moved away goes home.
+                if (id >= ID_TRAY_PERIOD_FIRST && id <= ID_TRAY_PERIOD_FIRST + RANGE_COUNT) {
+                    int r = id - ID_TRAY_PERIOD_FIRST;
+                    if (r == RANGE_COUNT) r = -1;
+                    if (r == g_Ctx.rangeIdx && (r < 0 || g_Ctx.rangeWant > 0)) return 0;
+                    SelectRange(&g_Ctx, r);
                     return 0;
                 }
             }
@@ -6013,8 +6462,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 // The clock must run while we are disconnected, otherwise
                 // the seconds counter in the subtitle freezes.
                 // New candles can move the Y target, and when disconnected
-                // the counter must run.
-                StartAnim(g_Ctx.hPopup);
+                // the counter must run. Not for a minimized panel (phase
+                // 47): nothing there eases, and WM_SIZE starts the clock
+                // when it is restored.
+                if (!IsIconic(g_Ctx.hPopup)) StartAnim(g_Ctx.hPopup);
                 InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
             }
             return 0;
@@ -6099,6 +6550,67 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     UpdateWindow(g_Ctx.hPopup);
                 }
                 return 1;
+            }
+            //   125  READING (phase 47): the tray menu as the next right-click
+            //        would build it. The low byte of lParam asks: 0 the
+            //        default (bold) item's id, -1 none; 1 how many items,
+            //        submenus included, carry a key after a tab; 2 the state
+            //        (GetMenuState) of the item with the id in the high word,
+            //        -1 when there is none; 3 whether that item's label has a
+            //        key. Bit 8 builds it as desktop mode would: the flag is
+            //        set around the build alone, on this thread, so nothing
+            //        else sees it.
+            if (wParam == 125) {
+                BOOL wasDesk = g_desktopMode;
+                if (lParam & 0x100) g_desktopMode = TRUE;
+                HMENU hm = BuildTrayMenu();
+                g_desktopMode = wasDesk;
+                if (!hm) return -2;
+                LRESULT res = -1;
+                UINT q = (UINT)(lParam & 0xFF), qid = (UINT)((lParam >> 16) & 0xFFFF);
+                if (q == 0) {
+                    UINT d = GetMenuDefaultItem(hm, FALSE, 0);
+                    res = (d == (UINT)-1) ? -1 : (LRESULT)d;
+                } else if (q == 1) {
+                    res = 0;
+                    HMENU stack[4] = { hm, NULL, NULL, NULL };
+                    int depth = 1;
+                    while (depth > 0) {
+                        HMENU cur = stack[--depth];
+                        int cnt = GetMenuItemCount(cur);
+                        for (int i = 0; i < cnt; ++i) {
+                            wchar_t t[64];
+                            if (GetMenuStringW(cur, (UINT)i, t, 64, MF_BYPOSITION) > 0 && wcschr(t, L'\t')) res++;
+                            HMENU sub = GetSubMenu(cur, i);
+                            if (sub && depth < 4) stack[depth++] = sub;
+                        }
+                    }
+                } else if (q == 2) {
+                    UINT st = GetMenuState(hm, qid, MF_BYCOMMAND);
+                    res = (st == (UINT)-1) ? -1 : (LRESULT)st;
+                } else if (q == 3) {
+                    wchar_t t[64];
+                    res = (GetMenuStringW(hm, qid, t, 64, MF_BYCOMMAND) > 0) ? (wcschr(t, L'\t') != NULL) : -1;
+                }
+                DestroyMenu(hm);
+                return res;
+            }
+            //   126  WRITING (phase 47): a new candle, one interval after the
+            //        last, is merged as the worker merges a fetch - the next
+            //        day at 1d, which a clock cannot be asked for. Returns the
+            //        candle count.
+            if (wParam == 126) {
+                LRESULT cnt;
+                EnterCriticalSection(&g_Ctx.lock);
+                if (g_Ctx.candleCount > 0) {
+                    Candle nc = g_Ctx.candles[g_Ctx.candleCount - 1];
+                    nc.openTime += g_Ctx.intervalMs;
+                    MergeCandles(&g_Ctx, &nc, 1);
+                }
+                cnt = g_Ctx.candleCount;
+                LeaveCriticalSection(&g_Ctx.lock);
+                if (g_Ctx.hPopup) InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
+                return cnt;
             }
             return 0;
 #endif
@@ -6387,6 +6899,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
     g_Ctx.curHand     = LoadCursorW(NULL, IDC_HAND);
     g_Ctx.btnHot      = -1;
+    g_Ctx.btnDown     = -1;     // phase 47: 0 would be a pressed [ + ]
     g_Ctx.tbHot       = -1;
     g_Ctx.alertHot    = -1;     // phase 23: 0 would mean "first alert under the pointer"
     g_Ctx.axisHotY    = -1;

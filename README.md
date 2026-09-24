@@ -25,6 +25,7 @@ PDH, PDL, PDC).
 - **Ranges:** 1D, 3D, 1M, 6M, YTD, 1Y, 5Y, Max. A range picks a fitting interval and shows
 exactly that period, and the change in the header is over the range. You can switch the
 interval afterwards and keep the range. Zoom or pan away, and `R` brings you back.
+YTD starts on 1 January and grows by a day each day.
 - **Price alerts.** Click the price column to set one. When the price gets there you get a
 balloon and a sound, even with the panel closed.
 - **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
@@ -85,12 +86,15 @@ copy runs at a time: starting it again brings up the panel of the one that's run
 | Action                     | What happens                                                            |
 | -------------------------- | ----------------------------------------------------------------------- |
 | Left-click the tray icon   | Show or hide the chart panel                                            |
-| Right-click the tray icon  | Symbol, interval, range, overlays, theme, desktop mode, autostart, quit |
+| Right-click the tray icon  | Show panel, symbol, interval, range, overlays, theme, desktop mode, autostart, quit |
 | `TickC.exe --desktop-mode` | Start with the chart on the desktop                                     |
 | `TickC.exe --autostart`    | Start quietly, with only the tray icon (what "Start at sign-in" uses)   |
 
 `--desktop-mode` only counts when TickC isn't already running. In desktop mode, starting
 it again shows a balloon that points to the tray menu.
+
+In the tray menu, the bold "Show panel" brings the panel up (it never hides it), and most
+items show the panel key that does the same. Under Range, "None" turns the range off.
 
 
 In the chart panel:
@@ -102,6 +106,7 @@ In the chart panel:
 | Drag, `←` / `→`                 | Pan                                                               |
 | `PgUp` / `PgDn`                 | Jump one screen                                                   |
 | `Home` / `End`                  | Oldest / newest candle                                            |
+| `S` / `B` / `G`                 | Open the symbol, interval (bar size) or settings menu             |
 | `1` … `7`                       | Switch interval                                                   |
 | `Shift`+`1` … `8`               | Switch range (1D … Max); the selected one again turns it off      |
 | `V`                             | Volume pane on/off                                                |
@@ -114,6 +119,18 @@ In the chart panel:
 | `Ctrl`+`0`                      | Reset window size and position                                    |
 | `Ctrl`+`N`                      | Open another panel                                                |
 | `Ctrl`+`M` / `F11` / `Ctrl`+`W` | Minimize / maximize / close                                       |
+
+In an open menu (from `S`, `B`, `G`, a click on its cell in the header, or a right-click in the chart):
+
+
+| Key                             | Action                                                            |
+| ------------------------------- | ----------------------------------------------------------------- |
+| `↑` / `↓`, `Home` / `End`       | Move the highlighted row                                          |
+| `Enter`, `Space`                | Pick it (a setting toggles, and the menu stays open)              |
+| `←` / `→`                       | Previous / next menu (symbol, interval, settings); in the right-click picker, the other column |
+| `1` … `7`                       | Pick an interval (interval list and right-click picker)           |
+| `V` / `M` / `I` / `T`           | Toggle a setting (settings menu)                                  |
+| The menu's own letter, `Esc`    | Close it                                                          |
 
 
 ## What it writes to your system
