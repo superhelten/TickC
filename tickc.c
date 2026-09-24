@@ -4336,7 +4336,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // Ctrl + mouse wheel zooms about the point under the cursor. Note
         // that lParam here is SCREEN coordinates, unlike WM_MOUSEMOVE.
         case WM_MOUSEWHEEL: {
-            if (g_Ctx.overlayOpen) return 0;
+            // Not during a drag either (phase 47): the drag measures from its
+            // anchor, so a notch moved the view only until the next mouse
+            // move, which put it back where the finger says - a jump each way.
+            if (g_Ctx.overlayOpen || g_Ctx.panning) return 0;
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);   // lParam is SCREEN coordinates here
 
@@ -4982,8 +4985,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= ChartPanesBottom(&gg)) {
                 // Start panning. SetCapture ensures we get the mouse release
                 // even if the pointer leaves the window along the way.
+                // The shift is applied BEFORE the anchor is taken, as the
+                // move handler does (phase 47). viewStart is already in the
+                // new buffer's indices; a backfill that landed after the
+                // last frame left its shift pending, and the first move
+                // would have applied it to this anchor again - the view
+                // jumped by the backfill, up to 360 candles.
                 int vs, vc;
                 EnterCriticalSection(&g_Ctx.lock);
+                ApplyFrontShift(&g_Ctx.ch, g_Ctx.frontShift);
                 GetView(&g_Ctx.ch, g_Ctx.candleCount, &vs, &vc);
                 g_Ctx.ch.viewCount     = vc;
                 LeaveCriticalSection(&g_Ctx.lock);
@@ -5068,6 +5078,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                  (wParam >= '0' && wParam <= '9') || (wParam >= 'A' && wParam <= 'Z'))) {
                 return 0;
             }
+            // A drag owns the keyboard as it owns the mouse (phase 47). The
+            // navigation keys and the toggles were blocked, but R and Esc
+            // reset the view under the finger - the next move put it back -
+            // Esc could hide the panel with the button still down, and
+            // Ctrl+0 resized the window mid-drag. The drag ends at the
+            // release, or when capture is lost.
+            if (g_Ctx.panning) return 0;
             BOOL ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             BOOL shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;   // phase 41
             // Ctrl+0: back to factory geometry, centered on the monitor the
