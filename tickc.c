@@ -59,6 +59,7 @@
 #define POPUP_MIN_W      400
 #define POPUP_MIN_H      250
 #define RESIZE_BORDER    6     // width of the zone that starts a resize
+#define PANEL_GRAB_W     120   // header width that must be on a work area when shown (phase 48)
 // 6000 candles at 48 bytes = 288 KB. Four days on 1m, sixteen years on 1d.
 // Filled backwards on request (phase 18) and forwards while the panel is open.
 // A full buffer stops the backfill (histDone) - live candles are never
@@ -535,6 +536,10 @@ static int g_savedPanelW = 0;   // panel size from the registry, 0 = unused
 static int g_savedPanelH = 0;
 static int g_savedPanelX = 0;   // set by LoadConfig, GEOM_UNSET = unused
 static int g_savedPanelY = 0;
+// The dpi the saved size is in device pixels at (phase 48), 0 = not known:
+// geometry from before phase 48, and a duplicate's, which comes from a live
+// panel on the same monitor.
+static int g_savedPanelDpi = 0;
 // Started via [ + ]. A duplicate never writes to the registry - neither
 // geometry nor symbol - and exits the process when the panel is closed.
 // The registry is the main instance's memory; otherwise whichever closed last
@@ -659,6 +664,25 @@ static int      g_probeEmptySecs    = -1;
 // Phase 47, 85 on the panel: ticks of the animation clock since start. A
 // timer that should be dead but is not shows as a count that keeps rising.
 static volatile LONG g_probeAnimTicks = 0;
+// Phase 48: monitors this machine does not have. One monitor at 100 % with
+// the taskbar at the bottom shows none of the placement bugs, and the user's
+// display settings are not ours to change, so the test build pretends.
+// TICKER_FAKE_MON "x0,dpi[,quiet]": every window whose centre lies at screen
+// x >= x0 is on a monitor at that dpi (PanelDpi), and the panel gets the
+// WM_DPICHANGED Windows sends when a move takes it across - built as field
+// 105 builds it - unless quiet is 1, which models a Windows that sends none
+// to a hidden window. TICKER_FAKE_WORKAREA "dx,dy": GetPanelPlacement
+// returns rcNormalPosition shifted by -dx,-dy, as Windows' workspace
+// coordinates are with a taskbar dx wide on the left (or dy tall at the
+// top). Read once at startup, before the panel exists.
+static int  g_fakeMonX0 = 0, g_fakeMonDpi = 0;
+static BOOL g_fakeMonQuiet = FALSE;
+static int  g_fakeWorkDx = 0, g_fakeWorkDy = 0;
+// 87 on the panel: WM_DPICHANGED messages the panel has handled. 89: what
+// the last on-screen check did when the panel was shown (0 none yet, 1 left
+// it, 2 moved it onto a monitor's work area).
+static volatile LONG g_probeDpiChanges = 0;
+static int      g_probeOnScreen = 0;
 #endif
 
 
@@ -850,7 +874,7 @@ static DWORD RegReadDword(HKEY k, const wchar_t* name, DWORD fallback) {
     return fallback;
 }
 
-static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* outH) {
+static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* outH, int* outDpi) {
     ctx->symIdx     = 0;
     ctx->ivIdx      = 0;
     ctx->intervalMs = INTERVALS[0].ms;
@@ -864,7 +888,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->lightTheme     = FALSE;   // phase 40: dark in both modes
     ctx->lightThemeDesk = FALSE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
-    *outW = 0; *outH = 0;
+    *outW = 0; *outH = 0; *outDpi = 0;
 
     HKEY k;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &k) != ERROR_SUCCESS) {
@@ -879,6 +903,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD px = RegReadDword(k, L"PanelX", 0);
     DWORD py = RegReadDword(k, L"PanelY", 0);
     DWORD dev = RegReadDword(k, L"PanelGeomDevice", 0);   // phase 37
+    DWORD gdpi = RegReadDword(k, L"PanelGeomDpi", 0);     // phase 48
     DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // phase 22, on by default
     DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // phase 25, on by default
     DWORD svd = RegReadDword(k, L"ShowVolumeDesktop", 0);       // phase 26, OFF by default
@@ -929,6 +954,14 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
             if (*outH > 0) *outH = MulDiv(*outH, sd, 96);
             if (hasPos) { *outX = MulDiv(*outX, sd, 96); *outY = MulDiv(*outY, sd, 96); }
         }
+    }
+    // Phase 48: the dpi the size was saved at. Device pixels are only half a
+    // unit - 1920x1080 at 144 is the panel 1280x720 is at 96 - and
+    // PlacePopupInitially scales the size when the panel opens on a monitor
+    // at another dpi, as Windows' WM_DPICHANGED would have for a running one.
+    // Geometry from phases 37-47 has no dpi and is taken as it is.
+    else if (gdpi >= 48 && gdpi <= 480) {
+        *outDpi = (int)gdpi;
     }
 }
 
@@ -1225,6 +1258,7 @@ static void SaveGeometry(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0 || g_desktopMode) return;
     g_savedPanelX = x; g_savedPanelY = y;
     g_savedPanelW = w; g_savedPanelH = h;
+    g_savedPanelDpi = g_Ctx.sty.dpi;   // phase 48: the unit of w and h
     if (g_isDuplicate) return;
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
@@ -1232,14 +1266,50 @@ static void SaveGeometry(int x, int y, int w, int h) {
         return;
     }
     DWORD dw = (DWORD)w, dh = (DWORD)h;
-    DWORD dx = (DWORD)(LONG)x, dy = (DWORD)(LONG)y, one = 1;
+    DWORD dx = (DWORD)(LONG)x, dy = (DWORD)(LONG)y, one = 1, gd = (DWORD)g_savedPanelDpi;
     RegSetValueExW(k, L"PanelWidth",  0, REG_DWORD, (const BYTE*)&dw, sizeof(dw));
     RegSetValueExW(k, L"PanelHeight", 0, REG_DWORD, (const BYTE*)&dh, sizeof(dh));
     RegSetValueExW(k, L"PanelX",      0, REG_DWORD, (const BYTE*)&dx, sizeof(dx));
     RegSetValueExW(k, L"PanelY",      0, REG_DWORD, (const BYTE*)&dy, sizeof(dy));
     RegSetValueExW(k, L"PanelHasPos", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
     RegSetValueExW(k, L"PanelGeomDevice", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));   // phase 37
+    RegSetValueExW(k, L"PanelGeomDpi", 0, REG_DWORD, (const BYTE*)&gd, sizeof(gd));        // phase 48
     RegCloseKey(k);
+}
+
+// The panel's WINDOWPLACEMENT. rcNormalPosition is in workspace coordinates
+// (pitfall 42), which equal screen coordinates here; the test build can
+// shift them as a taskbar on the left or at the top would (phase 48, see
+// g_fakeWorkDx). Every read of the panel's placement goes through here.
+static BOOL GetPanelPlacement(HWND hwnd, WINDOWPLACEMENT* wp) {
+    wp->length = sizeof(WINDOWPLACEMENT);
+    if (!GetWindowPlacement(hwnd, wp)) return FALSE;
+#ifdef TICKER_PROBE
+    OffsetRect(&wp->rcNormalPosition, -g_fakeWorkDx, -g_fakeWorkDy);
+#endif
+    return TRUE;
+}
+
+// And the one write (phase 48): a saved rectangle goes back through
+// SetWindowPlacement, in the coordinates GetWindowPlacement gave it in. Up to
+// phase 47 PlacePopupInitially restored it with SetWindowPos, which takes
+// screen coordinates, so with a taskbar on the left or at the top every save
+// and restore moved the panel by the bar's width (review A3). The pair
+// undoes itself whatever origin Windows gives this frameless popup's
+// workspace - the docs say the work area's, and a popup that maximizes to
+// the whole monitor (pitfall 22) may not get one at all; neither can be seen
+// on this machine. Called on the new, hidden panel only: SW_HIDE keeps it so
+// until TogglePopup shows it.
+static void SetPanelPlacement(HWND hwnd, int x, int y, int w, int h) {
+    WINDOWPLACEMENT wp;
+    if (!GetPanelPlacement(hwnd, &wp)) return;
+    wp.flags   = 0;
+    wp.showCmd = SW_HIDE;
+    SetRect(&wp.rcNormalPosition, x, y, x + w, y + h);
+#ifdef TICKER_PROBE
+    OffsetRect(&wp.rcNormalPosition, g_fakeWorkDx, g_fakeWorkDy);
+#endif
+    SetWindowPlacement(hwnd, &wp);
 }
 
 // Saves position and size as the window stands NOW. A minimized or
@@ -1249,7 +1319,7 @@ static void SaveGeometry(int x, int y, int w, int h) {
 static void SaveWindowPlacement(HWND hwnd) {
     if (!hwnd) return;
     WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-    if (!GetWindowPlacement(hwnd, &wp)) return;
+    if (!GetPanelPlacement(hwnd, &wp)) return;
     RECT r = wp.rcNormalPosition;
     SaveGeometry(r.left, r.top, r.right - r.left, r.bottom - r.top);
 }
@@ -2695,14 +2765,21 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
                 SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.accent, a));
                 FillRect(hdc, &box, (HBRUSH)GetStockObject(DC_BRUSH));
                 SetDCPenColor(hdc, Blend(ctx->sty.clr.accent, ctx->sty.clr.onAccent, a));
-                for (int t = 0; t < 2; ++t) {   // two pixels thick
+                // Two pixels thick at 96, three at 144 (phase 48, review
+                // C10: it stayed two while the box grew).
+                for (int t = 0; t < Dp(2); ++t) {
                     MoveToEx(hdc, cx0 + Dp(2), cy0 + Dp(5) + t, NULL);
                     LineTo(hdc, cx0 + Dp(4), cy0 + Dp(7) + t);
                     LineTo(hdc, cx0 + Dp(9), cy0 + Dp(2) + t);
                 }
             } else {
+                // The empty box's edge follows the caption glyphs' stroke.
                 SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.text, a));
-                FrameRect(hdc, &box, (HBRUSH)GetStockObject(DC_BRUSH));
+                RECT fr = box;
+                for (int t = 0; t < Dp(1); ++t) {
+                    FrameRect(hdc, &fr, (HBRUSH)GetStockObject(DC_BRUSH));
+                    InflateRect(&fr, -1, -1);
+                }
             }
             SelectObject(hdc, oldP);
             SelectObject(hdc, oldB);
@@ -2993,6 +3070,17 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         int cx = (r->left + r->right) / 2;
         int cy = (r->top + r->bottom) / 2;
         int g  = Dp(4);   // half glyph width: 9x9 pixels in total at 96 dpi
+        // The stroke follows the dpi too (phase 48, review C10): one pixel at
+        // 96 and 120, two at 144-192. The glyphs grew with Dp while the pens
+        // stayed one device pixel, and at 150-200 % they read as hairlines.
+        // A wide GDI pen gets round ends and is centred on the path, which
+        // the +1 end-point arithmetic below does not allow for, so each
+        // stroke is drawn s times, one pixel further right (or down, or in)
+        // each time. Every glyph's box then grows by s - 1 to the right and
+        // down, and they stay centred on one another. At s = 1 the loops
+        // draw what they drew before, pixel for pixel.
+        int s  = Dp(1);
+        int e  = s - 1;
 
         switch (i) {
             case BTN_NEW:
@@ -3000,14 +3088,18 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                 // LineTo does not draw the end point, hence +4 - that is what
                 // makes the cross symmetric. 7 and not 9 like the others: a
                 // 9x9 plus weighs optically heavier than the X next to it.
-                MoveToEx(hdc, cx - Dp(3), cy, NULL);
-                LineTo(hdc, cx + Dp(3) + 1, cy);
-                MoveToEx(hdc, cx, cy - Dp(3), NULL);
-                LineTo(hdc, cx, cy + Dp(3) + 1);
+                for (int k = 0; k < s; ++k) {
+                    MoveToEx(hdc, cx - Dp(3), cy + k, NULL);
+                    LineTo(hdc, cx + Dp(3) + 1 + e, cy + k);
+                    MoveToEx(hdc, cx + k, cy - Dp(3), NULL);
+                    LineTo(hdc, cx + k, cy + Dp(3) + 1 + e);
+                }
                 break;
             case BTN_MIN:
-                MoveToEx(hdc, cx - g, cy + Dp(3), NULL);
-                LineTo(hdc, cx + g + 1, cy + Dp(3));
+                for (int k = 0; k < s; ++k) {
+                    MoveToEx(hdc, cx - g, cy + Dp(3) + k, NULL);
+                    LineTo(hdc, cx + g + 1 + e, cy + Dp(3) + k);
+                }
                 break;
             case BTN_MAX:
                 if (zoomed) {
@@ -3015,7 +3107,7 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                     // drawn as an OPEN polyline - only the edges that do not
                     // lie behind the front one - so we avoid filling the
                     // front one opaque to hide the overlap. Two GDI calls,
-                    // not four.
+                    // not four (per stroke ring from phase 48, inward).
                     //
                     // Two 7x7 rectangles offset 2 px diagonally, within the
                     // same 9x9 footprint as the other glyphs. The back rect
@@ -3026,26 +3118,34 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
                     // Polyline does not draw the last point, so it stops just
                     // before the front one's right edge.
                     int d2 = Dp(2);
-                    POINT bak[5] = {
-                        { cx - d2, cy - d2 },
-                        { cx - d2, cy - g },
-                        { cx + g,  cy - g },
-                        { cx + g,  cy + d2 },
-                        { cx + d2, cy + d2 },
-                    };
-                    Polyline(hdc, bak, 5);
-                    // NULL_BRUSH is selected above, so Rectangle gives only an outline.
-                    Rectangle(hdc, cx - g, cy - d2, cx + d2 + 1, cy + g + 1);
+                    for (int k = 0; k < s; ++k) {
+                        POINT bak[5] = {
+                            { cx - d2 + k,     cy - d2 },
+                            { cx - d2 + k,     cy - g + k },
+                            { cx + g + e - k,  cy - g + k },
+                            { cx + g + e - k,  cy + d2 + e - k },
+                            { cx + d2 + e,     cy + d2 + e - k },
+                        };
+                        Polyline(hdc, bak, 5);
+                        // NULL_BRUSH is selected above, so Rectangle gives only an outline.
+                        Rectangle(hdc, cx - g + k, cy - d2 + k, cx + d2 + 1 + e - k, cy + g + 1 + e - k);
+                    }
                 } else {
                     // NULL_BRUSH is selected above, so Rectangle gives only an outline.
-                    Rectangle(hdc, cx - g, cy - g, cx + g + 1, cy + g + 1);
+                    for (int k = 0; k < s; ++k)
+                        Rectangle(hdc, cx - g + k, cy - g + k, cx + g + 1 + e - k, cy + g + 1 + e - k);
                 }
                 break;
             case BTN_CLOSE:
-                MoveToEx(hdc, cx - g, cy - g, NULL);
-                LineTo(hdc, cx + g + 1, cy + g + 1);
-                MoveToEx(hdc, cx + g, cy - g, NULL);
-                LineTo(hdc, cx - g - 1, cy + g + 1);
+                // The diagonals widen to the right: at s = 2 the cross is one
+                // pixel wider than tall (14 x 13 at 144), and it still reads
+                // as square in the capture.
+                for (int k = 0; k < s; ++k) {
+                    MoveToEx(hdc, cx - g + k, cy - g, NULL);
+                    LineTo(hdc, cx + g + 1 + k, cy + g + 1);
+                    MoveToEx(hdc, cx + g + k, cy - g, NULL);
+                    LineTo(hdc, cx - g - 1 + k, cy + g + 1);
+                }
                 break;
         }
     }
@@ -4016,12 +4116,13 @@ static void HidePanel(HWND hwnd) {
 // child halfway outside. Then the restored geometry is used. Otherwise
 // GetWindowRect, which is screen coordinates - rcNormalPosition is
 // work-area coordinates, and differs when the taskbar sits at the top
-// or on the left.
+// or on the left. The duplicate opens there with SetWindowPos (see
+// PlacePopupInitially).
 static void SpawnInstance(HWND hwnd) {
     RECT r;
     if (IsZoomed(hwnd)) {
         WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-        if (!GetWindowPlacement(hwnd, &wp)) return;
+        if (!GetPanelPlacement(hwnd, &wp)) return;
         r = wp.rcNormalPosition;
     } else if (!GetWindowRect(hwnd, &r)) {
         return;
@@ -4079,7 +4180,7 @@ static void OnButtonClick(HWND hwnd, int bh) {
                 // ends up outside everything visible. Same check as
                 // PlacePopupInitially does on opening.
                 WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-                if (GetWindowPlacement(hwnd, &wp)) {
+                if (GetPanelPlacement(hwnd, &wp)) {
                     RECT* nr = &wp.rcNormalPosition;
                     if (!PlacementIsVisible(nr->left, nr->top,
                                             nr->right - nr->left,
@@ -4102,6 +4203,25 @@ static void OnButtonClick(HWND hwnd, int bh) {
             break;
     }
 }
+
+#ifdef TICKER_PROBE
+// A scale change to nd, as Windows sends it when the panel moves to another
+// monitor (phase 37's field 105, shared with the fake monitor in phase 48):
+// the real WM_DPICHANGED, with the window rectangle scaled by new / old
+// around its top left corner - the logical size is kept. Returns the dpi the
+// panel is drawn at afterwards, -1 for a dpi out of range.
+static int ProbeDpiChange(HWND hwnd, int nd) {
+    int od = g_Ctx.sty.dpi;
+    if (nd < 48 || nd > 480 || od <= 0) return -1;
+    RECT rw;
+    GetWindowRect(hwnd, &rw);
+    RECT nr = { rw.left, rw.top,
+                rw.left + MulDiv(rw.right - rw.left, nd, od),
+                rw.top  + MulDiv(rw.bottom - rw.top, nd, od) };
+    SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(nd, nd), (LPARAM)&nr);
+    return g_Ctx.sty.dpi;
+}
+#endif
 
 static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -4190,6 +4310,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int nd = HIWORD(wParam);
 #ifdef TICKER_PROBE
             if (g_forceDpi > 0) nd = g_forceDpi;
+            InterlockedIncrement(&g_probeDpiChanges);   // field 87 (phase 48)
 #endif
             ApplyPanelStyle(&g_Ctx, (nd > 0) ? nd : PanelDpi(hwnd));
             SetWindowPos(hwnd, NULL, nr->left, nr->top,
@@ -4198,6 +4319,23 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
+
+#ifdef TICKER_PROBE
+        // The fake monitor (phase 48, see g_fakeMonX0): a move that takes the
+        // panel's centre across x0 changes its dpi, and Windows would answer
+        // it with WM_DPICHANGED. DefWindowProc runs first: it is what sends
+        // WM_SIZE and WM_MOVE from this message. The second pass, from the
+        // SetWindowPos in WM_DPICHANGED, finds the dpi equal and stops.
+        case WM_WINDOWPOSCHANGED:
+            if (g_fakeMonDpi > 0 && !g_fakeMonQuiet && g_forceDpi == 0 &&
+                hwnd == g_Ctx.hPopup && !g_desktopMode && g_Ctx.sty.fontSmall) {
+                LRESULT lr = DefWindowProcW(hwnd, msg, wParam, lParam);
+                int nd = PanelDpi(hwnd);
+                if (nd != g_Ctx.sty.dpi) ProbeDpiChange(hwnd, nd);
+                return lr;
+            }
+            break;
+#endif
 
         case WM_NCHITTEST: {
             // Desktop mode: nothing here should take the mouse.
@@ -4701,18 +4839,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // monitor: the real WM_DPICHANGED, with the window rectangle
                 // scaled by new / old around its top left corner. The RECT
                 // cannot cross from the probe's process, so it is built here.
-                case 105: {
-                    int nd = (int)lParam, od = g_Ctx.sty.dpi;
-                    if (nd < 48 || nd > 480 || od <= 0) { r = -1; break; }
-                    RECT rw;
-                    GetWindowRect(hwnd, &rw);
-                    RECT nr = { rw.left, rw.top,
-                                rw.left + MulDiv(rw.right - rw.left, nd, od),
-                                rw.top  + MulDiv(rw.bottom - rw.top, nd, od) };
-                    SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(nd, nd), (LPARAM)&nr);
-                    r = g_Ctx.sty.dpi;
-                    break;
-                }
+                case 105: r = ProbeDpiChange(hwnd, (int)lParam); break;
                 // Phase 27: today's session. 41 is VWAP at the candle index
                 // in lParam, x100, -1 when it is not defined there. 42/43 are
                 // today's high/low x100. 44 is the session's first candle
@@ -4823,6 +4950,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     break;
                 }
                 case 85: r = (LRESULT)g_probeAnimTicks; break;
+                // 87-89 (phase 48): WM_DPICHANGED messages handled; the dpi
+                // the panel's monitor has now (PanelDpi, fake monitor
+                // included), to compare with the dpi it is drawn at (60);
+                // the last on-screen check (g_probeOnScreen).
+                case 87: r = (LRESULT)g_probeDpiChanges; break;
+                case 88: r = PanelDpi(hwnd); break;
+                case 89: r = g_probeOnScreen; break;
                 case 86: {
                     RECT rcS;
                     GetClientRect(hwnd, &rcS);
@@ -5593,19 +5727,84 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 // Handles a taskbar on any edge + multiple monitors.
 
 
-// Places the window the first time it is created: the saved position if it
-// exists and is still visible, otherwise centered.
-static void PlacePopupInitially(HWND hwnd) {
+// The saved rectangle, if there is one and it is still on a monitor. TogglePopup
+// creates the panel there and PlacePopupInitially puts it there exactly.
+static BOOL SavedPanelRect(RECT* r) {
     int w = (g_savedPanelW > 0) ? g_savedPanelW : POPUP_W;
     int h = (g_savedPanelH > 0) ? g_savedPanelH : POPUP_H;
+    if (g_savedPanelX == GEOM_UNSET || g_savedPanelY == GEOM_UNSET ||
+        !PlacementIsVisible(g_savedPanelX, g_savedPanelY, w, h)) return FALSE;
+    SetRect(r, g_savedPanelX, g_savedPanelY, g_savedPanelX + w, g_savedPanelY + h);
+    return TRUE;
+}
 
-    if (g_savedPanelX != GEOM_UNSET && g_savedPanelY != GEOM_UNSET &&
-        PlacementIsVisible(g_savedPanelX, g_savedPanelY, w, h)) {
-        SetWindowPos(hwnd, NULL, g_savedPanelX, g_savedPanelY, w, h,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+// Places the window the first time it is created: the saved position if it
+// exists and is still visible, otherwise centered.
+//
+// The size is device pixels at g_savedPanelDpi (phase 48). The style is
+// already built for the monitor the panel was created on (TogglePopup), and
+// if that monitor's dpi is not the one the size was saved at - its scale was
+// changed while TickC was not running - the size is scaled once to keep the
+// panel's logical size, as WM_DPICHANGED does for a running panel.
+static void PlacePopupInitially(HWND hwnd) {
+    RECT r;
+    if (SavedPanelRect(&r)) {
+        int w = r.right - r.left, h = r.bottom - r.top;
+        int sd = g_savedPanelDpi, nd = g_Ctx.sty.dpi;
+        if (sd > 0 && nd > 0 && sd != nd) { w = MulDiv(w, nd, sd); h = MulDiv(h, nd, sd); }
+        // A duplicate's rectangle is its parent's GetWindowRect plus the
+        // cascade (SpawnInstance): screen coordinates, not a placement's.
+        if (g_isDuplicate) SetWindowPos(hwnd, NULL, r.left, r.top, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        else               SetPanelPlacement(hwnd, r.left, r.top, w, h);
         return;
     }
     ResetToDefaultView(hwnd);
+}
+
+// Checked on every show (phase 48). Windows moves the VISIBLE windows off a
+// monitor that goes away, not the hidden ones: a panel hidden on a laptop's
+// external monitor came back after undocking where no monitor is, and up to
+// phase 47 only the creation looked (review E9). The header must lie on a
+// work area, PANEL_GRAB_W wide and half its height tall, or there is nothing
+// to take the panel by - a panel 200 px past the left edge is fine, one with
+// its header above the screen is not. Otherwise the panel is moved onto the
+// work area of the monitor nearest it, keeping its size unless it is larger.
+// A maximized one is moved to fill that work area, where WM_GETMINMAXINFO
+// would have maximized it; its restored rectangle is checked on the restore
+// (BTN_MAX). A minimized panel is checked when it is restored.
+static void EnsurePanelOnScreen(HWND hwnd) {
+    if (!hwnd || g_desktopMode || IsIconic(hwnd)) return;
+    RECT rw, band, vis;
+    GetWindowRect(hwnd, &rw);
+    int w = rw.right - rw.left, h = rw.bottom - rw.top;
+    SetRect(&band, rw.left, rw.top, rw.right, rw.top + Dp(HEADER_H));
+    MONITORINFO mi = { sizeof(MONITORINFO) };
+    if (!GetMonitorInfoW(MonitorFromRect(&band, MONITOR_DEFAULTTONEAREST), &mi)) return;
+    RECT wa = mi.rcWork;
+    int grab = (w < Dp(PANEL_GRAB_W)) ? w : Dp(PANEL_GRAB_W);
+    if (IntersectRect(&vis, &band, &wa) && vis.right - vis.left >= grab &&
+        vis.bottom - vis.top >= Dp(HEADER_H) / 2) {
+#ifdef TICKER_PROBE
+        g_probeOnScreen = 1;
+#endif
+        return;
+    }
+    int aw = wa.right - wa.left, ah = wa.bottom - wa.top;
+    if (IsZoomed(hwnd)) {
+        SetWindowPos(hwnd, NULL, wa.left, wa.top, aw, ah, SWP_NOZORDER | SWP_NOACTIVATE);
+    } else {
+        if (w > aw) w = aw;
+        if (h > ah) h = ah;
+        int x = rw.left, y = rw.top;
+        if (x > wa.right - w)  x = wa.right - w;
+        if (x < wa.left)       x = wa.left;
+        if (y > wa.bottom - h) y = wa.bottom - h;
+        if (y < wa.top)        y = wa.top;
+        SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+#ifdef TICKER_PROBE
+    g_probeOnScreen = 2;
+#endif
 }
 
 // Windows refuses SetForegroundWindow from a process that does not own
@@ -5772,6 +5971,13 @@ static int PanelDpi(HWND hwnd) {
 #ifdef TICKER_PROBE
     if (g_forceDpi > 0) return g_forceDpi;
 #endif
+#ifdef TICKER_PROBE
+    if (g_fakeMonDpi > 0 && hwnd) {   // phase 48, see g_fakeMonX0
+        RECT rf;
+        GetWindowRect(hwnd, &rf);
+        if ((rf.left + rf.right) / 2 >= g_fakeMonX0) return g_fakeMonDpi;
+    }
+#endif
     UINT d = hwnd ? GetDpiForWindow(hwnd) : 0;
     return d ? (int)d : CHART_DPI_BASE;
 }
@@ -5851,7 +6057,10 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 #endif
             return;
         }
-        if (IsIconic(ctx->hPopup)) ShowWindow(ctx->hPopup, SW_RESTORE);
+        if (IsIconic(ctx->hPopup)) {
+            ShowWindow(ctx->hPopup, SW_RESTORE);
+            EnsurePanelOnScreen(ctx->hPopup);   // phase 48
+        }
         ForceForeground(ctx->hPopup);
 #ifdef TICKER_PROBE
         g_probeTrayDecision = 3;
@@ -5873,6 +6082,16 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         // 0,0 and not CW_USEDEFAULT: CW_USEDEFAULT is undefined for WS_POPUP
         // and can put the window off screen. PlacePopupInitially sets the
         // correct geometry right after.
+        //
+        // But the panel is created AT its saved rectangle when there is one
+        // on a monitor (phase 48). A per-monitor aware window takes the dpi
+        // of the monitor it is created on, and the style below reads it
+        // (PanelDpi). Created at 0,0 and moved to a saved rectangle on a
+        // 150 % monitor, the panel was styled for the primary's dpi and then
+        // either got a WM_DPICHANGED that scaled a size already in device
+        // pixels - a panel half as large again every session - or, with no
+        // message, kept the primary's fonts (review E5). The desktop surface
+        // is placed by AttachToDesktop and keeps 0,0.
         //
         // No WS_EX_TOOLWINDOW and no owner, so the window keeps its button
         // in the taskbar. No WS_EX_TOPMOST.
@@ -5898,11 +6117,13 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         DPI_AWARENESS_CONTEXT prevDpi = g_desktopMode
             ? SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
             : NULL;
+        RECT rc0 = { 0, 0, POPUP_W, POPUP_H };
+        if (!g_desktopMode) SavedPanelRect(&rc0);   // unchanged when there is none
         HWND hp = CreateWindowExW(
             0,
             L"BTCPopupClass", L"TickC",
             style,
-            0, 0, POPUP_W, POPUP_H,
+            rc0.left, rc0.top, rc0.right - rc0.left, rc0.bottom - rc0.top,
             NULL, NULL, hInst, NULL);
         BOOL attached = hp && g_desktopMode && AttachToDesktop(hp);
         if (prevDpi) SetThreadDpiAwarenessContext(prevDpi);
@@ -5957,6 +6178,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         ShowWindow(ctx->hPopup, SW_SHOWNA);
     } else {
         if (created) PlacePopupInitially(ctx->hPopup);
+        EnsurePanelOnScreen(ctx->hPopup);   // phase 48: new, or hidden since
         ShowWindow(ctx->hPopup, SW_SHOW);
         ForceForeground(ctx->hPopup);
     }
@@ -5989,7 +6211,10 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 // lost activation to the Explorer window the start came from.
 static void ShowPanel(AppContext* ctx, HINSTANCE hInst) {
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
-        if (IsIconic(ctx->hPopup)) ShowWindow(ctx->hPopup, SW_RESTORE);
+        if (IsIconic(ctx->hPopup)) {
+            ShowWindow(ctx->hPopup, SW_RESTORE);
+            EnsurePanelOnScreen(ctx->hPopup);   // phase 48
+        }
         ForceForeground(ctx->hPopup);
         return;
     }
@@ -6915,7 +7140,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     MigrateLegacyNames();   // phase 30: before the first read from the registry
     if (!argDup) UpgradeAutostart();   // phase 46
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
-               &g_savedPanelW, &g_savedPanelH);
+               &g_savedPanelW, &g_savedPanelH, &g_savedPanelDpi);
 
     // Duplicate: "--dup x y w h sym iv", read and checked at the top.
     // Overrides what LoadConfig read, with the same limits - a hand-written
@@ -6928,6 +7153,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         g_savedPanelY    = dupV[1];
         g_savedPanelW    = dupV[2];
         g_savedPanelH    = dupV[3];
+        g_savedPanelDpi  = 0;   // phase 48: a live panel's size, on this monitor
         g_Ctx.symIdx     = dupV[4];
         g_Ctx.ivIdx      = dupV[5];
         g_Ctx.intervalMs = INTERVALS[dupV[5]].ms;
@@ -6957,6 +7183,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (GetEnvironmentVariableW(L"TICKER_FORCE_DPI", fd, 16) > 0) {
             int v = _wtoi(fd);
             if (v >= 48 && v <= 480) g_forceDpi = v;
+        }
+    }
+    // Phase 48: the fake monitor and the fake taskbar (see g_fakeMonX0).
+    // Comma-separated integers; anything malformed leaves the hook off.
+    {
+        wchar_t fv[64];
+        if (GetEnvironmentVariableW(L"TICKER_FAKE_MON", fv, 64) > 0) {
+            wchar_t* e = fv;
+            int x0 = (int)wcstol(e, &e, 10);
+            int dpi = (*e == L',') ? (int)wcstol(e + 1, &e, 10) : 0;
+            int quiet = (*e == L',') ? (int)wcstol(e + 1, &e, 10) : 0;
+            if (dpi >= 48 && dpi <= 480) {
+                g_fakeMonX0 = x0; g_fakeMonDpi = dpi; g_fakeMonQuiet = (quiet != 0);
+            }
+        }
+        if (GetEnvironmentVariableW(L"TICKER_FAKE_WORKAREA", fv, 64) > 0) {
+            wchar_t* e = fv;
+            int dx = (int)wcstol(e, &e, 10);
+            int dy = (*e == L',') ? (int)wcstol(e + 1, &e, 10) : 0;
+            if (dx >= 0 && dx <= 400 && dy >= 0 && dy <= 400) { g_fakeWorkDx = dx; g_fakeWorkDy = dy; }
         }
     }
     // Recorded responses (phase 34); see g_fixtureDir. Read before the thread

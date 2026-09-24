@@ -116,6 +116,11 @@ menus and the arrows, `Enter` and the menu's own keys work in them, the
 caption buttons act on the release, a drag owns the wheel and the keys, the
 crosshair stays under a resting pointer while the view eases, YTD grows with
 the year, and the tray menu gets a bold "Show panel" and a "None" range.
+**Phase 48** handles monitors and scaling: the panel is created on its
+saved monitor at that monitor's dpi (the size saved with its dpi in
+`PanelGeomDpi`), a taskbar on the left or at the top no longer makes it
+drift, a hidden panel is put back on a work area whenever it is shown, and
+the caption glyphs and the check mark thicken with the dpi.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
@@ -4159,10 +4164,139 @@ real double-click on the header with a menu open, Ctrl+0 mid-drag, AltGr,
 and the tray menu in desktop mode, which was only built with the mode flag
 (reviewed, not tested). **Exe 237 568 → 241 152 bytes (+3 584).**
 
+### Phase 48 — monitors and scaling
+
+Branch `phase-48`, merged with `--no-ff`. The last of phase 44's review:
+the panel's placement across monitors and scales, and glyph strokes at
+high dpi. One agent edited `tickc.c`; `chart.c` is untouched. The machine
+has one monitor (3840x1600 at 100 %, 96 dpi) with the taskbar at the
+bottom, and no display setting was changed: the second monitor and the
+side taskbar are the test build's fakes.
+
+**The panel is created on its monitor** (review E5). It was created at
+0,0, styled for the primary monitor's dpi and then moved to its saved
+rectangle. On a 150 % monitor Windows answered the move with
+`WM_DPICHANGED`, which scaled a size that was already in device pixels:
+1920 → 2880 → 3860 (clamped) over four sessions on the fake monitor. A
+Windows that sends no message to a hidden window would instead have left
+the panel drawn at 96 on a 144 monitor. `TogglePopup` now creates the
+panel at its saved rectangle when that is on a monitor (`SavedPanelRect`),
+so the window takes that monitor's dpi at creation and its style is built
+for it before the first frame. The size is saved with its dpi (the new
+registry value `PanelGeomDpi`); when the monitor's dpi has changed since,
+`PlacePopupInitially` scales the size once, as `WM_DPICHANGED` would have
+done for a running panel. Geometry saved in phases 37-47 has no dpi and is
+used as it is. A duplicate's size comes from a live panel on the same
+monitor, so it is not scaled.
+
+**No drift with a taskbar on the left or at the top** (A3 = C7). The
+rectangle was read with `GetWindowPlacement`, in work-area coordinates,
+and restored with `SetWindowPos`, in screen coordinates, so every session
+moved the panel by the bar's width (measured on commit 1 with a fake
+48 px left and 40 px top bar: 552,260 → 504,220 → 456,180 → 408,140). It
+now goes back through `SetWindowPlacement` (`SetPanelPlacement`, with
+`showCmd = SW_HIDE` on the new, hidden panel), which undoes whatever
+`GetWindowPlacement` did, whatever origin Windows gives this frameless
+popup. Old values were written by the same `GetWindowPlacement`, so no
+migration is needed: on a bottom or right taskbar they equal screen
+coordinates, and on a left or top one the panel opens where it last
+stood, drift included. A duplicate still opens with `SetWindowPos`,
+because `SpawnInstance` passes screen coordinates; `[ + ]` still cascades
+by 30.
+
+**Back on a monitor when shown** (E9). Windows moves visible windows off
+a monitor that goes away, not hidden ones, so a panel hidden on an
+external monitor came back off-screen after undocking; up to phase 47
+only the creation looked. `EnsurePanelOnScreen` now runs on every show -
+a tray click, "Show panel", a second start, a restore from minimized and
+the creation - and checks that at least `PANEL_GRAB_W` (120 px, scaled)
+of the header's width and half of its height lie on a work area.
+Otherwise the panel moves onto the nearest monitor's work area, keeping
+its size unless it is larger, and a maximized panel fills that work area.
+A panel 200 px past the left edge with its header reachable stays where
+it is.
+
+**Strokes follow the dpi** (C10). The caption glyphs and the check mark
+grew with `Dp` while their strokes stayed one device pixel (the check
+mark two). Each caption stroke is now drawn `Dp(1)` times, one pixel
+further in each time, and the check mark `Dp(2)` times; the empty
+checkbox's edge follows the stroke. A wide GDI pen was not used: it has
+round ends and is centred on the path, which the existing +1 end-point
+arithmetic does not allow for. At 96 nothing changes. At 120 the caption
+glyphs are unchanged too (`Dp(1)` is 1), but the check mark is not:
+`Dp(2)` rounds 2.5 up to 3 px. (Commit `276170d`'s message says
+"identical at 96 and 120 dpi"; that holds for the glyphs only.) Glyph
+pixels are 71 at 96, 218 at 144 (107 before) and 282 at 192; check-mark
+pixels 28, 66 and 112.
+
+Probe fields, panel: 87 the `WM_DPICHANGED` messages handled, 88 the
+monitor's dpi now (`PanelDpi`, the fake included), 89 the last on-screen
+check (0 none, 1 left alone, 2 moved). No main-window fields. Two
+environment hooks in the test build: `TICKER_FAKE_MON="x0,dpi[,quiet]"`
+puts every window whose centre is at screen x >= x0 on a monitor at that
+dpi, and answers a move across with an emulated `WM_DPICHANGED` (field
+105's code, now shared as `ProbeDpiChange`) unless `quiet` is 1;
+`TICKER_FAKE_WORKAREA="dx,dy"` shifts `rcNormalPosition` as a left or top
+taskbar would.
+
+**Verified.** `shot_p48.ps1` (34 checks, 6 of them controls, posted
+messages on the hidden desktop) covers:
+- four sessions on the fake 144 monitor: 1920x1080 each time, drawn at
+  144 from the first frame (fields 60 and 88), no `WM_DPICHANGED` (field
+  87 = 0);
+- the variant where Windows sends no message: drawn at 144;
+- a size saved at a forced 144 opening as 1280x720 at 96, and staying so;
+- four save and restore cycles through the fake 48 px left and 40 px top
+  taskbar, one of them saved maximized, with the saved value at 552,260
+  throughout;
+- a hidden panel at -20000,-20000, 40 px from the right edge, or with its
+  header above the screen, brought back by a second start, a tray click
+  and "Show panel", and a maximized one brought back maximized; the
+  controls (a panel hidden on screen, one 200 px past the left edge) stay
+  put;
+- glyph pixels at 144 of 3.07x the 96 count, the check mark at 2.36x.
+
+**Red** against commit 1: 28 fail and the 6 controls pass. Green three
+times. The earlier scripts all pass (`shot_p47`, `shot_p46`,
+`shot_arow46`, `shot_fix44`, `shot_ui45`, `shot_vol`, `shot_range`,
+`shot_theme`, `shot_quote`, `shot_rsi`, `shot_dpi`). `chart_golden` 42/42
+twice. `golden.ps1 -Hidden` is identical to phase 47 in all seven
+captures. The 144 and 192 crops of the buttons, the restore glyph and the
+settings menu were looked at; the X is 14x13 at 144 and still reads as
+square. A fact check of the known limitations found the offline counter
+shown at the 400 px minimum width ("Last 85841.42  Offline 11s"; it has
+taken the place after Last since phase 42), so that limitation is
+rewritten. Not exercised: a real second monitor, a real side taskbar and
+a real scale change (reviewed, not tested). The fakes prove the app's
+arithmetic; they cannot prove what origin Windows gives this frameless
+popup's work-area coordinates, or when it sends `WM_DPICHANGED` to a
+hidden window. **Exe 241 152 → 242 688 bytes (+1 536).**
+
 ---
 
 ## Known limitations
 
+- **Monitors and scaling are tested with fakes only** (phase 48). A real
+  second monitor, a real side taskbar and a real scale change were not
+  exercised (reviewed, not tested); `TICKER_FAKE_MON` and
+  `TICKER_FAKE_WORKAREA` prove the app's arithmetic, not Windows'
+  behaviour. Whether Windows gives this frameless popup work-area-offset
+  coordinates at all, and when it sends `WM_DPICHANGED` to a hidden
+  window, cannot be seen here; the `SetWindowPlacement` pair is right
+  either way. `TICKER_FAKE_MON` models a single vertical boundary.
+- **A panel is left where it is when 120 px of its header is on a work
+  area** (phase 48). The rest of it can be off-screen; the rule only
+  makes sure there is something to take it by.
+- **A hidden, minimized panel is checked only when it is restored**
+  (phase 48), not when it is shown minimized.
+- **Geometry saved in phases 37-47 has no dpi** (phase 48). It is used as
+  it is, so a panel last saved before phase 48 on a monitor whose scale
+  has changed since opens at its old device size and keeps it until it
+  is resized (the next save stamps that size with the current dpi).
+- **A duplicate from a maximized panel with a taskbar on the left or at
+  the top opens shifted by the bar** (pitfall 42's accepted case, older
+  than phase 48). `SpawnInstance` passes `rcNormalPosition`, in work-area
+  coordinates, and the duplicate places it as screen coordinates.
 - **A menu opened from the keyboard shows no highlight until it moves**
   (phase 47). The arrows start on the current symbol or interval, which is
   already drawn as the accent row, as in a Windows dropdown; the row
@@ -4210,7 +4344,9 @@ and the tray menu in desktop mode, which was only built with the mode flag
 - **The one-time scaling of old geometry is untested** (phase 37). It
   reads `GetDpiForSystem`, which changes only at the next sign-in; the
   scale changes in the tests were per-monitor and immediate. The panel
-  itself was tested through a real 100 → 150 → 100 % change.
+  itself was tested through a real 100 → 150 → 100 % change. This is the
+  path for values without `PanelGeomDevice`; the phase 48 rescaling by
+  `PanelGeomDpi` was tested with a forced 144.
 - **The tray icon is 16x16 at every scale** (phase 37). The micro font
   draws into a fixed 16 px bitmap, and the shell scales it at 150 %.
 - **The quote line's At is the last update, not the last trade** (phase
@@ -4303,12 +4439,12 @@ and the tray menu in desktop mode, which was only built with the mode flag
   the alert fires.
 - **The outermost 6 px of the price column are a resize edge** (`HTRIGHT`),
   not alert surface, when the panel is not maximized.
-- **The offline counter is not shown in the header on narrow panels**
-  (phase 22). The toolbar ends at x = 338 (with the `MA` pill, phase 25; 310
-  without); the text needs ~75 px more before the price axis label, that is
-  a panel of ~510 px or more. The dimmed price,
-  tray tip and icon carry the state regardless. The symbol line's ellipsis
-  branch is gone along with the symbol line.
+- **On a narrow panel the quote line drops fields by priority** (phase
+  42, checked in phase 48): Last, %Chg, Chg, Hi, Lo, Op, Vol, At. Offline,
+  "Offline Ns" takes the place right after Last, so at the 400 px minimum
+  width the line still shows Last and the counter, and the other fields
+  wait for width. The dimmed price, tray tip and icon carry the state as
+  well.
 - **The periods are fixed** (phase 25): SMA 20 and EMA 50, not selectable,
   and both or neither — one toggle.
 - **The averages' legend needs ~335 px of chart width** (phase 25) and is
@@ -4678,7 +4814,8 @@ and the tray menu in desktop mode, which was only built with the mode flag
 42. **`rcNormalPosition` is in work-area coordinates, not screen.** They are
     equal as long as the taskbar is at the bottom or on the right. `SpawnInstance`
     uses `GetWindowRect` for a normal window and falls back to
-    `rcNormalPosition` only when the window is maximized.
+    `rcNormalPosition` only when the window is maximized. From phase 48
+    the saved rectangle goes back through `SetWindowPlacement` (133).
 43. **PowerShell passes `$null` as `""` to a P/Invoke `string`.**
     `FindWindow("Progman", $null)` gave 0, while `FindWindow("Progman",
     "Program Manager")` found the window: the first one looks for a window with an
@@ -5168,21 +5305,63 @@ and the tray menu in desktop mode, which was only built with the mode flag
     it.** `shot_range` checked that picking the selected range in the tray
     menu ends it. Update the expectation in the same phase, and name the
     check that changed.
+131. **A per-monitor-aware window takes its dpi when it is created.** Create
+    it at its target rectangle and style it there. Moving it there after
+    styling it for another dpi triggers a `WM_DPICHANGED`, which scales a
+    size that is already in device pixels (1920 → 2880 → 3860 in phase 48).
+132. **Device pixels are half a unit.** Save the dpi next to them
+    (`PanelGeomDpi`), or a size cannot be told apart from the same number
+    at another scale.
+133. **A rectangle read with `GetWindowPlacement` goes back through
+    `SetWindowPlacement`, never `SetWindowPos`.** The first is in
+    work-area coordinates, the second in screen coordinates; with a
+    taskbar on the left or at the top the difference drifts the window by
+    the bar every session. Measured: with `showCmd = SW_HIDE`,
+    `SetWindowPlacement` places a new hidden window exactly.
+134. **Windows moves visible windows off a monitor that goes away, not
+    hidden ones.** Check the placement when the window is shown, not only
+    when it is created.
+135. **A probe-only `WM_WINDOWPOSCHANGED` case must call `DefWindowProc`
+    first.** That call is what generates `WM_SIZE` and `WM_MOVE`; a case
+    that returns without it silences both.
+136. **A wide GDI pen has round ends and is centred on the path.** When the
+    geometry assumes a 1 px pen (end points +1), thicken a stroke by
+    drawing it again one pixel further in, not with a wider pen.
+137. **`Dp(2)` is 3 at 120 dpi.** `MulDiv` rounds, so "identical at 120"
+    holds only for `Dp(1)`. Check each length at 120, not just at 96 and
+    144 (phase 48's commit message got this wrong for the check mark).
+138. **`Select-String` is case-insensitive.** A `^FAIL` pattern matches the
+    summary line `fails=0`; use `-CaseSensitive`.
+139. **A control must be stated relative to what the red build actually
+    does.** The `[ + ]` control failed in phase 48's first red run only
+    because the parent had drifted (the bug under test) and the control
+    checked an absolute position; it now checks the offset from the
+    parent (the family of 127).
+140. **On the hidden desktop, hide the panel with a posted `WM_CLOSE`.** A
+    posted tray click only raises it there (pitfall 115).
+141. **To split two fixes in one working copy into separate commits**
+    without interactive add, filter the hunks of `git diff` and use `git
+    apply --cached`. Build the staged source first with `git show
+    :tickc.c`, redirected from bash; PowerShell `Set-Content -NoNewline`
+    on piped lines joined the file into one line.
+142. **The fakes (`TICKER_FAKE_MON`, `TICKER_FAKE_WORKAREA`) model
+    Windows.** They prove the app's arithmetic, not Windows' behaviour; a
+    real monitor change can still differ.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak41` and `chart.c.bak41` are left** (2026-09-24). From
+**Only `tickc.c.bak42` and `chart.c.bak42` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 47 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 48 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak40` (phases 34–46) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak41` (phases 34–47) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46) and `.bak41` (phase 47). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47) and `.bak42` (phase 48). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
