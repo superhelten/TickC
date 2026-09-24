@@ -82,6 +82,11 @@ another machine, look at the pictures (`--bmp`) and rewrite them with `--update`
 Run `TickC.exe`. An icon appears in the tray and the chart panel opens. Only one
 copy runs at a time: starting it again brings up the panel of the one that's running.
 
+The panel remembers its size and position. It reopens on the monitor it was on, at that
+monitor's scale, and if that monitor is gone (a laptop taken off its dock, say) it comes
+back onto a screen the next time it's shown. At 150 % and above the window buttons are
+drawn with thicker lines, so they stay sharp.
+
 
 | Action                     | What happens                                                            |
 | -------------------------- | ----------------------------------------------------------------------- |
