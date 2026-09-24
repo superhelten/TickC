@@ -2687,8 +2687,25 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
             DeleteObject(brHot);
         }
         COLORREF fg = active ? ctx->sty.clr.onAccent : ctx->sty.clr.text;
-        SetTextColor(hdc, Blend(ctx->sty.clr.bg, fg, a));
         RECT t = r.rows[i]; t.left += Dp(6);
+        // The interval's key, 1..7 (phase 47), right-aligned as the
+        // settings' keys are (phase 45): the keys pick an interval with the
+        // list closed and open. Dim, and on the accent row its own text
+        // color. Left out if the label would reach it, as there.
+        if (!isSym) {
+            wchar_t key[2] = { (wchar_t)(L'1' + idx), 0 };
+            RECT k1 = r.rows[i]; k1.right -= Dp(8);
+            SIZE ks = { 0, 0 }, ls = { 0, 0 };
+            GetTextExtentPoint32W(hdc, key, 1, &ks);
+            GetTextExtentPoint32W(hdc, lbl, (int)wcslen(lbl), &ls);
+            k1.left = k1.right - ks.cx;
+            if (t.left + ls.cx + Dp(HDR_GAP) <= k1.left) {
+                SetTextColor(hdc, Blend(ctx->sty.clr.bg, active ? ctx->sty.clr.onAccent : ctx->sty.clr.dim, a));
+                DrawTextW(hdc, key, 1, &k1, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+                t.right = k1.left - Dp(HDR_GAP);
+            }
+        }
+        SetTextColor(hdc, Blend(ctx->sty.clr.bg, fg, a));
         DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
 
@@ -3790,18 +3807,62 @@ static BOOL AxisHoverSet(const ChartRect* g, int axY) {
 // configGen and the thread are handled exactly as from the overlay and the
 // tray menu; a click on the active interval is a no-op there. The symbol cell
 // opens the existing overlay - no new menu, no new hit-test code.
+// Opens a menu: 0 the picker, 1 the interval dropdown, 2 the settings menu,
+// 3 the symbol dropdown. From the keyboard (phase 47) the row the arrows
+// start from is the current choice, as in a Windows dropdown - the accent
+// row, so the list opens showing where Enter would leave things - or the
+// first setting; from the mouse, none, until the pointer is on a row.
+static void OpenOverlay(HWND hwnd, int kind, BOOL byKey) {
+    g_Ctx.overlayKind = kind;
+    g_Ctx.overlayOpen = TRUE;
+    g_Ctx.overlayHot  = !byKey ? -1
+                      : (kind == 1) ? SYMBOL_COUNT + g_Ctx.ivIdx
+                      : (kind == 2) ? OVL_SET_FIRST
+                      : g_Ctx.symIdx;
+    g_Ctx.ch.hoverIdx = -1;
+    g_Ctx.tbHot       = -1;   // no cell lights up while the overlay owns the mouse
+    StartAnim(hwnd);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// A row of the open menu is picked, by a click or by Enter (phase 47: one
+// path for both). A setting toggles and the menu stays open (phase 42), so
+// several can be changed in one visit; a symbol or an interval is applied
+// and the menu closes; -1 - a click outside every row - closes it without a
+// change.
+static void OverlayPick(HWND hwnd, int hit) {
+    if (hit >= OVL_SET_FIRST) {
+        SettingToggle(&g_Ctx, hit - OVL_SET_FIRST);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+    if (hit >= 0) ApplyConfigChoice(&g_Ctx, hit);
+    g_Ctx.overlayOpen = FALSE;
+    g_Ctx.overlayHot  = -1;
+    StartAnim(hwnd);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// The next row of the open menu from row from, one step in dir (+1 down, -1
+// up), skipping the rows this layout leaves empty (the symbol rows of the
+// interval dropdown, for one). From -1 - nothing highlighted - the first or
+// the last. The ends stop, as in a dropdown list; they do not wrap.
+static int OverlayStep(const OverlayRects* r, int from, int dir) {
+    int i = from;
+    for (int k = 0; k < r->count; ++k) {
+        i = (i < 0) ? ((dir > 0) ? 0 : r->count - 1) : i + dir;
+        if (i < 0 || i >= r->count) return from;
+        if (r->rows[i].right > r->rows[i].left) return i;
+    }
+    return from;
+}
+
 static void OnToolbarClick(HWND hwnd, int th) {
     if (th == TBAR_SYM || th == TBAR_IV || th == TBAR_GEAR) {
         // The symbol dropdown (phase 45; the two-column picker before), the
         // interval dropdown (phase 41) or the settings menu (phase 42). The
         // picker (kind 0) is the right-click's alone now.
-        g_Ctx.overlayKind = (th == TBAR_IV) ? 1 : (th == TBAR_GEAR) ? 2 : 3;
-        g_Ctx.overlayOpen = TRUE;
-        g_Ctx.overlayHot  = -1;
-        g_Ctx.ch.hoverIdx    = -1;
-        g_Ctx.tbHot       = -1;   // no cell lights up while the overlay owns the mouse
-        StartAnim(hwnd);
-        InvalidateRect(hwnd, NULL, FALSE);
+        OpenOverlay(hwnd, (th == TBAR_IV) ? 1 : (th == TBAR_GEAR) ? 2 : 3, FALSE);
     } else if (th >= TBAR_RANGE_FIRST && th < TBAR_IV) {
         SelectRange(&g_Ctx, th - TBAR_RANGE_FIRST);
     }
@@ -5038,18 +5099,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 GetClientRect(hwnd, &rcO);
                 OverlayRects orr;
                 OverlayLayout(rcO.right, rcO.bottom, &orr);
-                int hit = OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-                if (hit >= OVL_SET_FIRST) {
-                    // A setting (phase 42): toggled, and the menu stays open.
-                    SettingToggle(&g_Ctx, hit - OVL_SET_FIRST);
-                    InvalidateRect(hwnd, NULL, FALSE);
-                    return 0;
-                }
-                if (hit >= 0) ApplyConfigChoice(&g_Ctx, hit);
-                g_Ctx.overlayOpen = FALSE;   // a click outside closes without change
-                g_Ctx.overlayHot  = -1;
-                StartAnim(hwnd);
-                InvalidateRect(hwnd, NULL, FALSE);
+                // A setting toggles and the menu stays open (phase 42); a
+                // click outside every row closes without change.
+                OverlayPick(hwnd, OverlayHit(&orr, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)));
                 return 0;
             }
             RECT rc;
@@ -5210,9 +5262,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // held 1..7 refetched the interval, a held Esc walked through all
             // its layers and hid the panel. Only the navigation keys (arrows,
             // PgUp/PgDn, Home/End, + and -) keep repeating: holding them is
-            // how one scrolls. Letters, digits, F11 and Esc are commands.
+            // how one scrolls. Letters, digits, F11 and Esc are commands, and
+            // Enter and Space, which pick a menu row (phase 47) - a held
+            // Enter toggled a setting at the repeat rate.
             if ((lParam & 0x40000000) &&
-                (wParam == VK_F11 || wParam == VK_ESCAPE ||
+                (wParam == VK_F11 || wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_SPACE ||
                  (wParam >= '0' && wParam <= '9') || (wParam >= 'A' && wParam <= 'Z'))) {
                 return 0;
             }
@@ -5253,6 +5307,73 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     return 0;
                 }
             }
+            // An open menu from the keyboard (phase 47; up to phase 46 only
+            // Esc reached it, and the symbol could not be changed from the
+            // keyboard at all). Up and Down move the highlighted row, Home
+            // and End go to the ends, Enter or Space picks the row as a click
+            // would, Left and Right go to the next menu in the header's order
+            // - symbol, interval, settings - or, in the right-click picker,
+            // to the other column. S, B and G go to their menu, or close it
+            // when it is the one open. The keys a menu shows work in it: 1..7
+            // in the intervals, V M I T in the settings. Esc closes, below.
+            if (!g_desktopMode && g_Ctx.overlayOpen && !ctrl) {
+                RECT rcK;
+                GetClientRect(hwnd, &rcK);
+                OverlayRects ok;
+                OverlayLayout(rcK.right, rcK.bottom, &ok);
+                int kind = g_Ctx.overlayKind, hot = g_Ctx.overlayHot, to = -2;
+                switch (wParam) {
+                    case VK_DOWN: to = OverlayStep(&ok, hot, +1); break;
+                    case VK_UP:   to = OverlayStep(&ok, hot, -1); break;
+                    case VK_HOME: to = OverlayStep(&ok, -1, +1); break;
+                    case VK_END:  to = OverlayStep(&ok, -1, -1); break;
+                    case VK_RETURN: case VK_SPACE:
+                        if (hot >= 0) OverlayPick(hwnd, hot);
+                        return 0;
+                    case VK_LEFT: case VK_RIGHT: {
+                        BOOL right = (wParam == VK_RIGHT);
+                        if (kind == 0) {
+                            int n = right ? INTERVAL_COUNT : SYMBOL_COUNT;
+                            int row = (hot < 0) ? (right ? g_Ctx.ivIdx : g_Ctx.symIdx)
+                                    : (hot < SYMBOL_COUNT) ? hot : hot - SYMBOL_COUNT;
+                            if (row >= n) row = n - 1;
+                            to = (right ? SYMBOL_COUNT : 0) + row;
+                            break;
+                        }
+                        static const int ORDER[3] = { 3, 1, 2 };
+                        int at = (kind == 3) ? 0 : (kind == 1) ? 1 : 2;
+                        OpenOverlay(hwnd, ORDER[(at + (right ? 1 : 2)) % 3], TRUE);
+                        return 0;
+                    }
+                    case 'S': case 'B': case 'G': {
+                        int want = (wParam == 'S') ? 3 : (wParam == 'B') ? 1 : 2;
+                        if (want == kind) OverlayPick(hwnd, -1);
+                        else              OpenOverlay(hwnd, want, TRUE);
+                        return 0;
+                    }
+                    default: break;
+                }
+                if (to != -2) {
+                    if (to != hot) {
+                        g_Ctx.overlayHot = to;
+                        InvalidateRect(hwnd, NULL, FALSE);
+                    }
+                    return 0;
+                }
+                if ((kind == 0 || kind == 1) && !shift &&
+                    wParam >= '1' && wParam < (WPARAM)('1' + INTERVAL_COUNT)) {
+                    OverlayPick(hwnd, SYMBOL_COUNT + (int)(wParam - '1'));
+                    return 0;
+                }
+                if (kind == 2) {
+                    for (int k = 0; k < SET_COUNT; ++k) {
+                        if (wParam == (WPARAM)SET_KEY[k][0]) {
+                            OverlayPick(hwnd, OVL_SET_FIRST + k);
+                            return 0;
+                        }
+                    }
+                }
+            }
             // Navigation in the chart (phase 20), through the same
             // PanView/ZoomView as the wheel. Left/right is one wheel notch
             // (vc / 8 candles), PgUp/PgDn a whole view, Home the oldest candle
@@ -5276,6 +5397,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // stays free.
                 if (!ctrl && wParam == 'V') {
                     SetShowVolume(&g_Ctx, !ShowVolNow(&g_Ctx));
+                    return 0;
+                }
+                // S, B and G (phase 47): the header's three menus - the
+                // symbol, the interval (the bar size) and the settings - as
+                // a click on their cell opens them, with the current row
+                // highlighted for the arrows. Not I, the RSI band's key
+                // since phase 39.
+                if (!ctrl && (wParam == 'S' || wParam == 'B' || wParam == 'G')) {
+                    OpenOverlay(hwnd, (wParam == 'S') ? 3 : (wParam == 'B') ? 1 : 2, TRUE);
                     return 0;
                 }
                 // M (phase 25): the MA pill. Without Ctrl - Ctrl+M minimizes.
