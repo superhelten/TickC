@@ -346,8 +346,10 @@ typedef struct {
 
     // --- Worker thread ---
     // The lock covers candles[], candleCount, viewStart, viewCount,
-    // followLive, lastPrice, hPopup, frontShift, histPending, histDone and
-    // rangeWant (phase 41). Everything else is touched only by the UI thread.
+    // followLive, lastPrice, hPopup, frontShift, histPending, histDone,
+    // rangeWant (phase 41) and hSession (phase 44: WinMain closes it at exit
+    // while the worker may still run). hConnect is the worker's alone.
+    // Everything else is touched only by the UI thread.
     CRITICAL_SECTION lock;
     HANDLE hThread;
     HANDLE hStopEvent;   // manual reset: signals shutdown
@@ -1165,8 +1167,17 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     // Gap between the buffer and the new set (the panel has been closed for
     // a while) -> start over. Otherwise the chart would draw a continuous
     // curve straight across dead time.
+    // Phase 44: a gap is any missing candle, one interval of slack and not
+    // two. WorkerFetchKlines now sizes the fetch to the gap, so a response
+    // reaches back to the last buffered candle and this never fires on it;
+    // it fires when the gap is longer than one fetch can close (SEED_COUNT
+    // candles) or the clock is far behind the server's. The two-interval
+    // slack let a response that began two intervals on through, and the
+    // candle between stayed missing for good - with the old fixed limit of 3
+    // whenever the newest candle was 4 intervals on, and after a seed at
+    // exactly 361 (see WorkerFetchKlines).
     if (ctx->candleCount > 0 &&
-        in[0].openTime > ctx->candles[ctx->candleCount - 1].openTime + 2 * ctx->intervalMs) {
+        in[0].openTime > ctx->candles[ctx->candleCount - 1].openTime + ctx->intervalMs) {
         ctx->candleCount = 0;
         ctx->ch.viewStart   = 0;
         ctx->ch.viewCount   = 0;
@@ -1447,8 +1458,20 @@ static BOOL HttpGet(AppContext* ctx, const wchar_t* path, char* buf, DWORD bufSi
     if (g_fixtureDir[0]) return FixtureGet(path, buf, bufSize);
 #endif
 
+    // Shutdown (phase 44): the stop event is set before WinMain closes the
+    // session, so a cycle with two or three requests left gives up on the
+    // next one instead of starting it.
+    if (WaitForSingleObject(ctx->hStopEvent, 0) == WAIT_OBJECT_0) return FALSE;
+
     if (!ctx->hConnect) {
-        ctx->hConnect = WinHttpConnect(ctx->hSession, L"api.binance.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+        // hSession is read and used under the lock (phase 44): at exit
+        // WinMain takes it under the lock, clears it and closes it, while
+        // this thread may still be running. WinHttpConnect does no network
+        // I/O - it only creates the handle - so the lock is held briefly.
+        EnterCriticalSection(&ctx->lock);
+        if (ctx->hSession)
+            ctx->hConnect = WinHttpConnect(ctx->hSession, L"api.binance.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+        LeaveCriticalSection(&ctx->lock);
         if (!ctx->hConnect) return FALSE;
     }
 
@@ -1636,6 +1659,7 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     unsigned gen;
     int si, ii;
     long long ivMs;
+    int limit = SEED_COUNT;
 
     EnterCriticalSection(&ctx->lock);
     seed = (ctx->candleCount == 0);
@@ -1645,13 +1669,31 @@ static BOOL WorkerFetchKlines(AppContext* ctx) {
     ivMs = ctx->intervalMs;
     if (!seed) {
         long long lastT = ctx->candles[ctx->candleCount - 1].openTime;
-        if (NowUnixMs() - lastT > 5 * ivMs) seed = TRUE;
+        long long gap   = NowUnixMs() - lastT;
+        if (gap > 5 * ivMs) {
+            seed = TRUE;
+        } else if (ivMs > 0) {
+            // The limit follows the gap (phase 44). It was a fixed 3, and
+            // MergeCandles restarts only when the response begins more than
+            // two intervals after the last buffered candle. With the newest
+            // candle 3 intervals on, the response began right after the last
+            // one, which kept its half-formed data for good; 4 on, one candle
+            // was never fetched - a permanent hole. gap / iv + 1 candles
+            // reach back to the last buffered one, and one more is slack for
+            // a clock a little behind the server's, so the response always
+            // overlaps it. A clock ahead only makes the overlap larger, a
+            // negative gap gives the floor of 3.
+            long long want = gap / ivMs + 2;
+            if (want < 3)          want = 3;
+            if (want > SEED_COUNT) want = SEED_COUNT;
+            limit = (int)want;
+        }
     }
     LeaveCriticalSection(&ctx->lock);
 
     wchar_t path[160];
     swprintf_s(path, 160, L"/api/v3/klines?symbol=%s&interval=%s&limit=%d",
-               SYMBOLS[si].api, INTERVALS[ii].api, seed ? SEED_COUNT : 3);
+               SYMBOLS[si].api, INTERVALS[ii].api, seed ? SEED_COUNT : limit);
 
     // The fetch itself happens WITHOUT the lock - it can take hundreds of
     // milliseconds, and the UI thread must be able to paint all the time.
@@ -1927,7 +1969,11 @@ static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
     if (hNewIcon) {
         if (ctx->nid.hIcon) DestroyIcon(ctx->nid.hIcon);
         ctx->nid.hIcon = hNewIcon;
-        ctx->nid.uFlags = NIF_ICON | NIF_TIP;
+        // NIF_MESSAGE stays (phase 44): this nid is also the one the
+        // TaskbarCreated handler re-adds after an Explorer restart, and an
+        // icon added without it has no callback message - it ignored every
+        // click. NIM_MODIFY with the same callback changes nothing.
+        ctx->nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         wcscpy_s(ctx->nid.szTip, 128, ctx->fullPriceStr);
         Shell_NotifyIconW(NIM_MODIFY, &ctx->nid);
     }
@@ -3390,9 +3436,10 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
-// Click on a pill in the toolbar. Its own function for the same reason as
-// OnButtonClick: WM_LBUTTONDOWN and WM_LBUTTONDBLCLK both reach here, so two
-// fast clicks on VOL are two toggles and not one (pitfall 38).
+// Click on a pill in the toolbar. Only WM_LBUTTONDOWN reaches here: from
+// phase 44 WM_LBUTTONDBLCLK swallows the second click of a double-click on a
+// cell (it deselected the range the first click picked). Before that both
+// messages came here, so two fast clicks were two toggles (pitfall 38).
 // The intervals go through ApplyConfigChoice, so registry, watermark,
 // configGen and the thread are handled exactly as from the overlay and the
 // tray menu; a click on the active interval is a no-op there. The symbol pill
@@ -3551,10 +3598,10 @@ static void SpawnInstance(HWND hwnd) {
     }
 }
 
-// Click on a control button. Its own function because two messages reach
-// here: WM_LBUTTONDOWN, and WM_LBUTTONDBLCLK - with CS_DBLCLKS the second
-// click of a fast double-click becomes a DBLCLK, and the buttons would
-// otherwise have swallowed it.
+// Click on a control button. Its own function because the keyboard shortcuts
+// (Ctrl+N, Ctrl+M, F11, Ctrl+W) take the same path as the click. Up to phase
+// 43 the second click of a double-click came here too; from phase 44
+// WM_LBUTTONDBLCLK swallows it, so [ + ] no longer starts two instances.
 static void OnButtonClick(HWND hwnd, int bh) {
     switch (bh) {
         case BTN_NEW:
@@ -3993,7 +4040,22 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (g.cw <= 0) return 0;
 
             BOOL ctrl   = (GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0;
-            int notches = GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
+            // Whole notches from an accumulated delta (phase 44). A touchpad
+            // and a free-spinning wheel send deltas below WHEEL_DELTA, and
+            // delta / WHEEL_DELTA truncated every one of them to zero - the
+            // chart did not move at all. The remainder carries to the next
+            // message; a change of direction, or between pan and zoom
+            // (Ctrl), starts over, so a leftover never pushes the wrong way.
+            static int  s_wheelAcc  = 0;
+            static BOOL s_wheelCtrl = FALSE;
+            int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            if (ctrl != s_wheelCtrl || (s_wheelAcc < 0 && delta > 0) || (s_wheelAcc > 0 && delta < 0))
+                s_wheelAcc = 0;
+            s_wheelCtrl = ctrl;
+            s_wheelAcc += delta;
+            int notches = s_wheelAcc / WHEEL_DELTA;
+            s_wheelAcc -= notches * WHEEL_DELTA;
+            if (notches == 0) return 0;
 
             BOOL atWall = FALSE;
             EnterCriticalSection(&g_Ctx.lock);
@@ -4434,29 +4496,45 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
             return 0;
 
-        // A double-click on the chart or the price axis resets zoom and
-        // panning. Requires CS_DBLCLKS on the window class - without it the
-        // message never arrives. Everything that is not chart or axis - the
-        // buttons, and the whole panel while the overlay is open - falls
-        // through to WM_LBUTTONDOWN, so the second click of a fast
-        // double-click behaves as it did before CS_DBLCLKS came in.
+        // A double-click on the chart resets zoom and panning. Requires
+        // CS_DBLCLKS on the window class - without it the message never
+        // arrives. The price column falls through to WM_LBUTTONDOWN (below).
+        //
+        // Phase 44: the overlay, the caption buttons and the toolbar SWALLOW
+        // the second click. Up to phase 43 they fell through as well, so a
+        // double-click was two clicks: on a range cell the second one
+        // deselected the range the first had picked, a settings row toggled
+        // back, the gear opened and closed its menu, [ + ] started two
+        // instances. A double-click there is one click; two separate toggles
+        // take two separate clicks. The overlay check comes first: the gear's
+        // second click arrives with the menu the first one opened.
         //
         // The first click has already started panning, but WM_LBUTTONUP
         // has released it again before DBLCLK arrives. Free header area is
         // HTCAPTION and gives WM_NCLBUTTONDBLCLK (maximize) - it never gets here.
         case WM_LBUTTONDBLCLK: {
-            if (!g_Ctx.overlayOpen) {
+            if (g_Ctx.overlayOpen) return 0;
+            {
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
-                ChartRect gd = PanelGeometry(rcD.right, rcD.bottom);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+                RECT btns[BTN_COUNT];
+                ButtonLayout(rcD.right, btns);
+                if (ButtonHit(btns, mx, my) >= 0) return 0;
+                RECT tb[TBAR_COUNT];
+                ToolbarLayout(rcD.right, tb);
+                if (ToolbarHit(tb, mx, my) >= 0) return 0;
+
+                ChartRect gd = PanelGeometry(rcD.right, rcD.bottom);
                 // [g.left, edge]: the chart and the headroom. Up to and
                 // including phase 22 the area went all the way to W, with the
                 // axis margin. The price column now belongs to the alerts
-                // (phase 23) and falls through to WM_LBUTTONDOWN like the
-                // buttons: there the second click of a fast double-click is
-                // one more click on the mark the first one set.
-                if (mx >= gd.left && mx <= gd.edge && my >= gd.top && my <= gd.bottom) {
+                // (phase 23) and falls through to WM_LBUTTONDOWN on purpose:
+                // there the second click of a fast double-click is one more
+                // click on the mark the first one set (set + remove).
+                // Down to the lowest pane (phase 44), as the crosshair: the
+                // volume pane and the RSI band show the same candles.
+                if (mx >= gd.left && mx <= gd.edge && my >= gd.top && my <= ChartPanesBottom(&gd)) {
                     ResetView(&g_Ctx);
                     EnterCriticalSection(&g_Ctx.lock);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gd, mx, my);
@@ -4525,7 +4603,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 OnAxisClick(hwnd, &gg, dy);
                 return 0;
             }
-            if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= gg.bottom) {
+            // The drag covers every pane (phase 44), like the crosshair; the
+            // price column above stays the price pane's - it is the alerts' axis.
+            if (dx >= gg.left && dx < gg.right && dy >= gg.top && dy <= ChartPanesBottom(&gg)) {
                 // Start panning. SetCapture ensures we get the mouse release
                 // even if the pointer leaves the window along the way.
                 int vs, vc;
@@ -4552,8 +4632,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             GetClientRect(hwnd, &rc);
             ChartRect gg = PanelGeometry(rc.right, rc.bottom);
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            // Every pane (phase 44), the same area as the drag.
             if (!g_Ctx.overlayOpen &&
-                mx >= gg.left && mx < gg.right && my >= gg.top && my <= gg.bottom) {
+                mx >= gg.left && mx < gg.right && my >= gg.top && my <= ChartPanesBottom(&gg)) {
                 g_Ctx.overlayKind = 0;   // phase 41: the picker, not the dropdown
                 g_Ctx.overlayOpen = TRUE;
                 g_Ctx.overlayHot  = -1;
@@ -4593,6 +4674,26 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
 
         case WM_KEYDOWN: {
+            // AltGr (phase 44). A plain Alt+key arrives as WM_SYSKEYDOWN, so
+            // Alt held down HERE means Ctrl+Alt - which is what AltGr sends.
+            // On the Norwegian layout AltGr+0 is '}' and AltGr+M is a
+            // character too, and they reset the window and minimized it as
+            // Ctrl+0 and Ctrl+M. Clearing ctrl alone would not do: AltGr+7
+            // ('{') would then switch the interval and AltGr+M toggle the
+            // averages. A composed character is no shortcut, so the key is
+            // ignored whole.
+            if (GetKeyState(VK_MENU) & 0x8000) return 0;
+            // Auto-repeat (phase 44): bit 30 is set when the key was already
+            // down. A held V, M, I or T flickered its toggle on and off, a
+            // held 1..7 refetched the interval, a held Esc walked through all
+            // its layers and hid the panel. Only the navigation keys (arrows,
+            // PgUp/PgDn, Home/End, + and -) keep repeating: holding them is
+            // how one scrolls. Letters, digits, F11 and Esc are commands.
+            if ((lParam & 0x40000000) &&
+                (wParam == VK_F11 || wParam == VK_ESCAPE ||
+                 (wParam >= '0' && wParam <= '9') || (wParam >= 'A' && wParam <= 'Z'))) {
+                return 0;
+            }
             BOOL ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             BOOL shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;   // phase 41
             // Ctrl+0: back to factory geometry, centered on the monitor the
@@ -4680,17 +4781,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // same number shown in the label on the axis, rounded as a
                 // click in the column would. Without a crosshair there is no
                 // price to point at, and the key does nothing. hoverY is
-                // clamped as in ChartDrawBody: the crosshair is never drawn outside
-                // [top, bottom], so the alert must not end up there either.
+                // clamped at the top as in ChartDrawBody. Below the price pane
+                // (phase 44) the crosshair stands in the volume pane or the RSI
+                // band, which have no price: the key does nothing there either.
+                // Up to phase 43 the y was clamped to the price pane's bottom,
+                // and an alert appeared at the lowest price in view.
                 if (!ctrl && wParam == 'A') {
                     if (g_Ctx.ch.hoverIdx >= 0 && g_Ctx.ch.dispValid) {
                         RECT rcA;
                         GetClientRect(hwnd, &rcA);
                         ChartRect ga = PanelGeometry(rcA.right, rcA.bottom);
                         int hy = g_Ctx.ch.hoverY;
-                        if (hy < ga.top)    hy = ga.top;
-                        if (hy > ga.bottom) hy = ga.bottom;
-                        AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx.ch, &ga, hy));
+                        if (hy < ga.top) hy = ga.top;
+                        if (hy <= ga.bottom) AlertAdd(&g_Ctx, AlertPriceAtY(&g_Ctx.ch, &ga, hy));
                     }
                     return 0;
                 }
@@ -5297,6 +5400,28 @@ static HMENU BuildTrayMenu(void) {
     return hMenu;
 }
 
+// Tears down the panel or the desktop surface at exit: WM_DESTROY and, from
+// phase 44, "Quit TickC". The quit path used to leave the window standing
+// while WinMain waited for the worker thread - seconds, with a request in
+// flight. The panel is NOT owned by the main window (ownership would remove
+// its taskbar button), so Windows does not tear it down for us. hPopup is in
+// the lock domain and the worker thread is still alive here - it is stopped
+// only after the message loop - so it is cleared under the lock BEFORE
+// DestroyWindow; WM_NCDESTROY is then a no-op and starts no rebuild timer.
+// SaveGeometry skips desktop mode and duplicates by itself. The embed timer
+// dies first, as in SetDesktopMode: on the quit path the main window outlives
+// the surface, and a pending tick would see hPopup NULL and build it again.
+static void DestroyPanelSurface(void) {
+    KillTimer(g_Ctx.hWnd, TIMER_EMBED_ID);
+    if (!g_Ctx.hPopup) return;
+    HWND hp = g_Ctx.hPopup;
+    SaveWindowPlacement(hp);
+    EnterCriticalSection(&g_Ctx.lock);
+    g_Ctx.hPopup = NULL;
+    LeaveCriticalSection(&g_Ctx.lock);
+    DestroyWindow(hp);
+}
+
 // ---------------------------------------------------------------------------
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -5381,6 +5506,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (LOWORD(wParam) == ID_TRAY_EXIT) {
                 Shell_NotifyIconW(NIM_DELETE, &g_Ctx.nid);
+                // Gone before WinMain waits for the worker thread (phase 44).
+                DestroyPanelSurface();
                 PostQuitMessage(0);
             }
             break;
@@ -5502,6 +5629,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (wParam == 113) return (LRESULT)g_probeConnDrops;
             if (wParam == 114) return (LRESULT)g_probeDisplayChanges;   // phase 26
             if (wParam == 115) return (LRESULT)g_probeMigrate;          // phase 30
+            // 116 (phase 44): the tray icon's flags as the next NIM_ADD after
+            // an Explorer restart would send them; NIF_MESSAGE (1) must be set.
+            if (wParam == 116) return (LRESULT)g_Ctx.nid.uFlags;
             return 0;
 #endif
 
@@ -5545,19 +5675,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_DESTROY:
             SaveConfig(&g_Ctx);
-            if (g_Ctx.hPopup) {
-                SaveWindowPlacement(g_Ctx.hPopup);
-                // The panel is NOT owned by the main window any more -
-                // ownership would remove the button in the taskbar. Then
-                // Windows does not tear it down for us, so we do it ourselves.
-                HWND hp = g_Ctx.hPopup;
-                // hPopup is in the lock domain, and the worker thread is still
-                // alive here - it is stopped only after the message loop.
-                EnterCriticalSection(&g_Ctx.lock);
-                g_Ctx.hPopup = NULL;
-                LeaveCriticalSection(&g_Ctx.lock);
-                DestroyWindow(hp);
-            }
+            DestroyPanelSurface();   // the panel is not owned: see there
             PostQuitMessage(0);
             break;
 
@@ -5591,6 +5709,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // and the desktop stood without a chart for a second. So it is
             // torn down only if it does NOT sit in the current WorkerW.
             if (msg == g_msgTaskbarCreated && g_msgTaskbarCreated != 0) {
+                // The flags are set here, not inherited (phase 44): uFlags is
+                // whatever the last Shell_NotifyIconW call left, and a re-add
+                // without NIF_MESSAGE gave an icon that ignored all clicks.
+                g_Ctx.nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
                 Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
                 if (g_desktopMode) {
                     if (!g_Ctx.hPopup) {
@@ -5633,8 +5755,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (!g_Ctx.hSession) return 1;
 
     // Without this the default receive timeout is 30 seconds. Then a hanging
-    // connection would hold the worker thread longer than the 3 seconds we
-    // wait at exit - and we would close the session under it.
+    // connection would hold the worker thread far beyond the wait at exit
+    // (10 s from phase 44; see the end of WinMain for what happens then).
     WinHttpSetTimeouts(g_Ctx.hSession, 5000, 5000, 5000, 5000);
 
     // The chart's fonts, pens and brushes (phase 35: one definition, shared
@@ -5782,15 +5904,38 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         DispatchMessageW(&msg);
     }
 
-    // Stop the thread before we tear down anything it can touch
+    // Stop the thread before we tear down anything it can touch.
+    //
+    // Phase 44: up to phase 43 the wait was 3 s and its result ignored, and
+    // the events, the lock and both WinHTTP handles were closed under a
+    // worker that could still be inside a request (each WinHTTP phase may
+    // take 5 s). Now: the stop event first (HttpGet starts no new request),
+    // then the session is taken out under the lock and closed, which is
+    // meant to cut short a request in flight on its children - HttpGet reads
+    // hSession under the same lock, so it never connects on a closed one.
+    // hConnect is the worker's and is not touched here. Then up to 10 s, and
+    // the lock, the events and hConnect are released only if the thread has
+    // really ended. Otherwise they are left to the process exit, which is
+    // moments away: a leaked handle beats a lock deleted under a live thread.
+    BOOL workerDone = (g_Ctx.hThread == NULL);
     if (g_Ctx.hStopEvent) SetEvent(g_Ctx.hStopEvent);
+    {
+        HINTERNET hs;
+        EnterCriticalSection(&g_Ctx.lock);
+        hs = g_Ctx.hSession;
+        g_Ctx.hSession = NULL;
+        LeaveCriticalSection(&g_Ctx.lock);
+        if (hs) WinHttpCloseHandle(hs);
+    }
     if (g_Ctx.hThread) {
-        WaitForSingleObject(g_Ctx.hThread, 3000);
+        workerDone = (WaitForSingleObject(g_Ctx.hThread, 10000) == WAIT_OBJECT_0);
         CloseHandle(g_Ctx.hThread);
     }
-    if (g_Ctx.hStopEvent) CloseHandle(g_Ctx.hStopEvent);
-    if (g_Ctx.hWakeEvent) CloseHandle(g_Ctx.hWakeEvent);
-    DeleteCriticalSection(&g_Ctx.lock);
+    if (workerDone) {
+        if (g_Ctx.hStopEvent) CloseHandle(g_Ctx.hStopEvent);
+        if (g_Ctx.hWakeEvent) CloseHandle(g_Ctx.hWakeEvent);
+        DeleteCriticalSection(&g_Ctx.lock);
+    }
 
     // The buffer first: fonts, pens and brushes from the last frame can be
     // selected into the DC, and DeleteObject on a selected object fails
@@ -5814,8 +5959,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (g_Ctx.wmBmp)   DeleteObject(g_Ctx.wmBmp);
     if (g_Ctx.hFontWm) DeleteObject(g_Ctx.hFontWm);
 
-    if (g_Ctx.hConnect) WinHttpCloseHandle(g_Ctx.hConnect);
-    if (g_Ctx.hSession) WinHttpCloseHandle(g_Ctx.hSession);
+    // hConnect belongs to the worker thread: released only once it has ended
+    // (phase 44). The session was closed before the wait.
+    if (workerDone && g_Ctx.hConnect) WinHttpCloseHandle(g_Ctx.hConnect);
 
     return (int)msg.wParam;
 }
