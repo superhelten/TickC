@@ -63,7 +63,7 @@ typedef struct {
     // 0 as `alerts` puts it, 1 ghostDy px from alert 0's row, 2 ghostDy px
     // from the stamp's row, 3 the first row from a third down whose rounded
     // price lies 3 px or more away, 4 no ghost and alert 0 on the legend's
-    // middle row, 5 ghostDy px from the price pane's bottom row. loudLast:
+    // middle row (phase 52: in the statistics box), 5 ghostDy px from the price pane's bottom row. loudLast:
     // the last candle has 50 times its volume.
     double base;
     int  ghost, ghostDy;
@@ -285,8 +285,10 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base, ChartState*
         } else if (k->ghost == 5) {
             in.axisHotY = g.bottom + ChartPx(k->dpi, k->ghostDy);
         } else if (k->ghost == 4) {
-            // The legend's text starts 4 px under the top and is 15 px tall.
-            alerts[0] = AlertPriceAtY(&st, &g, g.top + ChartPx(k->dpi, 4) + ChartPx(k->dpi, 7));
+            // Phase 52: the legend is the statistics box, in the upper-left
+            // corner here (the price enters the lower-left); 40 px under the
+            // pane's top is among its rows. CheckLegendAlert checks that.
+            alerts[0] = AlertPriceAtY(&st, &g, g.top + ChartPx(k->dpi, 40));
             in.axisHotY = -1;
             in.alertFlashF = 0.0;
         }
@@ -452,9 +454,6 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     CP("axis labels",             axis,      bg),
     CP("RSI value tag",           rsi,       box),
     CP("RSI legend",              rsi,       bg),
-    CP("SMA legend",              sma,       bg),
-    CP("EMA legend",              ema,       bg),
-    CP("VWAP legend",             vwap,      bg),
     CP("today's level labels",    session,   bg),
     CP("yesterday's level labels",prev,      bg),
     CP("hover box text",          text,      box),
@@ -494,9 +493,9 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     // on the theme's fillCell (the navy in the dark theme, bg in the light).
     CP("today's level names on fill", session, fillCell),
     CP("yesterday's names on fill",   prev,    fillCell),
-    CP("SMA legend on fill",      sma,       fillCell),
-    CP("EMA legend on fill",      ema,       fillCell),
-    CP("VWAP legend on fill",     vwap,      fillCell),
+    // Phase 52: the averages' one-line legend is gone into the statistics
+    // box, where the rows are text on the box and the colors are squares;
+    // its pairs on bg and on the fill went with it.
     // Phase 52: the statistics box and the volume legend are framed boxes on
     // the box surface (Bloomberg's), their text in the text color and the
     // high/average/low glyphs in the axis color; the volume tag of the line
@@ -1260,39 +1259,38 @@ static int CheckChartTypes(void) {
         }
         SceneClose(&sc);
     }
-    // The averages' legend over the mountain stands on the background: in
-    // the legend's box, no fill. Precondition (pitfall 127): the line rises
-    // into the legend's rows under the legend's columns - closes drawn above
-    // the legend's bottom, so without the rule the fill would be in the box.
-    {
+    // Phase 52: the averages' legend is a row of the statistics box, which is
+    // opaque: over the mountain, no fill inside the box. Precondition (pitfall
+    // 127): the fill reaches into the box - closes under its columns are
+    // drawn above its bottom, so without the box the fill would be there. In
+    // every panel mountain case where that holds; it must hold in one.
+    int onFill = 0;
+    for (int i = 0; i < NCASES; i++) {
+        if (CASES[i].type != CHART_MOUNTAIN || CASES[i].desktop) continue;
         Scene sc;
-        if (!SceneOpen(&sc, FindCase("mountain_light_560x300"))) { printf("FAIL chart types: no scene\n"); return bad + 1; }
-        const ChartRect* g = &sc.g;
-        int dpi = sc.k->dpi, ly = g->top + ChartPx(dpi, 4), lh = ChartPx(dpi, 15);
-        int lx0 = INT_MAX, lx1 = -1;
-        for (int y = ly; y < ly + lh; y++)
-            for (int x = g->left; x < g->right; x++) {
-                COLORREF c = PxAt(&sc, x, y);
-                if (c == sc.sty.clr.sma || c == sc.sty.clr.ema || c == sc.sty.clr.vwap) {
-                    if (x < lx0) lx0 = x;
-                    if (x > lx1) lx1 = x;
+        if (!SceneOpen(&sc, &CASES[i])) { printf("FAIL chart types: no scene\n"); return bad + 1; }
+        RECT b = { 0, 0, 0, 0 };
+        if (LegendBoxOf(&sc, &b)) {
+            Marks m;
+            MarksOf(&sc, &m);
+            int reach = 0;   // closes under the box's columns drawn above its bottom
+            for (int j = m.vs; j < m.vs + m.vc; j++) {
+                int x = MarkX(&sc, &m, j);
+                if (x >= b.left && x < b.right && MarkY(&sc, &m, s_candles[j].close) < b.bottom) reach++;
+            }
+            int inBox = CountPx(&sc, b.left, b.top, b.right, b.bottom, sc.sty.clr.mountain, TRUE);
+            if (reach > 0) {
+                onFill++;
+                if (inBox) {
+                    printf("FAIL chart types %s: %d px of the fill inside the statistics box\n", CASES[i].name, inBox);
+                    bad++;
                 }
             }
-        int inLegend = (lx1 >= lx0) ? CountPx(&sc, lx0, ly, lx1 + 1, ly + lh, sc.sty.clr.mountain, TRUE) : -1;
-        Marks m;
-        MarksOf(&sc, &m);
-        int reach = 0;   // closes under the legend's columns drawn above its bottom
-        for (int j = m.vs; j < m.vs + m.vc; j++) {
-            int x = MarkX(&sc, &m, j);
-            if (x >= lx0 && x <= lx1 && MarkY(&sc, &m, s_candles[j].close) < ly + lh) reach++;
         }
-        if (reach == 0 || inLegend != 0) {
-            printf("FAIL chart types: %d closes rise into the legend (%d..%d), %d px of fill inside it\n",
-                   reach, lx0, lx1, inLegend);
-            bad++;
-        } else printf("ok   chart types: %d closes rise into the legend's box, and no fill shows in it\n", reach);
         SceneClose(&sc);
     }
+    if (onFill == 0) { printf("FAIL chart types: no statistics box stood on the mountain's fill\n"); bad++; }
+    else printf("ok   chart types: %d statistics boxes on the mountain's fill, none shows the fill inside\n", onFill);
     if (!bad) printf("ok   chart types: %d typed cases - own marks, own scale, none drawn as candles\n", typed);
     return bad;
 }

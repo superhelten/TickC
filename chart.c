@@ -2851,93 +2851,153 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 #endif
     }
 
-    // --- Legend for the moving averages (phase 25) ---
-    // Top left of the chart surface, in the lines' own colors: the color
-    // is what says which line is which, and the number is the average at
-    // the candle under the crosshair (no crosshair: the last visible
-    // candle). An average that is not defined there - fewer than period
-    // candles before it - gets a dash. The axis font, which is selected
-    // here; transparent over the candles, like the watermark under them.
-    // Not on the desktop (phase 14: no readings there), and only when the
-    // WHOLE text fits in the surface - same rule as the percentage in the
-    // header: a clipped number is a wrong number.
+    // --- The statistics box (phase 52) ---
+    // Bloomberg's legend: a framed box in the price pane, one row per line
+    // of text - "Last Price", "High on <date>", "Average", "Low on <date>"
+    // for the view, and with the indicators on the overlays' rows, "SMA 20",
+    // "EMA 50", "VWAP", which were a line of text at the top until now (phase
+    // 25-27). Each row has its mark: a square of the series' color for Last
+    // Price (the stamp's white or navy for the line and the mountain, the
+    // candle's up or down for the candles and the bars), a T for the high,
+    // -o- for the average, an inverted T for the low, and the overlays'
+    // squares in their lines' colors, faded with them. The text in the text
+    // color on the box surface (9.3:1 dark, 15.8 light), the marks' glyphs
+    // in the axis color.
+    // The numbers: Last Price, SMA, EMA and VWAP at the legend's candle -
+    // the crosshair's, else the last visible one, as the old legend and the
+    // hover box read them; High, Low and Average over the candles whose
+    // middle is in view (ChartViewStats, the numbers the high and low labels
+    // show), the high and low in the prices the axis scales on, the average
+    // the mean close. Dates as the hover box writes them ("16 Sep 12:00";
+    // 1d and 1w the UTC date).
+    // Where: the lower-left corner, as on the terminal, and the upper-left
+    // when the price's marks enter the lower-left and not the upper-left.
+    // Measured over every 300-candle view of the recorded fixtures and the
+    // goldens' walks, a fixed corner is on the price in 28-74 % of the views
+    // (which corner is free follows the trend), this rule in 2-3 %. The box
+    // is opaque: the level, alert and ghost lines stop at it, as they did at
+    // the old legend (phase 46); the level names and the view's high and low
+    // give way to it (placed[]), and the hover box is drawn over it.
+    // Size: at most LGD_MAX_PCT of the plot's width and of the price pane's
+    // height. Rows give way when it is too tall, first High and Low together
+    // (their numbers stand by their points, phase 51), then Average, VWAP,
+    // EMA and SMA; Last Price stays. Too wide, High and Low lose their dates;
+    // with fewer than two rows, or still too wide, there is no box - at
+    // 400x250 the old one-line legend did not fit either. Panel only.
 #ifdef TICKER_PROBE
+    st->probeLegendMask = 0;
     if (!(indT > 0 && !in->desktop)) st->probeLblMask = 0;
 #endif
     // The text placed in the plot so far, for the level names and (phase 51)
     // the view's high and low after them: each gives way to what is here.
     RECT placed[LVL_COUNT + 3];
     int  nPlaced = 0;
-    if (indT > 0 && !in->desktop) {
-        RECT rcLegend = { 0, 0, 0, 0 };   // empty when the legend did not fit
-        wchar_t lg[96];
-        int len1, lenAll;
-        if (indOk[0]) swprintf_s(lg, 96, L"SMA %d  %.2f    ", IND_SMA_PERIOD, indVal[0]);
-        else          swprintf_s(lg, 96, L"SMA %d  -    ", IND_SMA_PERIOD);
-        len1 = (int)wcslen(lg);
-        if (indOk[1]) swprintf_s(lg + len1, 96 - len1, L"EMA %d  %.2f", IND_EMA_PERIOD, indVal[1]);
-        else          swprintf_s(lg + len1, 96 - len1, L"EMA %d  -", IND_EMA_PERIOD);
-        lenAll = (int)wcslen(lg);
-        // VWAP (phase 27) is the third item. If all three do not fit, the
-        // VWAP item drops out and the two averages stand as before; if those
-        // do not fit either, nothing is shown. Each item whole or not at all.
-        int len2 = lenAll;
-        if (indOk[2]) swprintf_s(lg + len2, 96 - len2, L"    VWAP  %.2f", indVal[2]);
-        else          swprintf_s(lg + len2, 96 - len2, L"    VWAP  -");
-        int len3 = (int)wcslen(lg);
-        SIZE szAll = { 0, 0 }, sz1 = { 0, 0 }, sz3 = { 0, 0 };
-        GetTextExtentPoint32W(hdc, lg, lenAll, &szAll);
-        GetTextExtentPoint32W(hdc, lg, len1, &sz1);
-        GetTextExtentPoint32W(hdc, lg, len3, &sz3);
-        int lx = left + PX(6), ly = top + PX(4);
-        if (lx + szAll.cx <= right - PX(6) && ly + szAll.cy <= bottom) {
-            // Today's high (phase 27) lies 8 % below the surface's top when
-            // today's top is the view's, and on a short panel that is in the
-            // middle of this row: the dashes ran right through the digits
-            // (seen in a capture at 560x300). Then - and only then - the text
-            // gets an opaque background, so the numbers stay whole and the
-            // line continues behind them.
-            // Phase 46: the same for every horizontal drawn before this - the
-            // alert lines, the ghost's and the afterglow. They are drawn
-            // from left to edge, and an alert set near the top ran through
-            // the numbers.
-            BOOL struck = FALSE;
-            for (int q = 0; q < LVL_COUNT; ++q)
-                if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
-            for (int a = 0; a < in->alertCount && !struck; ++a) {
-                int ya = AlertY(st, &g, fabs(in->alerts[a]));
-                if (ya >= top && ya <= bottom && ya >= ly - 1 && ya <= ly + szAll.cy) struck = TRUE;
-            }
-            if (yGhostLine != INT_MIN && yGhostLine >= ly - 1 && yGhostLine <= ly + szAll.cy) struck = TRUE;
-            if (in->alertFlashF > 0.0) {
-                int yf = AlertY(st, &g, in->alertFlashLevel);
-                if (yf >= top && yf <= bottom && yf >= ly - 1 && yf <= ly + szAll.cy) struck = TRUE;
-            }
-            // Phase 49: and the mountain's fill. Its top is the highest
-            // close, 7 % under the pane's top, which is inside this row on
-            // a price pane under ~275 px (and anywhere in the Y easing).
-            // Phase 51: where the fill covers the whole row, the cell is the
-            // theme's fillCell - the navy itself in the dark theme, which
-            // carries the averages' colors at 4.5:1 - not a black strip.
-            RECT rcLg = { lx, ly, lx + sz3.cx, ly + szAll.cy };
-            if (FillHitRect(&pm, &rcLg)) struck = TRUE;
-            if (struck) {
-                SetBkColor(hdc, FillUnderRect(&pm, &rcLg) ? sty->clr.fillCell : sty->clr.bg);
-                SetBkMode(hdc, OPAQUE);
-            }
-            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.sma, indT));
-            ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
-            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.ema, indT));
-            ExtTextOutW(hdc, lx + sz1.cx, ly, 0, NULL, lg + len1, lenAll - len1, NULL);
-            if (lx + sz3.cx <= right - PX(6)) {
-                SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.vwap, indT));
-                ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
-            }
-            if (struck) SetBkMode(hdc, TRANSPARENT);
-            rcLegend.left = lx; rcLegend.top = ly;
-            rcLegend.right = lx + sz3.cx; rcLegend.bottom = ly + szAll.cy;
-            placed[nPlaced++] = rcLegend;
+    ChartViewStat vstat;
+    BOOL vstatOk = ChartViewStats(in->candles, n, dStart, dCount, cw, ctype, &vstat);
+    int  statDec = PriceDecimals(range / 4.0);
+    if (statDec < 2) statDec = 2;
+    if (!in->desktop && vstatOk) {
+        int lgIdx = i1 - 1;
+        if (st->hoverIdx >= 0 && st->hoverIdx < n) {
+            double hrG = (double)st->hoverIdx - dStart;
+            if (hrG >= 0.0 && hrG < dCount) lgIdx = st->hoverIdx;
         }
+        BOOL seriesS = (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+        const Candle* lgc = &in->candles[lgIdx];
+        wchar_t lbl[7][48], val[7][32], dHi[24], dLo[24];
+        FormatTimeAs(in->candles[vstat.iHigh].openTime, in->intervalMs, in->utcOffsetMs, TIME_BOX, dHi, 24);
+        FormatTimeAs(in->candles[vstat.iLow].openTime, in->intervalMs, in->utcOffsetMs, TIME_BOX, dLo, 24);
+        wcscpy_s(lbl[0], 48, L"Last Price");
+        swprintf_s(val[0], 32, L"%.*f", statDec, lgc->close);
+        swprintf_s(val[1], 32, L"%.*f", statDec, vstat.high);
+        wcscpy_s(lbl[2], 48, L"Average");
+        swprintf_s(val[2], 32, L"%.*f", statDec, vstat.avg);
+        swprintf_s(val[3], 32, L"%.*f", statDec, vstat.low);
+        swprintf_s(lbl[4], 48, L"SMA %d", IND_SMA_PERIOD);
+        swprintf_s(lbl[5], 48, L"EMA %d", IND_EMA_PERIOD);
+        wcscpy_s(lbl[6], 48, L"VWAP");
+        for (int q = 0; q < 3; ++q) {
+            if (indOk[q]) swprintf_s(val[4 + q], 32, L"%.2f", indVal[q]);
+            else          wcscpy_s(val[4 + q], 32, L"-");
+        }
+        int mask = 0x0F | ((indT > 0) ? 0x70 : 0);
+        int sw = PX(LGD_SWATCH), rowH = PX(LGD_ROW_H);
+        int maxW = cw * LGD_MAX_PCT / 100, maxH = ch * LGD_MAX_PCT / 100;
+        static const int DROP[5] = { 0x0A, 0x04, 0x40, 0x20, 0x10 };   // High+Low, Average, VWAP, EMA, SMA
+        int rows = 0;
+        for (int b = 0; b < 7; ++b) if (mask & (1 << b)) rows++;
+        for (int d = 0; d < 5 && PX(LGD_PAD_T) + rows * rowH + PX(LGD_PAD_B) > maxH; ++d) {
+            if (!(mask & DROP[d])) continue;
+            mask &= ~DROP[d];
+            rows = 0;
+            for (int b = 0; b < 7; ++b) if (mask & (1 << b)) rows++;
+        }
+        SelectObject(hdc, sty->fontAxis);
+        int boxW = 0;
+        for (int dated = 1; dated >= 0 && rows >= 2; --dated) {
+            swprintf_s(lbl[1], 48, dated ? L"High on %s" : L"High", dHi);
+            swprintf_s(lbl[3], 48, dated ? L"Low on %s" : L"Low", dLo);
+            int lw = 0, vw = 0;
+            for (int b = 0; b < 7; ++b) {
+                if (!(mask & (1 << b))) continue;
+                SIZE s1 = { 0, 0 }, s2 = { 0, 0 };
+                GetTextExtentPoint32W(hdc, lbl[b], (int)wcslen(lbl[b]), &s1);
+                GetTextExtentPoint32W(hdc, val[b], (int)wcslen(val[b]), &s2);
+                if (s1.cx > lw) lw = s1.cx;
+                if (s2.cx > vw) vw = s2.cx;
+            }
+            int w = PX(LGD_PAD_X) + sw + PX(LGD_PAD_X) + lw + PX(12) + vw + PX(LGD_PAD_X + 1);
+            if (w <= maxW) { boxW = w; break; }
+        }
+        if (rows >= 2 && boxW > 0) {
+            int boxH = PX(LGD_PAD_T) + rows * rowH + PX(LGD_PAD_B);
+            RECT rcLL = { left + PX(LGD_INSET_X), bottom - PX(LGD_INSET_Y) - boxH, 0, bottom - PX(LGD_INSET_Y) };
+            RECT rcUL = { rcLL.left, top + PX(LGD_INSET_Y), 0, top + PX(LGD_INSET_Y) + boxH };
+            rcLL.right = rcUL.right = rcLL.left + boxW;
+            BOOL upper = MarksHitRect(&pm, &rcLL) && !MarksHitRect(&pm, &rcUL);
+            RECT rcS = upper ? rcUL : rcLL;
+            FillRect(hdc, &rcS, sty->brBox);
+            FrameRect(hdc, &rcS, sty->brBoxEdge);
+            SelectObject(hdc, GetStockObject(DC_BRUSH));
+            int r = 0;
+            for (int b = 0; b < 7; ++b) {
+                if (!(mask & (1 << b))) continue;
+                int slotY = rcS.top + PX(LGD_PAD_T) + r * rowH;
+                int mx = rcS.left + PX(LGD_PAD_X), my = slotY + (rowH - sw) / 2 - PX(1);
+                int lw1 = PX(1), mid = mx + sw / 2 - lw1 / 2;
+                if (b == 1 || b == 3) {            // T and inverted T: a bar and a stem
+                    SetDCBrushColor(hdc, sty->clr.axis);
+                    int yb = (b == 1) ? my : my + sw - lw1;
+                    PatBlt(hdc, mx, yb, sw, lw1, PATCOPY);
+                    PatBlt(hdc, mid, my, lw1, sw, PATCOPY);
+                } else if (b == 2) {               // -o-: a line through a dot
+                    SetDCBrushColor(hdc, sty->clr.axis);
+                    int dot = PX(3);
+                    PatBlt(hdc, mx, my + sw / 2 - lw1 / 2, sw, lw1, PATCOPY);
+                    PatBlt(hdc, mx + (sw - dot) / 2, my + (sw - dot) / 2, dot, dot, PATCOPY);
+                } else {                           // the series' and the overlays' squares
+                    COLORREF sc;
+                    if (b == 0) sc = seriesS ? sty->clr.stamp : ((lgc->close >= lgc->open) ? sty->clr.up : sty->clr.down);
+                    else        sc = Blend(sty->clr.box, (b == 4) ? sty->clr.sma : (b == 5) ? sty->clr.ema : sty->clr.vwap, indT);
+                    SetDCBrushColor(hdc, sc);
+                    PatBlt(hdc, mx, my, sw, sw, PATCOPY);
+                }
+                BOOL ov = (b >= 4);
+                SetTextColor(hdc, ov ? Blend(sty->clr.box, sty->clr.text, indT) : sty->clr.text);
+                ExtTextOutW(hdc, mx + sw + PX(LGD_PAD_X), slotY - PX(2), 0, NULL, lbl[b], (int)wcslen(lbl[b]), NULL);
+                SIZE sv = { 0, 0 };
+                GetTextExtentPoint32W(hdc, val[b], (int)wcslen(val[b]), &sv);
+                ExtTextOutW(hdc, rcS.right - PX(LGD_PAD_X + 1) - sv.cx, slotY - PX(2), 0, NULL, val[b], (int)wcslen(val[b]), NULL);
+                r++;
+            }
+            placed[nPlaced++] = rcS;
+#ifdef TICKER_PROBE
+            st->probeLegendMask = mask | (upper ? 0x80 : 0);
+#endif
+        }
+    }
+    if (indT > 0 && !in->desktop) {
+        SelectObject(hdc, sty->fontAxis);
 
         // --- Labels on the level lines (phase 29) ---
         // Five horizontal lines without names had to be read from the dash
@@ -3105,17 +3165,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     st->probeHiLoMask = 0;
 #endif
     if (!in->desktop && right - left >= PX(200)) {
-        BOOL closes = (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
-        int    iHL[2] = { -1, -1 };
-        double vHL[2] = { 0.0, 0.0 };
-        for (int i = i0; i < i1; ++i) {
-            double fx = ((double)i - dStart + 0.5) * slot;
-            if (fx < 0.0 || (double)left + fx >= (double)right) continue;
-            const Candle* c = &in->candles[i];
-            double hv = closes ? c->close : c->high, lv = closes ? c->close : c->low;
-            if (iHL[0] < 0 || hv > vHL[0]) { iHL[0] = i; vHL[0] = hv; }
-            if (iHL[1] < 0 || lv < vHL[1]) { iHL[1] = i; vHL[1] = lv; }
-        }
+        // Phase 52: the statistics box's numbers (ChartViewStats).
+        int    iHL[2] = { vstatOk ? vstat.iHigh : -1, vstatOk ? vstat.iLow : -1 };
+        double vHL[2] = { vstat.high, vstat.low };
         int rows[LVL_COUNT + ALERT_MAX + 2], rowX0[LVL_COUNT + ALERT_MAX + 2], nRows = 0;
         for (int q = 0; q < LVL_COUNT; ++q)
             if (yLine[q] != INT_MIN) { rows[nRows] = yLine[q]; rowX0[nRows++] = lvlXs; }
@@ -3133,8 +3185,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         if (xLastL < left)  xLastL = left;
         if (xLastL > right) xLastL = right;
         HiLoRoom room = { &pm, left, top, right, bottom, rows, rowX0, nRows, yLastL, xLastL, placed, 0, rcBox };
-        int dec = PriceDecimals(range / 4.0);
-        if (dec < 2) dec = 2;
+        int dec = statDec;
         SelectObject(hdc, sty->fontAxis);
         SetTextColor(hdc, sty->clr.text);
         for (int s = 0; s < 2; ++s) {
