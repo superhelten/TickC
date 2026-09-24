@@ -23,7 +23,9 @@ typedef struct {
 // dpi (phase 36) is the one the rectangle was computed for, so the hit tests
 // that take a ChartRect scale their zones the same way the drawing did.
 // bandTop/bandBottom (phase 39) are the RSI band under the price pane; equal
-// (both = bottom) when there is no band. bottom and ch stay the PRICE pane's,
+// when there is no band - both at the bottom as it was before the volume
+// pane was cut out, so "no band" is bandBottom == bandTop, not a test
+// against bottom (phase 45). bottom and ch stay the PRICE pane's,
 // so every price <-> y function reads them as before; the time axis sits
 // under the lowest pane.
 // volTop/volBottom (phase 43) are the volume pane, between the price pane and
@@ -97,6 +99,10 @@ typedef struct {
     COLORREF bg, grid, up, down, text, dim, cross, box, boxEdge;
     COLORREF hot, onHot;         // a tag the pointer is on: surface and text
     COLORREF axis, volUp, volDown;
+    // Phase 45: the bars in the volume pane. volUp/volDown are muted to stand
+    // behind the candles, and still do in the fallback without a pane; in the
+    // pane nothing stands in front of them, so they are stronger.
+    COLORREF volPaneUp, volPaneDown;
     COLORREF sma, ema, vwap, session, prev;
     COLORREF alert, alertLine;
     COLORREF rsi;                // phase 39
@@ -126,6 +132,7 @@ typedef struct {
     HFONT  fontPill;            // desktop stamp font, NULL = use fontAxis
     HPEN   penGrid, penCross, penLastUp, penLastDown;
     HBRUSH brBg, brBox, brBoxEdge, brVolUp, brVolDown;
+    HBRUSH brVolPaneUp, brVolPaneDown;   // phase 45
     int    dpi;                 // phase 36: the fonts are built for it; 96 = 100 %
     ChartTheme clr;             // phase 38: the colors, copied from the theme
 } ChartStyle;
@@ -176,10 +183,15 @@ typedef struct {
 // grid line stand (the clip is inclusive there, see DrawChart).
 #define PAD_B            18
 // Minimum distance between two time labels. Used as
-// max(TIME_DX_MIN, label width + TIME_LBL_GAP): "DD.MM HH:MM" is 99 px in the
-// axis font, wider than 80, and would otherwise collide on 1h and 4h.
+// max(TIME_DX_MIN, label width + TIME_LBL_GAP), the width the widest label
+// the axis can show (ChartTimeLabelW). Until phase 45 1h and 4h wrote
+// "MM-DD HH:MM", 99 px in the axis font; now every intraday label is "HH:MM"
+// or, where a day begins, "21 Sep" - 54 px, so 80 rules.
 #define TIME_DX_MIN      80
 #define TIME_LBL_GAP     12
+// The hover box's width. Its time row is "21 Sep 14:35" on intraday
+// intervals (phase 45); tests/chart_golden.c measures that it fits.
+#define HOVER_BOX_W      104
 
 // Palette (matches the tray icon)
 #define CLR_BG           RGB(0x0D, 0x11, 0x17)
@@ -217,6 +229,14 @@ typedef struct {
 #define VOL_PANE_PAD     3
 #define CLR_VOL_UP       RGB(0x09, 0x54, 0x2D)
 #define CLR_VOL_DOWN     RGB(0x51, 0x21, 0x2D)
+// Phase 45: the bars in the pane. The colors above were made to stand BEHIND
+// the candles; in the pane nothing stands in front of them, and at 28 % they
+// read as a shadow. About 60 % of the way from CLR_BG to the candle colors:
+// direction at a glance, still a step under the candles, which stay the
+// brightest thing on the surface. Not exact blends in every channel (pitfall
+// 87: up and down are also text colors).
+#define CLR_VOL_PANE_UP   RGB(0x05, 0xA0, 0x46)
+#define CLR_VOL_PANE_DOWN RGB(0x9E, 0x33, 0x46)
 // Moving averages (phase 25): SMA 20 and EMA 50 on the close, drawn as
 // 1 px lines over the candles. Muted steel blue and muted violet: neither
 // appears elsewhere on the surface (green/red are candles, amber is alerts,
@@ -356,7 +376,13 @@ BOOL      RsiValueAt(const Candle* c, int n, int idx, double* out);
 // --- Formatting and colors ---
 int       PriceDecimals(double step);
 void      FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch);
+// A moment as a clock (phase 45): "HH:MM" local under 1 day, the UTC date
+// "YYYY-MM-DD" from 1 day up. The chart's own labels go through the same
+// helper in chart.c, with the date where a day begins.
 void      FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs, wchar_t* out, size_t cch);
+// The widest time-axis label for the interval in the font selected into hdc
+// (phase 45): the spacing of the labels is measured on it.
+int       ChartTimeLabelW(HDC hdc, long long intervalMs);
 long long ChartUtcOffsetMs(void);
 void      FormatVolume(double v, wchar_t* out, size_t cch);
 void      FormatTagPrice(HDC hdc, double p, double range, int avail, wchar_t* out, size_t cch);

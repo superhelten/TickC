@@ -377,10 +377,12 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     CP("quote line values",       quote,     bg),
     CP("range cells",             text,      boxEdge),
     CP("range cell selected",     onAccent,  accent),
-    // Phase 43: the volume legend stands over the bars, and the value tag
-    // carries the close's colors on the box (the hover box's close row).
-    CP("volume legend, up bar",   text,      volUp),
-    CP("volume legend, down bar", text,      volDown),
+    // Phase 43: the value tag carries the close's colors on the box (the
+    // hover box's close row). Phase 45: the pane's bars are strong enough
+    // that text over them cannot reach 4.5:1, so the legend stands on a
+    // rectangle of the background, and its pair is text on bg; the phase 43
+    // pairs (text on volUp, on volDown) are gone with it.
+    CP("volume legend",           text,      bg),
 };
 
 static double RelLum(COLORREF c) {
@@ -434,10 +436,11 @@ static int CheckPriceFloor(void) {
 // With two label widths in the chart (N = 2) TimeTickStep gave the whole view
 // as the step, NiceTimeStep rounded it past the view, and a 400x250 panel on
 // 1h never got a time label. The label width is measured in the axis font,
-// as ChartDrawBody measures it, not assumed. Then the N <= 2 branch over the
-// phase 11 ranges (chart width 160-4000, minDx 80-118, 1-1440 candles):
-// the spacing step * chartW / dCount is never below minDx. N >= 3 is the
-// phase 11 formula, untouched.
+// with the function ChartDrawBody measures it with (phase 45: the widest of
+// "00:00" and "30 Sep", ChartTimeLabelW), not assumed. Then the N <= 2 branch
+// over the phase 11 ranges (chart width 160-4000, minDx 80-118, 1-1440
+// candles): the spacing step * chartW / dCount is never below minDx. N >= 3
+// is the phase 11 formula, untouched.
 static int CheckTimeAxisSmall(void) {
     int bad = 0;
     ChartStyle sty;
@@ -449,7 +452,7 @@ static int CheckTimeAxisSmall(void) {
     }
     HGDIOBJ oldF = SelectObject(dc, sty.fontAxis);
     SIZE tsz = { 0, 0 };
-    GetTextExtentPoint32W(dc, L"09-12 00:00", 11, &tsz);
+    tsz.cx = ChartTimeLabelW(dc, HOUR_MS);
     SelectObject(dc, oldF);
     ChartStyleDestroy(&sty);
     DeleteDC(dc);
@@ -491,6 +494,62 @@ static int CheckTimeAxisSmall(void) {
     return bad;
 }
 
+// --- The hover box's time row (phase 45) ---
+// Intraday the row is "21 Sep 14:35". The small font is proportional, so
+// every month is measured ("30 Mmm 00:00"; the digits are tabular) at each
+// dpi the cases use, against the row's room: HOVER_BOX_W less the 7 px left
+// and 6 px right inset ChartDrawBody gives it. DrawTextW would clip a row
+// that does not fit without a word.
+static int CheckHoverTime(void) {
+    static const wchar_t* const MON[12] = { L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun",
+                                            L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec" };
+    static const int DPIS[3] = { 96, 144, 192 };
+    int bad = 0;
+    HDC dc = CreateCompatibleDC(NULL);
+    if (!dc) { printf("FAIL hover time: no DC\n"); return 1; }
+    for (int d = 0; d < 3; d++) {
+        ChartStyle sty;
+        if (!ChartStyleCreate(&sty, DPIS[d], NULL)) { printf("FAIL hover time: no style\n"); bad++; continue; }
+        HGDIOBJ oldF = SelectObject(dc, sty.fontSmall);
+        int room = ChartPx(DPIS[d], HOVER_BOX_W) - ChartPx(DPIS[d], 7) - ChartPx(DPIS[d], 6);
+        int widest = 0;
+        for (int m = 0; m < 12; m++) {
+            wchar_t s[24];
+            swprintf_s(s, 24, L"30 %s 00:00", MON[m]);
+            SIZE sz = { 0, 0 };
+            GetTextExtentPoint32W(dc, s, (int)wcslen(s), &sz);
+            if (sz.cx > widest) widest = sz.cx;
+        }
+        SelectObject(dc, oldF);
+        ChartStyleDestroy(&sty);
+        if (widest > room) {
+            printf("FAIL hover time at %d dpi: %d px in a %d px row\n", DPIS[d], widest, room);
+            bad++;
+        } else {
+            printf("ok   hover time at %d dpi: widest %d px in a %d px row\n", DPIS[d], widest, room);
+        }
+    }
+    DeleteDC(dc);
+    return bad;
+}
+
+// --- FormatCandleTime (phase 45) ---
+// A 1d candle opens at 00:00 UTC and is dated in UTC: at UTC - 5 the local
+// conversion gave the day before (phase 44 review, F4). And the quote line's
+// At (tickc.c, 1m) stays a clock at local midnight - the date belongs to the
+// axis and the hover box, not to it.
+static int CheckTimeForms(void) {
+    const long long dayUtc = T_END_MS - 14 * HOUR_MS;   // 2026-09-21 00:00 UTC
+    wchar_t s[24];
+    int bad = 0;
+    FormatCandleTime(dayUtc, DAY_MS, -5 * HOUR_MS, s, 24);
+    if (wcscmp(s, L"2026-09-21") != 0) { printf("FAIL time forms: 1d at UTC-5 gave %ls\n", s); bad++; }
+    FormatCandleTime(dayUtc - 2 * HOUR_MS, MIN_MS, UTC_OFFSET_MS, s, 24);
+    if (wcscmp(s, L"00:00") != 0) { printf("FAIL time forms: 1m at local midnight gave %ls\n", s); bad++; }
+    if (!bad) printf("ok   time forms: 1d dated in UTC, the 1m clock without a date\n");
+    return bad;
+}
+
 int main(int argc, char** argv) {
     BOOL update = FALSE, bmp = FALSE;
     for (int i = 1; i < argc; i++) {
@@ -512,7 +571,7 @@ int main(int argc, char** argv) {
 
     unsigned long long hashes[NCASES] = { 0 };
     int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor() +
-                        CheckTimeAxisSmall();
+                        CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -579,6 +638,6 @@ int main(int argc, char** argv) {
     }
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
-    if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis)\n", contrastFails);
+    if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis, hover time, time forms)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }
