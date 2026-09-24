@@ -61,7 +61,8 @@ typedef struct {
     // 0 as `alerts` puts it, 1 ghostDy px from alert 0's row, 2 ghostDy px
     // from the stamp's row, 3 the first row from a third down whose rounded
     // price lies 3 px or more away, 4 no ghost and alert 0 on the legend's
-    // middle row. loudLast: the last candle has 50 times its volume.
+    // middle row, 5 ghostDy px from the price pane's bottom row. loudLast:
+    // the last candle has 50 times its volume.
     double base;
     int  ghost, ghostDy;
     BOOL loudLast;
@@ -138,6 +139,10 @@ static const Case CASES[] = {
     { "ghost_row_zoomed",        560, 300, FALSE, MIN_MS,        12, TRUE,    0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 15.0, 3,  0 },
     { "legend_alert_row",       1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE, FALSE, 0.0, 4,  0 },
     { "vol_loud_last_panned",   1280, 720, FALSE, HOUR_MS,      360, FALSE,  60, 90, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, TRUE },
+    // The pointer on the price pane's bottom row over the volume pane, whose
+    // value tag stands at its top (the last candle is the loudest): the
+    // ghost tag would reach 2 rows into that tag.
+    { "ghost_pane_edge",        1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 5,  0, TRUE },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -236,6 +241,8 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base, ChartState*
             int y = g.top + (g.bottom - g.top) / 3;
             while (y < g.bottom && abs(AlertY(&st, &g, AlertPriceAtY(&st, &g, y)) - y) < 3) y++;
             in.axisHotY = y;
+        } else if (k->ghost == 5) {
+            in.axisHotY = g.bottom + ChartPx(k->dpi, k->ghostDy);
         } else if (k->ghost == 4) {
             // The legend's text starts 4 px under the top and is 15 px tall.
             alerts[0] = AlertPriceAtY(&st, &g, g.top + ChartPx(k->dpi, 4) + ChartPx(k->dpi, 7));
@@ -693,6 +700,22 @@ static int CheckGhostRank(void) {
                    inGhost, inStrip, yp, yh);
             bad++;
         } else printf("ok   ghost rank: the ghost 10 px over the stamp is whole, the stamp's strip has no cut number\n");
+    }
+    SceneClose(&sc);
+    // Drawn after the stamp, the ghost tag also lands after the panes' value
+    // tags. On the price pane's bottom row it would reach 2 rows over the
+    // volume pane's top, into the value tag standing there: the phase 44
+    // rule for the crosshair tag, a tag stays in its pane's rows (the line is
+    // drawn). No ghost frame in the value tag's rows.
+    if (!SceneOpen(&sc, FindCase("ghost_pane_edge"))) { printf("FAIL ghost rank: no scene\n"); return bad + 1; }
+    {
+        int x0 = sc.g.edge + 1, x1 = sc.axR + ChartPx(sc.k->dpi, 3);
+        int n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf, sc.sty.clr.alertText, TRUE);
+        int line = CountPx(&sc, sc.g.left, sc.g.bottom, sc.g.edge, sc.g.bottom + 1, sc.sty.clr.alertLine, TRUE);
+        if (n || line == 0) {
+            printf("FAIL ghost rank: on the pane's edge %d px of ghost frame in the volume tag's rows, line %d px\n", n, line);
+            bad++;
+        } else printf("ok   ghost rank: on the pane's edge the ghost keeps out of the volume tag, its line stays (%d px)\n", line);
     }
     SceneClose(&sc);
     return bad;

@@ -41,3 +41,4 @@ ghost_near_stamp 1280x720 7230a01c020f7a40
 ghost_row_zoomed 560x300 da464d7428927cbb
 legend_alert_row 1280x720 e3dd45c15c527738
 vol_loud_last_panned 1280x720 28f4888905ae4bca
+ghost_pane_edge 1280x720 c9dc1ff645de30c8

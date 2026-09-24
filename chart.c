@@ -1685,7 +1685,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // edge to edge.
     int yPill = INT_MIN;
     int yCross = INT_MIN;   // the crosshair tag's row when it is to be drawn (phase 29)
-    int yGhost = INT_MIN;   // the ghost's row when there is one (phase 46)
+    int yGhost = INT_MIN;       // the ghost tag's row when it is drawn (phase 46)
+    int yGhostLine = INT_MIN;   // the ghost line's row when there is a ghost
     if (!in->desktop) {
         {
             double lp = in->candles[n - 1].close;
@@ -1742,13 +1743,21 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         // drawn after the stamp, and the stamp keeps its surface without its
         // number, as a covered alert tag does. Only while the pointer is in
         // the column.
+        // Drawn after the stamp, the tag is also drawn after the panes'
+        // value tags; like the crosshair tag (phase 44) it stays in the
+        // price pane's rows when a pane follows, and on the last two rows
+        // only the line is drawn (yGhostLine).
         if (in->axisHotY >= top && in->axisHotY <= bottom &&
             (in->alertHot < 0 || in->alertHot >= nA)) {
             int yr = AlertY(st, &g, AlertPriceAtY(st, &g, in->axisHotY));
-            if (yr >= top && yr <= bottom) yGhost = yr;
+            if (yr >= top && yr <= bottom) {
+                int nextTopG = volPane ? vt : bt;   // bt == bottom without a band
+                yGhostLine = yr;
+                if (!(volPane || bandOn) || yr + tagHalf <= nextTopG) yGhost = yr;
+            }
         }
-        BOOL ghost = (yGhost != INT_MIN);
-        if (ghost) yTag[nTag++] = yGhost;
+        BOOL ghost = (yGhostLine != INT_MIN);
+        if (yGhost != INT_MIN) yTag[nTag++] = yGhost;
 
         // The tags for today's high and low (phase 27) sit in the same column
         // and rank lowest: a tag under 16 px from the stamp, an alert, the
@@ -1843,8 +1852,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         if (ghost) {
             SelectObject(hdc, GetStockObject(DC_PEN));
             SetDCPenColor(hdc, (nA >= ALERT_MAX) ? sty->clr.cross : sty->clr.alertLine);
-            MoveToEx(hdc, left, yGhost, NULL);
-            LineTo(hdc, edge, yGhost);
+            MoveToEx(hdc, left, yGhostLine, NULL);
+            LineTo(hdc, edge, yGhostLine);
         }
         SetTextColor(hdc, sty->clr.axis);   // the time axis below inherits the color
     }
@@ -2059,7 +2068,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int ya = AlertY(st, &g, fabs(in->alerts[a]));
                 if (ya >= top && ya <= bottom && ya >= ly - 1 && ya <= ly + szAll.cy) struck = TRUE;
             }
-            if (yGhost != INT_MIN && yGhost >= ly - 1 && yGhost <= ly + szAll.cy) struck = TRUE;
+            if (yGhostLine != INT_MIN && yGhostLine >= ly - 1 && yGhostLine <= ly + szAll.cy) struck = TRUE;
             if (in->alertFlashF > 0.0) {
                 int yf = AlertY(st, &g, in->alertFlashLevel);
                 if (yf >= top && yf <= bottom && yf >= ly - 1 && yf <= ly + szAll.cy) struck = TRUE;
