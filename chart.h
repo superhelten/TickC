@@ -303,8 +303,9 @@ typedef struct {
 // placed first (it is opted into and has nowhere else to go); the volume
 // gets its pane only when the price keeps PRICE_PANE_MIN, and otherwise
 // stands behind the candles as before, in VOL_FRAC of the price pane. Only
-// the smallest panels with RSI on do that: 400x250 keeps 142 px of price
-// with one pane and would get 96 with two.
+// the smallest panels with RSI on do that: 400x250 keeps 126 px of price
+// with one pane and would get about 80 with two (phase 52's two-row time
+// axis took 16 px of both).
 #define VOL_FRAC         0.22
 #define VOL_PANE_FRAC    0.20
 #define VOL_PANE_MIN     40
@@ -337,7 +338,7 @@ typedef struct {
 // price pane with its own fixed 0..100 scale and the 70/30 levels dashed. The
 // band is RSI_BAND_FRAC of the chart height, at least RSI_BAND_MIN, and it is
 // left out when the price pane would get less than PRICE_PANE_MIN - a 400x250
-// panel keeps 142 px of price. Teal: not green (up), not a blue or violet of
+// panel keeps 126 px of price. Teal: not green (up), not a blue or violet of
 // the averages, not a gold or amber of VWAP and the alerts.
 // PANE_GAP is the space above every pane under the price (phase 43: the
 // volume pane's too).
