@@ -104,7 +104,7 @@ In the chart panel:
 | `T`                             | Light theme on/off                                                |
 | `A`                             | Set an alert at the crosshair price                               |
 | `R`, double-click               | Reset zoom and pan (to the range, if one is selected)             |
-| `Esc`                           | Close the symbol picker, then reset the view, then hide the panel |
+| `Esc`                           | Close an open menu, then reset the view, then hide the panel      |
 | `Ctrl`+`0`                      | Reset window size and position                                    |
 | `Ctrl`+`N`                      | Open another panel                                                |
 | `Ctrl`+`M` / `F11` / `Ctrl`+`W` | Minimize / maximize / close                                       |

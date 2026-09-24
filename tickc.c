@@ -338,9 +338,11 @@ typedef struct {
     BOOL   overlayOpen;
     double overlayF;      // 0-255
     int    overlayHot;    // index into rows[], -1 = none
-    // Phase 41: 0 = the picker with both columns (the symbol pill, a
-    // right-click), 1 = the intervals alone as a dropdown under the interval
-    // pill. The same rows and indices; only the layout differs. Kept after
+    // Phase 41: 0 = the picker with both columns (a right-click in the
+    // chart; the symbol pill too through phase 44), 1 = the intervals alone as
+    // a dropdown under the interval pill. Phase 42: 2 = the settings menu.
+    // Phase 45: 3 = the symbols alone as a dropdown under the symbol cell.
+    // The same rows and indices; only the layout differs. Kept after
     // closing, so the fade-out draws the box that was open.
     int    overlayKind;
 
@@ -2151,6 +2153,11 @@ enum { SET_VOL, SET_IND, SET_RSI, SET_THEME, SET_COUNT };
 static const wchar_t* const SET_LABEL[SET_COUNT] = {
     L"Volume", L"Averages, VWAP and levels", L"RSI 14", L"Light theme",
 };
+// The keys that toggle the same choices from the keyboard (phase 45). The
+// menu shows them right-aligned in each row, and the tray menu is built from
+// these two tables, so the names and keys cannot drift apart again - up to
+// phase 44 the tray said "Volume bars", "Indicators" and "RSI band".
+static const wchar_t* const SET_KEY[SET_COUNT] = { L"V", L"M", L"I", L"T" };
 #define SET_CHART_ROWS   3   // SET_VOL..SET_RSI under CHART, the rest under APPEARANCE
 
 static BOOL SettingOn(const AppContext* ctx, int k) {
@@ -2216,6 +2223,12 @@ static void RequestHistory(AppContext* ctx) {
 #define OVL_HDR_H     18
 #define OVL_DD_W      64    // the interval dropdown (phase 41)
 #define OVL_DD_PAD    4
+// The symbol dropdown (phase 45): "BNB/USDT" is 53 px in the small font at
+// 96 dpi (82 at 144, 105 at 192, measured with GetTextExtentPoint32W), and a
+// row gives its label the width less 2 x OVL_DD_PAD and the 6 px inset. 84
+// leaves the label 17 px of air, and overhangs the 74 px cell by 10 as the
+// interval list overhangs its cell.
+#define OVL_SYMDD_W   84
 #define OVL_SET_W     208   // the settings menu (phase 42)
 #define OVL_SET_FIRST (SYMBOL_COUNT + INTERVAL_COUNT)   // its rows follow the choices
 C_ASSERT(OVL_SET_FIRST + SET_COUNT <= OVL_ROWS_MAX);
@@ -2241,6 +2254,35 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
     // shown (a panel narrower than the minimum), the picker is laid out.
     // The settings menu (phase 42): right-aligned under the gear, two
     // headed sections. Same fallback as the dropdown.
+    // The symbol dropdown (phase 45): the interval dropdown's shape under
+    // the symbol cell in row 1, with the interval rows left empty. It opens
+    // over the range field, inside the header band - WM_NCHITTEST gives the
+    // open box HTCLIENT, otherwise its top row would be caption there.
+    if (g_Ctx.overlayKind == 3) {
+        RECT tb[TBAR_COUNT];
+        ToolbarLayout(W, tb);
+        const RECT* a = &tb[TBAR_SYM];
+        if (a->right > a->left) {
+            const int pad = Dp(OVL_DD_PAD), rowH = Dp(OVL_ROW_H), bw = Dp(OVL_SYMDD_W);
+            int bx = a->left, by = a->bottom + Dp(2);
+            int bh = pad * 2 + SYMBOL_COUNT * rowH;
+            if (bx + bw > W) bx = W - bw;
+            if (bx < 0) bx = 0;
+            if (by + bh > H) bh = H - by;
+            r->box.left = bx; r->box.top = by;
+            r->box.right = bx + bw; r->box.bottom = by + bh;
+            r->count = SYMBOL_COUNT;
+            for (int i = 0; i < SYMBOL_COUNT; ++i) {
+                RECT* q = &r->rows[i];
+                q->left = bx + pad; q->right = bx + bw - pad;
+                q->top = by + pad + i * rowH; q->bottom = q->top + rowH;
+                if (q->bottom > r->box.bottom) q->bottom = r->box.bottom;
+                if (q->top >= q->bottom) { q->left = q->right = q->top = q->bottom = 0; }
+            }
+            return;
+        }
+    }
+
     if (g_Ctx.overlayKind == 2) {
         RECT tb[TBAR_COUNT];
         ToolbarLayout(W, tb);
@@ -2408,8 +2450,25 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
             }
             SelectObject(hdc, oldP);
             SelectObject(hdc, oldB);
-            SetTextColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.text, a));
             RECT t = r.rows[i]; t.left += Dp(6) + cb + Dp(8);
+            // The key (phase 45), right-aligned in the dim color as in a
+            // menu's accelerator column. Label and key share the row, and
+            // DrawTextW clips only against its own rectangle (pitfall 36):
+            // the label ends HDR_GAP before the key, and the key is left
+            // out if the label would reach it. At 208 px the longest label
+            // ends 20 px before "M" at 96 dpi (measured widths: 137 and 10
+            // px), 29 at 144 and 50 at 192, so the menu keeps its width.
+            RECT k1 = r.rows[i]; k1.right -= Dp(8);
+            SIZE ks = { 0, 0 }, ls = { 0, 0 };
+            GetTextExtentPoint32W(hdc, SET_KEY[k], (int)wcslen(SET_KEY[k]), &ks);
+            GetTextExtentPoint32W(hdc, SET_LABEL[k], (int)wcslen(SET_LABEL[k]), &ls);
+            k1.left = k1.right - ks.cx;
+            if (t.left + ls.cx + Dp(HDR_GAP) <= k1.left) {
+                SetTextColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.dim, a));
+                DrawTextW(hdc, SET_KEY[k], -1, &k1, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+                t.right = k1.left - Dp(HDR_GAP);
+            }
+            SetTextColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.text, a));
             DrawTextW(hdc, SET_LABEL[k], -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
             continue;
         }
@@ -2418,12 +2477,21 @@ static void DrawOverlay(AppContext* ctx, HDC hdc, int W, int H) {
         BOOL active = isSym ? (idx == ctx->symIdx) : (idx == ctx->ivIdx);
         const wchar_t* lbl = isSym ? SYMBOLS[idx].label : INTERVALS[idx].label;
 
-        if (i == ctx->overlayHot) {
+        // The current choice is a filled accent row with white text (phase
+        // 45), the selected range cell's form - Bloomberg marks a selection
+        // one way everywhere. Up to phase 44 it was the label in candle-up
+        // green, a price color. Hover stays the half-blended edge color, so
+        // it never looks like the selection; on the current row it adds
+        // nothing, as a hot selected cell in the range field.
+        if (active) {
+            SetDCBrushColor(hdc, Blend(ctx->sty.clr.bg, ctx->sty.clr.accent, a));
+            FillRect(hdc, &r.rows[i], (HBRUSH)GetStockObject(DC_BRUSH));
+        } else if (i == ctx->overlayHot) {
             HBRUSH brHot = CreateSolidBrush(Blend(ctx->sty.clr.bg, ctx->sty.clr.boxEdge, a / 2));
             FillRect(hdc, &r.rows[i], brHot);
             DeleteObject(brHot);
         }
-        COLORREF fg = active ? ctx->sty.clr.up : ctx->sty.clr.text;
+        COLORREF fg = active ? ctx->sty.clr.onAccent : ctx->sty.clr.text;
         SetTextColor(hdc, Blend(ctx->sty.clr.bg, fg, a));
         RECT t = r.rows[i]; t.left += Dp(6);
         DrawTextW(hdc, lbl, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -2706,7 +2774,8 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
 // The header's cells (phase 22; phase 42 made row 2 Bloomberg's range field).
 // Flat like the control buttons: no fade, the color changes instantly, and
 // the hit hangs on tbHot. The symbol in row 1 is a dropdown with no surface
-// at rest. In row 2 every cell has the boxEdge surface - the box color was
+// at rest; hover and open look as in row 2 (phase 45). In row 2 every cell
+// has the boxEdge surface - the box color was
 // too close to the background to read as a cell - and the pointer's cell
 // gets a frame in the text color. The selected range, or the cell whose list
 // is open, is the accent with white text. The contrast check holds both
@@ -2768,14 +2837,25 @@ static void DrawToolbar(AppContext* ctx, HDC hdc, int W) {
         if (r->right <= r->left) continue;
         BOOL hot = (ctx->tbHot == i);
         if (i == TBAR_SYM) {
-            BOOL on = ctx->overlayOpen && ctx->overlayKind == 0;
-            if (hot || on) FillRect(hdc, r, ctx->sty.brBox);
-            if (on)        FrameRect(hdc, r, ctx->sty.brBoxEdge);
-            SetTextColor(hdc, ctx->sty.clr.text);
+            // Phase 45: open (its own dropdown, kind 3 - the right-click
+            // picker no longer lights it) is the accent with white text and
+            // arrow, as the interval cell; hover keeps the box surface and
+            // gets the row-2 cells' frame in the text color - the surface
+            // alone is 1.05:1 on the light background.
+            BOOL on = ctx->overlayOpen && ctx->overlayKind == 3;
+            if (on) {
+                SetDCBrushColor(hdc, ctx->sty.clr.accent);
+                FillRect(hdc, r, (HBRUSH)GetStockObject(DC_BRUSH));
+            } else if (hot) {
+                FillRect(hdc, r, ctx->sty.brBox);
+                SetDCBrushColor(hdc, ctx->sty.clr.text);
+                FrameRect(hdc, r, (HBRUSH)GetStockObject(DC_BRUSH));
+            }
+            SetTextColor(hdc, on ? ctx->sty.clr.onAccent : ctx->sty.clr.text);
             RECT t = *r;
             t.left += Dp(6); t.right -= Dp(14);
             DrawTextW(hdc, SYMBOLS[ctx->symIdx].label, -1, &t, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            DrawDropArrow(hdc, r, ctx->sty.clr.dim);
+            DrawDropArrow(hdc, r, on ? ctx->sty.clr.onAccent : ctx->sty.clr.dim);
             continue;
         }
         BOOL sel;
@@ -3442,13 +3522,14 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
 // messages came here, so two fast clicks were two toggles (pitfall 38).
 // The intervals go through ApplyConfigChoice, so registry, watermark,
 // configGen and the thread are handled exactly as from the overlay and the
-// tray menu; a click on the active interval is a no-op there. The symbol pill
+// tray menu; a click on the active interval is a no-op there. The symbol cell
 // opens the existing overlay - no new menu, no new hit-test code.
 static void OnToolbarClick(HWND hwnd, int th) {
     if (th == TBAR_SYM || th == TBAR_IV || th == TBAR_GEAR) {
-        // The symbol picker, the interval dropdown (phase 41) or the
-        // settings menu (phase 42).
-        g_Ctx.overlayKind = (th == TBAR_IV) ? 1 : (th == TBAR_GEAR) ? 2 : 0;
+        // The symbol dropdown (phase 45; the two-column picker before), the
+        // interval dropdown (phase 41) or the settings menu (phase 42). The
+        // picker (kind 0) is the right-click's alone now.
+        g_Ctx.overlayKind = (th == TBAR_IV) ? 1 : (th == TBAR_GEAR) ? 2 : 3;
         g_Ctx.overlayOpen = TRUE;
         g_Ctx.overlayHot  = -1;
         g_Ctx.ch.hoverIdx    = -1;
@@ -3771,7 +3852,18 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // The NCHITTEST coordinates are relative to the WINDOW. With
                 // the frame removed in WM_NCCALCSIZE, client and window are
                 // the same rectangle, so x can be used directly against
-                // ButtonLayout.
+                // ButtonLayout and OverlayLayout.
+                //
+                // The symbol dropdown (phase 45) opens inside this band, over
+                // the range field: its box is client area while it is open,
+                // or a click in a gap between two range cells would start a
+                // window move instead of picking a symbol (pitfall 21).
+                // overlayOpen, not the fade level (pitfall 12).
+                if (g_Ctx.overlayOpen) {
+                    OverlayRects ob;
+                    OverlayLayout(w, h, &ob);
+                    if (PtInRect2(&ob.box, x, y)) return HTCLIENT;
+                }
                 RECT btns[BTN_COUNT];
                 ButtonLayout(w, btns);
                 if (ButtonHit(btns, x, y) >= 0) return HTCLIENT;
@@ -4283,7 +4375,8 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 64: r = (g_Ctx.theme == &APP_THEME_LIGHT); break;
                 // 65-67 (phase 41): the selected range (-1 none), the candles
                 // its home view wants (0 = the view is away), the overlay's
-                // kind (0 picker, 1 interval dropdown).
+                // kind (0 picker, 1 interval dropdown, 2 settings menu from
+                // phase 42, 3 symbol dropdown from phase 45).
                 case 65: r = g_Ctx.rangeIdx; break;
                 case 66: r = g_Ctx.rangeWant; break;
                 case 67: r = g_Ctx.overlayKind; break;
@@ -5326,6 +5419,15 @@ static HMENU BuildRangeMenu(void) {
     return h;
 }
 
+// One of the settings menu's choices as a tray item (phase 45): the same
+// name and key as the gear menu's row, and the same check - SettingOn reads
+// the mode's choice, as the tray items always did.
+static void AppendSettingItem(HMENU h, UINT id, int k) {
+    wchar_t lbl[48];
+    swprintf_s(lbl, 48, L"%s\t%s", SET_LABEL[k], SET_KEY[k]);
+    AppendMenuW(h, MF_STRING | (SettingOn(&g_Ctx, k) ? MF_CHECKED : MF_UNCHECKED), id, lbl);
+}
+
 // The tray menu. A separate function so the check marks and content can be
 // tested without a tray icon.
 //
@@ -5356,20 +5458,15 @@ static HMENU BuildTrayMenu(void) {
         if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Interval");
         HMENU hRg = BuildRangeMenu();   // phase 41
         if (hRg)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRg,  L"Range");
-        // The VOL toggle (phase 22) - desktop mode has no toolbar.
-        AppendMenuW(hMenu, MF_STRING | (ShowVolNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_VOLUME, L"Volume bars	V");
-        // The MA toggle (phase 25), same reason. Since phase 27 it also
-        // carries VWAP and today's high/low, so it is named for what it is.
-        AppendMenuW(hMenu, MF_STRING | (ShowIndNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_INDICATORS, L"Indicators	M");
-        // The RSI band (phase 39): for the mode we are in, like the two above.
-        AppendMenuW(hMenu, MF_STRING | (ShowRsiNow(&g_Ctx) ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_RSI, L"RSI band	I");
-        // The light theme (phase 40): for the mode we are in, like the three
-        // above - the desktop surface has its own choice.
-        AppendMenuW(hMenu, MF_STRING | ((ThemeNow(&g_Ctx) == &APP_THEME_LIGHT) ? MF_CHECKED : MF_UNCHECKED),
-                    ID_TRAY_THEME, L"Light theme	T");
+        // The VOL toggle (phase 22; desktop mode has no toolbar), the MA
+        // toggle (phase 25; since phase 27 also VWAP and today's high/low),
+        // the RSI band (phase 39) and the light theme (phase 40), each for
+        // the mode we are in. Phase 45 names them as the gear menu does
+        // (were "Volume bars", "Indicators", "RSI band").
+        AppendSettingItem(hMenu, ID_TRAY_VOLUME,     SET_VOL);
+        AppendSettingItem(hMenu, ID_TRAY_INDICATORS, SET_IND);
+        AppendSettingItem(hMenu, ID_TRAY_RSI,        SET_RSI);
+        AppendSettingItem(hMenu, ID_TRAY_THEME,      SET_THEME);
         // The price alerts (phase 23) are set in the panel's price column,
         // but must be clearable from here: desktop mode draws the lines and
         // has no input. The count applies to the symbol shown. Grayed, not

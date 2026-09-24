@@ -668,28 +668,81 @@ long long ChartUtcOffsetMs(void) {
     return ((long long)l - (long long)u) / 10000LL;
 }
 
-// Unix ms -> local time (UTC + utcOffsetMs). On long candles "HH:MM" is not
-// enough - every 1d candle would read "00:00". From 1h upward we include the
-// date.
-void FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs,
-                             wchar_t* out, size_t cch) {
-    ULONGLONG t = (ULONGLONG)(unixMs / 1000 + utcOffsetMs / 1000) * 10000000ULL + 116444736000000000ULL;
+// Unix ms -> a candle's time, in one of three forms (phase 45; until then 1h
+// and 4h wrote "MM-DD HH:MM" on every label, so a 1h axis read "09-12 00:00"
+// nine times, and under 1h a view across midnight had no date at all):
+//   TIME_CLOCK  "14:35"         the quote line's At (tickc.c, through
+//                               FormatCandleTime)
+//   TIME_AXIS   "14:35", and "21 Sep" on the candle a local day begins with -
+//               Bloomberg marks the day on the axis
+//   TIME_BOX    "21 Sep 14:35"  the hover box
+// The day begins with the candle whose open lies less than one interval
+// after local midnight: that is the midnight candle itself wherever the
+// offset is whole hours and the interval divides them, and in CEST the 4h
+// candle at 02:00 (the candles open at 00:00 UTC), which "on midnight" alone
+// never finds. Month names are English and fixed, not the locale's: the repo
+// and the app are English, and the axis width is measured on them.
+//
+// From 1 day up every form is "YYYY-MM-DD", the UTC date. Daily and weekly
+// candles open at 00:00 UTC; west of UTC the local conversion put them on
+// the previous day (phase 44 review, F4).
+#define TIME_CLOCK 0
+#define TIME_AXIS  1
+#define TIME_BOX   2
+static void FormatTimeAs(long long unixMs, long long intervalMs, long long utcOffsetMs,
+                         int form, wchar_t* out, size_t cch) {
+    static const wchar_t* const MON[12] = { L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun",
+                                            L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec" };
+    BOOL daily = (intervalMs >= 86400000LL);
+    long long off = daily ? 0 : utcOffsetMs;
+    ULONGLONG t = (ULONGLONG)(unixMs / 1000 + off / 1000) * 10000000ULL + 116444736000000000ULL;
     FILETIME local;
     local.dwLowDateTime  = (DWORD)(t & 0xFFFFFFFFULL);
     local.dwHighDateTime = (DWORD)(t >> 32);
     SYSTEMTIME st;
-    if (FileTimeToSystemTime(&local, &st)) {
-        if (intervalMs >= 86400000LL) {
-            swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
-        } else if (intervalMs >= 3600000LL) {
-            swprintf_s(out, cch, L"%02d-%02d %02d:%02d",
-                       st.wMonth, st.wDay, st.wHour, st.wMinute);
-        } else {
-            swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
-        }
-    } else {
+    if (!FileTimeToSystemTime(&local, &st) || st.wMonth < 1 || st.wMonth > 12) {
         wcscpy_s(out, cch, L"--:--");
+        return;
     }
+    if (daily) {
+        swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+        return;
+    }
+    long long tod = (long long)st.wHour * 3600000LL + st.wMinute * 60000LL + st.wSecond * 1000LL;
+    BOOL dayStart = (tod < ((intervalMs > 0) ? intervalMs : 60000LL));
+    if (form == TIME_BOX)
+        swprintf_s(out, cch, L"%d %s %02d:%02d", st.wDay, MON[st.wMonth - 1], st.wHour, st.wMinute);
+    else if (form == TIME_AXIS && dayStart)
+        swprintf_s(out, cch, L"%d %s", st.wDay, MON[st.wMonth - 1]);
+    else
+        swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
+}
+
+void FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs,
+                             wchar_t* out, size_t cch) {
+    FormatTimeAs(unixMs, intervalMs, utcOffsetMs, TIME_CLOCK, out, cch);
+}
+
+// The widest label TIME_AXIS can give for the interval, measured in the font
+// selected into hdc (phase 45). The spacing of the labels must hold for every
+// label, and until now it was measured on the view's first one - with two
+// forms on one axis, "30 Sep" would have been placed at the distance of
+// "00:00". The axis font is monospace (see ChartStyleCreate), so one sample
+// per form is the widest of its kind.
+int ChartTimeLabelW(HDC hdc, long long intervalMs) {
+    static const wchar_t* const INTRA[2] = { L"00:00", L"30 Sep" };
+    SIZE sz = { 0, 0 };
+    if (intervalMs >= 86400000LL) {
+        GetTextExtentPoint32W(hdc, L"2026-09-21", 10, &sz);
+        return sz.cx;
+    }
+    int w = 0;
+    for (int i = 0; i < 2; ++i) {
+        sz.cx = 0;
+        GetTextExtentPoint32W(hdc, INTRA[i], (int)wcslen(INTRA[i]), &sz);
+        if (sz.cx > w) w = sz.cx;
+    }
+    return w;
 }
 
 // Layout and hit detection share one function. Two independent calculations of
@@ -895,14 +948,20 @@ static BOOL DrawVwap(HDC hdc, const ChartData* in, const ChartRect* g, COLORREF 
 // it. Phase 43: they only rise - turned off, the region goes at once (it is
 // geometry, like the RSI band's), and nothing is left to sink. At 1.0 the
 // factor is exact.
+//
+// pane (phase 45): the bars stand in the volume pane, where nothing is in
+// front of them, and take the stronger volPaneUp/volPaneDown; behind the
+// candles they keep the muted volUp/volDown.
 static void DrawVolumeBars(HDC hdc, const ChartState* st, const ChartData* in,
                            const ChartStyle* sty, int left, double dStart, double slot,
-                           int bodyW, int i0, int i1, int base, int hMax) {
+                           int bodyW, int i0, int i1, int base, int hMax, BOOL pane) {
     if (st->dispVolMax <= 0.0 || st->dispVolF <= 0.0 || hMax <= 0) return;
     int oldFill = SetPolyFillMode(hdc, WINDING);
     HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
+    HBRUSH brUp   = pane ? sty->brVolPaneUp   : sty->brVolUp;
+    HBRUSH brDown = pane ? sty->brVolPaneDown : sty->brVolDown;
     for (int pass = 0; pass < 2; ++pass) {          // 0 = up, 1 = down
-        SelectObject(hdc, pass == 0 ? sty->brVolUp : sty->brVolDown);
+        SelectObject(hdc, pass == 0 ? brUp : brDown);
         int k = 0;
         for (int i = i0; i < i1; ++i) {
             const Candle* c = &in->candles[i];
@@ -1000,6 +1059,8 @@ const ChartTheme ChartThemeDark = {
     CLR_AXIS,
     CLR_VOL_UP,
     CLR_VOL_DOWN,
+    CLR_VOL_PANE_UP,     // phase 45
+    CLR_VOL_PANE_DOWN,
     CLR_SMA,
     CLR_EMA,
     CLR_VWAP,
@@ -1020,6 +1081,11 @@ const ChartTheme ChartThemeDark = {
 // The overlays keep their hues but darker; VWAP turns from yellow to dark
 // gold, which yellow cannot be on white. The volume bars are the candle
 // colors blended about 25 % toward the background, as in the dark theme.
+// Phase 45: in the pane about 65 % (5DAB95, E27381) - a notch more than the
+// dark theme's 60 %, since a pastel on near-white carries less than a dark
+// color on near-black; still lighter than the candles. Blue is moved off the
+// exact 65 % blend (5DAB92, E2737E): up and down are text colors here too
+// (pitfall 87).
 //
 // Phase 40: every role drawn as text reaches WCAG AA, 4.5:1, on the
 // background and on the box (tests/chart_golden.c checks the pairs). The
@@ -1045,6 +1111,8 @@ const ChartTheme ChartThemeLight = {
     RGB(0x4A, 0x53, 0x60),   // axis
     RGB(0xC3, 0xDE, 0xD6),   // volUp
     RGB(0xF2, 0xCB, 0xCF),   // volDown
+    RGB(0x5D, 0xAB, 0x95),   // volPaneUp    phase 45: about 65 % of up
+    RGB(0xE2, 0x73, 0x81),   // volPaneDown  and of down
     RGB(0x2C, 0x78, 0xAA),   // sma        4.60
     RGB(0x8C, 0x59, 0xC6),   // ema        4.62
     RGB(0x8A, 0x6C, 0x00),   // vwap       4.76
@@ -1094,9 +1162,12 @@ BOOL ChartStyleCreate(ChartStyle* sty, int dpi, const ChartTheme* theme) {
     sty->brBoxEdge = CreateSolidBrush(t->boxEdge);
     sty->brVolUp   = CreateSolidBrush(t->volUp);     // phase 21
     sty->brVolDown = CreateSolidBrush(t->volDown);
+    sty->brVolPaneUp   = CreateSolidBrush(t->volPaneUp);     // phase 45
+    sty->brVolPaneDown = CreateSolidBrush(t->volPaneDown);
     return sty->fontSmall && sty->fontAxis && sty->penGrid && sty->penCross &&
            sty->penLastUp && sty->penLastDown && sty->brBg && sty->brBox &&
-           sty->brBoxEdge && sty->brVolUp && sty->brVolDown;
+           sty->brBoxEdge && sty->brVolUp && sty->brVolDown &&
+           sty->brVolPaneUp && sty->brVolPaneDown;
 }
 
 HFONT ChartPillFontCreate(int H) {
@@ -1109,7 +1180,8 @@ HFONT ChartPillFontCreate(int H) {
 void ChartStyleDestroy(ChartStyle* sty) {
     HGDIOBJ own[] = { sty->fontSmall, sty->fontAxis, sty->penGrid, sty->penCross,
                       sty->penLastUp, sty->penLastDown, sty->brBg, sty->brBox,
-                      sty->brBoxEdge, sty->brVolUp, sty->brVolDown };
+                      sty->brBoxEdge, sty->brVolUp, sty->brVolDown,
+                      sty->brVolPaneUp, sty->brVolPaneDown };
     for (int i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++)
         if (own[i]) DeleteObject(own[i]);
     HFONT pill = sty->fontPill;   // the app's, see chart.h
@@ -1142,7 +1214,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     wchar_t buf[64];
     int dpi = (sty->dpi > 0) ? sty->dpi : CHART_DPI_BASE;
     ChartRect g = ChartGeometry(W, H, in->desktop, dpi, in->band, in->vol);
-    BOOL bandOn = (g.bandBottom > g.bottom);   // phase 39
+    // Phase 45: the band's own height, not its bottom against the price
+    // pane's. Without a band bandTop = bandBottom = the bottom before the
+    // volume pane was cut out, so with the volume pane alone the old test
+    // (bandBottom > bottom) found a band of height 0 on the pane's bottom row
+    // and drew its top line there - a stray rule under the bars - and, while
+    // the RSI faded out, its value tag in the volume pane's column.
+    BOOL bandOn = (g.bandBottom > g.bandTop);   // phase 39
     BOOL volPane = (g.volBottom > g.bottom);   // phase 43: the volume has a pane
     int  axisB  = ChartPanesBottom(&g);   // the lowest pane: the time axis sits under it
     // The tags on the price axis: [y - tagHalf, y + tagHalf), and two tags
@@ -1188,7 +1266,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     //
     // The bottom is INCLUSIVE (bottom + 1): grid line i = 4 lies at
     // y = bottom, and so does the wick of the candle with the lowest price. A
-    // [top, bottom) clip would erase the bottom line.
+    // [top, bottom) clip would erase the bottom line (and the wick, which
+    // still stands there when a pane below takes line 4's place, phase 45).
     RECT rcChart = { left, top, edge, bottom + 1 };
     IntersectClipRect(hdc, rcChart.left, rcChart.top, rcChart.right, rcChart.bottom);
 
@@ -1197,8 +1276,14 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // 1 px frame around the whole screen - the very interference desktop mode
     // is supposed to be free of. The three inner lines carry the spatial
     // frame of reference alone.
+    //
+    // Phase 45: with a pane under the price (volume or RSI), line 4 is left
+    // out. The pane's top line stands PANE_GAP (6 px) under it, and the two
+    // read as a double rule; the pane's line is the one separator, as in
+    // Bloomberg. The price label on row 4 stays - it is the pane's low.
     HPEN hOldPen = (HPEN)SelectObject(hdc, sty->penGrid);
-    int gi0 = in->desktop ? 1 : 0, gi1 = in->desktop ? 3 : 4;
+    int gi0 = in->desktop ? 1 : 0;
+    int gi1 = (in->desktop || volPane || bandOn) ? 3 : 4;
     for (int i = gi0; i <= gi1; ++i) {
         int y = top + (ch * i) / 4;
         MoveToEx(hdc, left, y, NULL);
@@ -1226,7 +1311,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // pane, inside its clip. With a pane the bars are drawn there, below.
     if (in->vol && !volPane)
         DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1,
-                       bottom, ChartVolBarsH(&g));
+                       bottom, ChartVolBarsH(&g), FALSE);
 
     // --- Alert lines (phase 23) ---
     // Behind the candles and above the bars, inside the same clip, from left
@@ -1439,7 +1524,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         LineTo(hdc, edge, vt);
         SelectObject(hdc, hOldV);
         IntersectClipRect(hdc, left, vt, edge, vb + 1);
-        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1, vb, vbH);
+        // Phase 45: the stronger pane colors in the panel only - the desktop
+        // is meant to be quiet, and keeps the muted bars even in a pane.
+        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1, vb, vbH, !in->desktop);
         SelectClipRgn(hdc, NULL);
     }
     // Which pane the pointer is in. The gap above a pane belongs to it, so
@@ -1758,8 +1845,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // in its direction's color on the box surface - the hover box's close
     // row - and the legend in the top left corner the volume at the
     // crosshair, else at the last visible candle, whole or not at all. The
-    // legend is in the text color: the bars' muted colors are not text, and
-    // the text reads over them.
+    // legend is in the text color: the bars' colors are not text. Phase 45:
+    // it no longer reads over them - see the rectangle below.
     if (volPane && volT > 0 && !in->desktop) {
         SelectObject(hdc, sty->fontAxis);
         if (yVolV != INT_MIN) {
@@ -1785,6 +1872,15 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &lszV);
         int lxV = left + PX(6), lyV = vt + PX(3);
         if (lxV + lszV.cx <= right - PX(6) && lyV + lszV.cy <= vb) {
+            // Phase 45: on a rectangle of the background, 3 px wider and 2 px
+            // taller on each side than the text. The pane's bars are strong
+            // now, and text over a bar cannot reach 4.5:1 in the light theme;
+            // on bg it is the header's pair. The top stays under the pane's
+            // top line, and the bottom inside the pane.
+            RECT rcLV = { lxV - PX(3), lyV - PX(2), lxV + lszV.cx + PX(3), lyV + lszV.cy + PX(2) };
+            if (rcLV.top < vt + 1) rcLV.top = vt + 1;
+            if (rcLV.bottom > vb + 1) rcLV.bottom = vb + 1;
+            FillRect(hdc, &rcLV, sty->brBg);
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.text, volT));
             ExtTextOutW(hdc, lxV, lyV, 0, NULL, buf, (int)wcslen(buf), NULL);
         }
@@ -1822,14 +1918,14 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     //
     // O(number of labels): one modulo to find the first label, then steps
     // of S straight in candles[]. No allocation.
+    //
+    // Phase 45: two forms on one axis ("14:35", and "21 Sep" where a day
+    // begins), so the spacing is measured on the widest (ChartTimeLabelW),
+    // not on the first label, and the edge test on each label's own width.
     if (i0 < i1 && !in->desktop) {
         wchar_t tl[24];
-        FormatCandleTime(in->candles[i0].openTime,
-                         in->intervalMs, in->utcOffsetMs, tl, 24);
-        int tlLen = (int)wcslen(tl);
-        SIZE tsz = { 0, 0 };
-        GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);   // the axis font is selected
-        int minDx = tsz.cx + PX(TIME_LBL_GAP);
+        int minDx = ChartTimeLabelW(hdc, in->intervalMs)   // the axis font is selected
+                  + PX(TIME_LBL_GAP);
         if (minDx < PX(TIME_DX_MIN)) minDx = PX(TIME_DX_MIN);
         long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
         int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
@@ -1845,9 +1941,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         UINT oldAlign = SetTextAlign(hdc, TA_CENTER | TA_TOP);
         for (; k < i1; k += step) {
             int x = left + (int)(((double)k - dStart + 0.5) * slot);
+            FormatTimeAs(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs,
+                         TIME_AXIS, tl, 24);
+            int tlLen = (int)wcslen(tl);
+            SIZE tsz = { 0, 0 };
+            GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);
             if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-            FormatCandleTime(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, tl, 24);
-            ExtTextOutW(hdc, x, axisB + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
+            ExtTextOutW(hdc, x, axisB + PX(2), 0, NULL, tl, tlLen, NULL);
         }
         SetTextAlign(hdc, oldAlign);
     }
@@ -2130,8 +2230,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // Hover box with time + OHLC. Back to the normal small font:
     // LINE_H = 13 is measured on it, and the axis font is 15 px tall.
     SelectObject(hdc, sty->fontSmall);
+    // Phase 45: date and time on intraday intervals ("21 Sep 14:35"), so the
+    // box names the day the axis only marks where it begins.
     wchar_t tbuf[24];
-    FormatCandleTime(hc->openTime, in->intervalMs, in->utcOffsetMs, tbuf, 24);
+    FormatTimeAs(hc->openTime, in->intervalMs, in->utcOffsetMs, TIME_BOX, tbuf, 24);
 
     // BOX_H: 4 px top + time row + O/H/L/C/V (phase 21) = 4 + 6 * 13 + 5.
     // With the indicators on (phase 27) three more rows are added: SMA, EMA
@@ -2142,7 +2244,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // defined at the candle gets a dash, as in the legend.
     const int indRows = (indT > 0) ? 3 : 0;
     const int rsiRows = (bandOn && rsiT > 0) ? 1 : 0;   // phase 39
-    const int LINE_H = PX(13), BOX_W = PX(104);
+    const int LINE_H = PX(13), BOX_W = PX(HOVER_BOX_W);
     const int BOX_H = PX(4) + (6 + indRows + rsiRows) * LINE_H + PX(5);
     int bx = hx + PX(12);
     if (bx + BOX_W > right) bx = hx - PX(12) - BOX_W;   // flip to the left at the edge
