@@ -1184,6 +1184,7 @@ const ChartTheme ChartThemeDark = {
     CLR_AXIS_LINE, // axisLine
     CLR_STAMP,     // stamp: white
     CLR_ON_STAMP,  // onStamp: black, 21:1
+    CLR_MOUNTAIN,  // fillCell: the navy itself
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -1242,6 +1243,7 @@ const ChartTheme ChartThemeLight = {
     RGB(0x7D, 0x87, 0x95),   // axisLine
     RGB(0x1B, 0x36, 0x5D),   // stamp      the line's navy, inverted:
     RGB(0xFF, 0xFF, 0xFF),   // onStamp    white on it, 12.1
+    RGB(0xFA, 0xFA, 0xFB),   // fillCell   bg: the grays are ~3.7 on the fill
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -2591,11 +2593,15 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             // Phase 49: and the mountain's fill. Its top is the highest
             // close, 7 % under the pane's top, which is inside this row on
             // a price pane under ~275 px (and anywhere in the Y easing).
-            {
-                RECT rcLg = { lx, ly, lx + sz3.cx, ly + szAll.cy };
-                if (FillHitRect(&pm, &rcLg)) struck = TRUE;
+            // Phase 51: where the fill covers the whole row, the cell is the
+            // theme's fillCell - the navy itself in the dark theme, which
+            // carries the averages' colors at 4.5:1 - not a black strip.
+            RECT rcLg = { lx, ly, lx + sz3.cx, ly + szAll.cy };
+            if (FillHitRect(&pm, &rcLg)) struck = TRUE;
+            if (struck) {
+                SetBkColor(hdc, FillUnderRect(&pm, &rcLg) ? sty->clr.fillCell : sty->clr.bg);
+                SetBkMode(hdc, OPAQUE);
             }
-            if (struck) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.sma, indT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.ema, indT));
@@ -2679,11 +2685,18 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 placed[nPlaced++] = rcN;
                 // Phase 49: a label on the mountain's fill stands on the
                 // background, as the legend over a level line does: its
-                // gray is not 4.5:1 on the fill in the light theme (phase
-                // 51: nor yesterday's on the dark navy, 4.14:1; a black
-                // patch on the navy is 1.2:1, hardly a box).
+                // gray is not 4.5:1 on the fill in the light theme.
                 BOOL onFill = FillHitRect(&pm, &rcN);
-                if (onFill) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
+                if (onFill) {
+                    // Phase 51: where the fill covers the whole label, on
+                    // a cell of the theme's fillCell - the navy itself in
+                    // the dark theme, where the grays reach 4.5:1 (the
+                    // black patch was a visible box in it); the light
+                    // theme's is still the background. Where the fill
+                    // covers part, the background, as before.
+                    SetBkColor(hdc, FillUnderRect(&pm, &rcN) ? sty->clr.fillCell : sty->clr.bg);
+                    SetBkMode(hdc, OPAQUE);
+                }
                 SetTextColor(hdc, Blend(sty->clr.bg, (q < 2) ? sty->clr.session : sty->clr.prev, indT));
                 ExtTextOutW(hdc, rcN.left, rcN.top, 0, NULL, LVL_NAME[q], 3, NULL);
                 if (onFill) SetBkMode(hdc, TRANSPARENT);

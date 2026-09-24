@@ -138,6 +138,12 @@ typedef struct {
     // which takes the series' color on Bloomberg, where the candles and the
     // bars keep up/down with bg on it.
     COLORREF gridDot, axisLine, stamp, onStamp;
+    // fillCell: the cell a level name or the averages' legend stands on
+    // where the mountain's fill covers it. The dark theme's navy carries
+    // every such text at 4.5:1 (the cell is the fill itself, and only cuts
+    // the lines through the text); the light fill does not, so there it is
+    // the background, as in phase 49.
+    COLORREF fillCell;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
@@ -320,7 +326,10 @@ typedef struct {
 // patterns stay in step: high/low is 2 on / 10 off (sparse dots; PS_DOT in
 // the crosshair is denser and follows the pointer), the close 10 on / 2 off
 // (almost solid - it is the level today's change is computed from).
-#define CLR_PREV         RGB(0x6F, 0x7B, 0x95)
+// Phase 51: a step lighter (6F7B95 until then), so the names PDC, PDH and
+// PDL reach 4.5:1 on the mountain's navy (4.76) and the tags on the box
+// (4.58, from 3.99); still darker and cooler than CLR_SESSION.
+#define CLR_PREV         RGB(0x79, 0x85, 0xA0)
 #define PREV_DASH_HL     2
 #define PREV_DASH_CLOSE  10
 // The levels in the price axis rank, highest first: today's high and low,
