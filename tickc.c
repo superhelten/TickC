@@ -5097,6 +5097,10 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         r = (LRESULT)floor((wParam == 92 ? tmn : tmx) * 100.0 + 0.5);
                     }
                     break;
+                // 94 (phase 51): the view's high and low labels in the last
+                // frame, bit 0 the high, bit 1 the low (the engine's
+                // probeHiLoMask).
+                case 94: r = g_Ctx.ch.probeHiLoMask; break;
                 case 86: {
                     RECT rcS;
                     GetClientRect(hwnd, &rcS);
