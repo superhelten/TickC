@@ -133,11 +133,15 @@ chart: a black background, the mountain as a navy fill under a white line
 and the panel's default type, a dotted grid, the price column as an axis,
 a white last-price box for the line and the mountain, and the view's high
 and low as labels.
+**Phase 52** is part 2: a statistics box in the price pane (Last Price,
+High, Average, Low and the overlays as rows) in place of the one-line
+legend, the volume pane in the series' steel blue with an average line, a
+time axis in two rows, and Arial for the axis numbers.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
 The code is **two files** from phase 34: `tickc.c` (the app, ~7500 lines) and
-`chart.c` behind `chart.h` (the chart engine, ~3100 lines). Next to them is
+`chart.c` behind `chart.h` (the chart engine, ~3500 lines). Next to them is
 `tickc.manifest`, which the build embeds (phase 9). No external dependencies
 beyond Win32 and WinHTTP.
 
@@ -749,8 +753,8 @@ own.
 | `INTERVAL_COUNT` | 6 | 1m, 5m, 15m, 1h, 4h, 1d |
 | `CLR_WM_INK` / `WM_ALPHA_*` | white / 0.08 · 0.04 · 0.10 | watermark, `WatermarkAlpha(W)`, nominal at 1920 px (phase 11; replaces `CLR_WATERMARK` `#15191F`) |
 | `CLR_AXIS` | `#A0AAB8` | price and time labels, 8.05:1 against `CLR_BG` |
-| `AXIS_Y_W` / `AXIS_PAD_R` / `PAD_R` | 76 / 8 / 84 | price column (4 + 8 chars × 9 px) / edge margin / sum |
-| `PAD_B` | 18 | the time axis band |
+| `AXIS_Y_W` / `AXIS_PAD_R` / `PAD_R` | 76 / 8 / 84 | price column (4 + 8 chars × 9 px) / edge margin / sum; from phase 52 the same width holds nine Arial characters |
+| `PAD_B` | 34 | the time axis band, two rows (phase 52; 18 and one row until then) |
 | `TIME_DX_MIN` / `TIME_LBL_GAP` | 80 / 12 | minimum label spacing = max(80, width + 12) |
 | `OVL_ROW_H` / `OVL_COL_W` | 22 / 104 | overlay row and column width |
 | `ANIM_TAU_VIEW` | 70.0 | time constant, view easing (ms) |
@@ -4538,10 +4542,157 @@ desktop mode itself (it cannot run hidden); the black desktop was checked
 in `chart_golden` only. `/W4` clean. The README picture is the same
 fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
 
+### Phase 52 — the Bloomberg look, part 2: legends and axes
+
+Branch `phase-52`, merged with `--no-ff`. The answer key is the same
+screenshot of Bloomberg's GIP Standard Chart as in phase 51. One agent
+edited `chart.c`, `chart.h`, `tests/` and, for the probe fields only,
+`tickc.c`; the docs agent added one fix to the statistics box (the
+overlays' rows, below).
+
+**The statistics box.** Bloomberg's legend stands in the price pane as a
+framed box on the box surface: `Last Price`, `High on <date>`, `Average`
+and `Low on <date>`. With the indicators on, `SMA 20`, `EMA 50` and `VWAP`
+are rows of the same box, with their colors as squares; the one-line legend
+at the top (phases 25-27) is gone. Each row has a mark: a square in the
+stamp's color for Last Price (the series' white or navy for the line and
+the mountain, up or down for the candles and the bars), a T for the high,
+`-o-` for the average, an inverted T for the low. The text is the text
+color on the box surface (9.31:1 dark, 15.80 light), the glyphs the axis
+color (7.21 and 7.79). Last Price and the overlays are read at the
+crosshair's candle, otherwise at the last visible one, as the old legend
+and the hover box read them (Bloomberg's Track does the same). High, Low
+and Average cover the candles whose middle is in view (`ChartViewStats`,
+shared with phase 51's high and low labels), the high and low in the
+prices the axis scales on; Average is the mean close for every type. The
+dates follow the hover box: `16 Sep 12:00` intraday, `2026-09-21` on 1d and
+1w. An overlay with no value at that candle has no row - VWAP is per UTC
+day and has none on 1d and 1w, an average none before its period has
+candles. The box first printed a `-` there and gave it the room of High
+and Low; Bloomberg lists only the series that exist.
+
+**Where the box stands.** Lower-left, as on the terminal, and upper-left
+when the price's marks enter the lower-left and not the upper-left; when
+they enter both, the corner fewer candles enter (`MarksHitCount`: on a few
+wide candles the box would otherwise sit on a third of them). A fixed
+corner was measured over every 300-candle view first: the lower-left was on
+the price in 28 % of the goldens' synthetic views and 72 % of the recorded
+fixtures', the upper-left in 59 % and 5 % (pitfall 166). The rule is on the
+price in 2-3 %. The box takes at most half the plot's width and half the
+price pane's height (`LGD_MAX_PCT`). Too tall, High and Low give way
+together first (their numbers stand by their points), then Average, VWAP,
+EMA and SMA; Last Price stays. Too wide, High and Low lose their dates;
+with fewer than two rows, or still too wide, there is no box. At 400x250
+there is none; 560x300 shows Last Price, Average, SMA, EMA and VWAP. The
+box is opaque: the level, alert and ghost lines stop at it, as they did at
+the old legend (phase 46), the level names and the high/low labels give way
+to it, and the hover box is drawn over it. Panel only.
+
+**The volume pane.** The line and the mountain draw their volume in GIP's
+steel blue, `637DA0`, sampled from the screenshot's solid legend swatch
+(pitfall 164); the light theme's is a step deeper, `56729F`. The tag is
+that blue with a black number (4.97:1; in the light theme a white one,
+4.88). The candles and the OHLC bars keep up/down bars and the stamp's
+up/down tag, as they keep the up/down stamp (phase 51). Over the bars runs
+an SMA 20 of the volume in the series' line color, the white `F4F6F9`
+(navy in the light theme). The legend at the pane's top-left is framed,
+`Volume 1.2K` with a swatch, and `FormatVolume` writes B from a billion.
+The desktop keeps its muted bars and gets no line.
+
+**The time axis in two rows.** The fine row is the step's unit: the clock
+under one day, the day of the month from one day, the month's name from 28
+days (steps of 1, 2, 3, 6 and 12 months, then 2, 5 and 10 years, each on
+the first candle of its month). The coarse row is the next unit up - the
+day, `Sep 2026`, the year - centered in each span it has in view, with a
+separator in the axis-line color where it changes, as Bloomberg's
+"Dec | 2021 2022". A name wider than its span is left out; the separator
+stays. The grid's dotted columns stay at the fine labels. The time band
+grows from 18 to 34 px (`PAD_B`; 51 at 144 dpi, 68 at 192), which 400x250
+affords: 126 px of price with the volume pane, over `PRICE_PANE_MIN`.
+
+**Arial for the axis numbers.** Bloomberg's axis numbers are a narrow
+proportional sans. Arial Narrow is Office's, not Windows' (asked for, GDI
+gives Arial); Arial is on every Windows. Against Lucida Console at 96 dpi:
+the same 11 px digit height, digits 8 px wide and tabular against 9 (13 at
+144 dpi, 17 at 192), `75812.34` 60 px against 72, a 17 px cell against 15,
+and, like Lucida, not antialiased at 96 dpi. Segoe UI was ruled out
+(antialiased at 96 dpi, a 20 px cell), Bahnschrift for its uneven digits.
+The price column keeps its width (`ChartAxisW`), so the header's layout and
+the hit tests do not move; the room goes to a ninth character, so a
+six-digit price keeps its cents (`888888.88` is 68 px in 72, where Lucida
+dropped to whole dollars). The labels stand left-aligned after the tick,
+as on the terminal. If Arial is missing or its digits come out uneven,
+Lucida Console as before. The desktop keeps Lucida. Probe fields (panel)
+95 (the box's rows, bit 7 = upper-left), 96 (the time axis: form, unit,
+separators, coarse labels) and 97 (the volume pane: series color, average
+line, legend, tag).
+
+**Verified.** Commit 1 (the theme roles, `ChartViewStats`, the constants,
+probe fields 95-97 and the checks, nothing drawn differently) was **red**:
+55 unit check lines failed while the 64 goldens passed and the
+`ChartViewStats` checks held as controls. `shot_p52.ps1` (13 checks, on the
+hidden desktop), **red** against `ticker_test_52c1.exe`: 12 fail; the one
+pass is "no box at 400x250", true without any box. Green: `chart_golden`
+64/64 twice, 43 contrast pairs per theme, the lowest 4.57:1 dark and 4.62
+light; 53 of 64 goldens changed, each looked at, and the 11 desktop cases
+are byte-identical. Seventeen mutations (`mut52.py`) each fail at least one
+check; the one back to a one-row band first crashed the checker, which read
+past the bitmap (pitfall 163), and is caught since. `shot_p52` 13/13 twice.
+`regress52.ps1` (`regress51` and `shot_p52`) 15/15 twice; the first run was
+14/15, `shot_vol` on its hard-coded pane rows, which the band moved by
+design (pitfall 167). Expectations changed on purpose, each named:
+`shot_vol`'s volume pane 571-702 → 558-686 and price bottom 565 → 552, with
+RSI 434-565/428 → 424-552/418, and at 400x250 the price bottom 186 → 170;
+the gap case's pointer (`vol_1h_gap_hover`) 568 → 555;
+`vol_rsi_15m_290_hover` became `vol_rsi_15m_306_hover` (at 290 px the
+volume pane would drop behind the candles); `legend_alert_row`'s alert now
+lies inside the box; and the old legend's contrast pairs and fill check
+were rewritten for the box. `golden.ps1 -Hidden`: all seven captures
+differ, as they should, and were looked at. GDI 67 → 67. Draw time at
+3840x1600 with 6000 candles: the candles 20.4 → 21.2 ms, the OHLC bars
+17.5 → 18.5 ms, the line and the mountain unchanged. The overlays' rows
+(the docs agent's fix) were **red** first: three new `chart_golden` checks
+(the 1d and 1w boxes, 112 px tall for six rows) failed, and `shot_p52`'s
+new 1Y check failed with field 95 = `0x7F` against `ticker_test_52g.exe`.
+Green: `chart_golden` 64/64 twice; five goldens changed and were looked at -
+`panel_1d_1280x720`, `range_1y_1d` and `range_5y_1w` lose the VWAP row
+(the two 1d boxes now fit the lower-left and stand there), and in
+`panel_1m_few_candles` and `ghost_row_zoomed`, where SMA and EMA have no
+value yet, High and Low come back; 50 panel cases have a box, 39 of them
+upper-left. `shot_p52` 14/14 (field 95 = `0x3F` on 1Y), `regress52`
+15/15, and `golden.ps1 -Hidden` from that build differs from the
+phase agent's captures in `p1280_1d` only. Not exercised: desktop mode (it
+cannot run hidden; the desktop was checked in `chart_golden` only),
+`golden.ps1 -Light` and the Arial fallback. `/W4` clean, and `/TP` gives the
+same size. The README picture is the same fixture scene, retaken.
+**Exe 256 000 → 262 656 bytes (+6 656); the overlays' fix adds nothing.**
+
 ---
 
 ## Known limitations
 
+- **The statistics box can jump between the left corners while panning**
+  (phase 52): 4 of 43 steps across the recorded fixtures. The corner
+  follows where the price's marks are, view by view.
+- **The box stands upper-left more often than Bloomberg's** (phase 52):
+  39 of the 50 golden panels with a box, where the terminal keeps it
+  lower-left. A box on the price was judged worse than a box in the other
+  corner.
+- **With the price in both left corners the box still covers some
+  candles** (phase 52); it takes the corner fewer of them enter.
+- **The hover box can cover the statistics box** (phase 52). It is drawn
+  over it, as it is over the candles.
+- **The light theme's volume average line is weak on the blue bars**
+  (phase 52): the navy line over `56729F` is 2.7:1. It is a line, not
+  text, so no contrast check holds it.
+- **The RSI band's legend is not framed** (phase 52), unlike the statistics
+  box and the volume legend.
+- **A very narrow 1w view can end up with no fine time labels** (phase 52)
+  when no month begins inside it.
+- **The Arial fallback was not run** (phase 52), only reviewed. Should
+  Arial be missing or come back with uneven digits, the axis uses Lucida
+  Console as before phase 52, where a six-digit price dropped to whole
+  dollars.
 - **The view's high and low labels follow the visible extremes** (phase
   51). They move while the view pans and when a new candle makes a new
   extreme, and a label that fits nowhere is not drawn.
@@ -4549,37 +4700,40 @@ fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
   (phase 51): the averages and the grid's dots stop at the digits. That is
   the point of the cell (the averages would run through the number), but
   a line there is interrupted.
-- **The stamp has no pointer notch and the axis no minor ticks** (phase
-  51). Bloomberg's GIP chart has both.
+- **The stamp has no pointer notch and the axes no minor ticks** (phase
+  51). Bloomberg's GIP chart has both; the tags have no notch either, and
+  the two-row time axis of phase 52 has no ticks.
 - **The line's and the mountain's stamp creates its dashed pen every
   frame** (phase 51) and deletes it again. A `penLastSeries` in
   `ChartStyle` would avoid it.
-- **The desktop keeps the old look** (phase 51, by choice): three solid
-  grid rules, the up/down stamp for every type, no axis line and no
-  high/low labels. Desktop mode itself was not exercised (it cannot run
-  hidden); the black desktop was checked in `chart_golden` only, and the
-  README's desktop picture is from before phases 49 and 51 (candles on
-  the old background).
+- **The desktop keeps the old look** (phases 51 and 52, by choice): three
+  solid grid rules, the up/down stamp for every type, no axis line, no
+  high/low labels, no statistics box, muted volume bars with no average
+  line, and Lucida Console for its stamp. Desktop mode itself was not
+  exercised (it cannot run hidden); the black desktop was checked in
+  `chart_golden` only, and the README's desktop picture is from before
+  phases 49-52 (candles on the old background).
 - **The desktop's wide line is slow with a very wide view** (phase 49,
   observed in phase 51): with `DeskLineW`'s wide pen the line takes ~19 ms
   at 3840x1600 with all 6000 candles in view.
 - **The tray icon keeps the old background** (phase 51). The micro font's
   bitmap is filled with `0D1117` (`RenderMicroFontIcon`); the icon stands
   on the taskbar, not on the chart.
-- **`golden.ps1 -Light` was not re-run in phase 51.** The light theme's
-  chart was checked in `chart_golden` and `shot_p51`.
+- **`golden.ps1 -Light` was not re-run in phases 51 and 52.** The light
+  theme's chart was checked in `chart_golden`, `shot_p51` and `shot_p52`.
 - **The mountain hides the watermark where its fill lies** (phase 49). The
   fill is opaque and drawn under the grid, the bars behind the price and
   the alert and level lines, but over the watermark. That is one reason
   the desktop's default is the line.
 - **The mountain's fill is solid, not a gradient** (phase 49). A gradient
   would need msimg32's `GradientFill` or a region every frame.
-- **In the light theme a label or the legend on the fill stands on a patch
-  of the background** (phase 49; dark theme changed in phase 51). The light
+- **In the light theme a level label on the fill stands on a patch of the
+  background** (phase 49; dark theme changed in phase 51). The light
   theme's gray label text is ~3.7:1 on the light fill, so the level labels
-  and the averages' legend go opaque where they sit on it, and show as
-  small background-colored patches in the mountain. In the dark theme the
-  cell is the navy itself (`fillCell`), so nothing shows.
+  go opaque where they sit on it, and show as small background-colored
+  patches in the mountain. In the dark theme the cell is the navy itself
+  (`fillCell`), so nothing shows. The averages' legend, which did the same,
+  became the framed statistics box in phase 52.
 - **On the line and the mountain the price axis spans the closes**
   (phase 49), not the highs and lows, so a level or an alert between the
   closes' range and the wicks' is not drawn there, where the candles and
@@ -4669,9 +4823,10 @@ fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
   42). The klines give no trade time; Bloomberg's At is the trade's.
 - **The day's high, low and volume refresh every 15 s** (phase 42), and
   high and low follow the live price in between. Volume does not.
-- **Under 280 px of panel height, RSI and a volume pane do not both fit**
-  (phase 43). The band wins and the bars stand behind the candles, as
-  before phase 43. At 150 % the limit scales with the panel.
+- **Under ~300 px of panel height, RSI and a volume pane do not both fit**
+  (phase 43; ~280 px until phase 52's two-row time band took 16 px). The
+  band wins and the bars stand behind the candles, as before phase 43. At
+  150 % the limit scales with the panel.
 - **YTD in the first week of January** (phase 41) is fewer than
   `MIN_VIEW` (8) daily candles, so the range cannot be shown on 1d and
   ends. It comes back once the year is eight days old. A YTD view at home
@@ -4765,10 +4920,13 @@ fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
   well.
 - **The periods are fixed** (phase 25): SMA 20 and EMA 50, not selectable,
   and both or neither — one toggle.
-- **The averages' legend needs ~335 px of chart width** (phase 25) and is
-  gone below ~440 px panel width; the lines are drawn regardless. The
-  phase 25 `MA` pill, which did not fit below 426 px, left the header in
-  phase 42: the toggle is in the gear menu, on `M` and in the tray menu.
+- **The statistics box gives way on small panels** (phase 52; the
+  averages' one-line legend of phase 25 needed ~335 px of chart width). It
+  takes at most half the plot's width and half the price pane's height, so
+  rows drop (High and Low first, then Average, VWAP, EMA and SMA) and at
+  400x250 there is no box; the lines are drawn regardless. The phase 25
+  `MA` pill, which did not fit below 426 px, left the header in phase 42:
+  the toggle is in the gear menu, on `M` and in the tray menu.
 - **EMA depends on where the buffer begins** (phase 25). It is fed from
   candle 0, so a backfill (phase 18) or an eviction at the front moves the
   seed point. The effect dies out as (49/51)ⁿ: after 300 candles it is below
@@ -4784,7 +4942,8 @@ fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
   3840×1600 they are thin. The grid has the same property. From phase 49
   the price line of the line and mountain types does widen there
   (`DeskLineW`); the averages do not.
-- **The crosshair is drawn over the legend** when the pointer is under it.
+- **The crosshair is drawn over the statistics box** when the pointer is
+  on it (the one-line legend's behavior, kept in phase 52).
 - **A duplicate inherits `ShowIndicators` from the registry**, like
   `ShowVolume` below, and never writes it.
 - **A duplicate inherits `ShowVolume` from the registry, not from the panel
@@ -4853,8 +5012,9 @@ fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
   before phase 26 must turn them on again once.
 - **Today's session is the UTC day** (phase 27), not local midnight and not
   the view: VWAP resets and "today's" high/low begin at 00:00 UTC (02:00
-  Norwegian summer time), like Binance's daily candles. On 1d candles there
-  is no session — VWAP shows a dash and the lines are not drawn. Today's
+  Norwegian summer time), like Binance's daily candles. On 1d and 1w candles
+  there is no session — the hover box shows a dash for VWAP, the statistics
+  box has no VWAP row (phase 52) and the lines are not drawn. Today's
   high/low are drawn only when the level lies within the visible price range
   and the view reaches into the day; the axis tag gives way to the stamp,
   alerts and the ghost tag.
@@ -4912,7 +5072,9 @@ fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
   Safe — painting is bounds-checked.
 - **Time labels pop in and out at the edges during panning** (phase 11).
   A label that does not fit within `[left, right]` is not drawn at all,
-  instead of being clipped in the middle of a number.
+  instead of being clipped in the middle of a number. The coarse row of
+  phase 52 is centered in the part of each span that is in view, so its
+  names slide while panning, and a name wider than that part is left out.
 - **Phase 11 is not pixel-verified in desktop mode or with the crosshair.**
   Both go through the same `DrawChart`, and the price tag uses the same
   `axL`/`axR` as the stamp. But neither is captured, because that would move
@@ -5732,21 +5894,41 @@ fixture scene, retaken. **Exe 250 368 → 256 000 bytes (+5 632).**
 161. **A patch rule chosen for one theme can be an artifact in another:**
     the black patch was invisible on the gray fill and a box on the navy.
     Look at the default chart in the app capture, not only at the goldens.
+162. **A `\n` inside a Python `b"""..."""` block sent through a Bash
+    heredoc becomes a real newline in the C file** and breaks the string
+    literal. Write the script with the Write tool.
+163. **A check that scans "the rows under the lowest pane down to H" must
+    clamp to the bitmap;** the band-height mutation made it read past the
+    last row (access violation).
+164. **Sample a color from a solid area of a screenshot** (swatch, tag),
+    not from thin bars: they are resampled toward the black gaps.
+165. **"One sample per form is the widest" only holds for a monospace
+    font;** with a proportional face, measure every month name.
+166. **Test a layout rule on the recorded fixtures, not only the goldens'
+    synthetic walk:** the free corner came out opposite (lower-left
+    blocked 28 % synthetic, 72 % real).
+167. **Changing `PAD_B` moves every pane row, and scripts and cases encode
+    those rows as literals** (`shot_vol`, the gap case's pointer). Grep for
+    the old numbers before the run.
+168. **`cat > file` with no input, chained before a heredoc, waits on stdin
+    forever** (the 120 s timeout).
+169. **.ps1 files can mix LF and CRLF within one file** (pitfall 129
+    again): `shot_vol.ps1` had 88 CRLF lines out of 163.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak45` and `chart.c.bak45` are left** (2026-09-24). From
+**Only `tickc.c.bak46` and `chart.c.bak46` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 51 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 52 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak44` (phases 34–50) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak45` (phases 34–51) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49), `.bak44` (phase 50) and `.bak45` (phase 51). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49), `.bak44` (phase 50), `.bak45` (phase 51) and `.bak46` (phase 52). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
