@@ -1759,6 +1759,27 @@ static BOOL MarksHitRect(const PriceMarks* m, const RECT* rc) {
     return FALSE;
 }
 
+// Phase 52: how many candles' marks reach into rc - MarksHitRect over each
+// candle's own columns (its slot, grown by the body and the stroke), so two
+// corners the price enters both can be told apart by how much of it they
+// would cover.
+static int MarksHitCount(const PriceMarks* m, const RECT* rc) {
+    if (m->slot <= 0.0) return 0;
+    int pad = m->bodyW + m->lineW;
+    int a = (int)floor(m->dStart + (double)(rc->left - m->left - pad) / m->slot) - 1;
+    int b = (int)ceil(m->dStart + (double)(rc->right - m->left + pad) / m->slot) + 1;
+    if (a < 0) a = 0;
+    if (b > m->n) b = m->n;
+    int hits = 0;
+    for (int i = a; i < b; ++i) {
+        int cx = m->left + (int)(((double)i - m->dStart + 0.5) * m->slot);
+        RECT c = { cx - pad, rc->top, cx + pad + 1, rc->bottom };
+        RECT part;
+        if (IntersectRect(&part, &c, rc) && MarksHitRect(m, &part)) hits++;
+    }
+    return hits;
+}
+
 // Phase 49: does the mountain's fill reach into rc? The fill is every row
 // from the line down to the price pane's bottom, so it does when the line's
 // highest point over rc's columns is above rc's bottom. The line is straight
@@ -2871,7 +2892,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // the mean close. Dates as the hover box writes them ("16 Sep 12:00";
     // 1d and 1w the UTC date).
     // Where: the lower-left corner, as on the terminal, and the upper-left
-    // when the price's marks enter the lower-left and not the upper-left.
+    // when the price's marks enter the lower-left and not the upper-left -
+    // or, entering both, fewer candles enter the upper-left (MarksHitCount:
+    // on a few wide candles the box would otherwise sit on a third of them).
     // Measured over every 300-candle view of the recorded fixtures and the
     // goldens' walks, a fixed corner is on the price in 28-74 % of the views
     // (which corner is free follows the trend), this rule in 2-3 %. The box
@@ -2954,7 +2977,11 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             RECT rcLL = { left + PX(LGD_INSET_X), bottom - PX(LGD_INSET_Y) - boxH, 0, bottom - PX(LGD_INSET_Y) };
             RECT rcUL = { rcLL.left, top + PX(LGD_INSET_Y), 0, top + PX(LGD_INSET_Y) + boxH };
             rcLL.right = rcUL.right = rcLL.left + boxW;
-            BOOL upper = MarksHitRect(&pm, &rcLL) && !MarksHitRect(&pm, &rcUL);
+            BOOL upper = FALSE;
+            if (MarksHitRect(&pm, &rcLL)) {
+                if (!MarksHitRect(&pm, &rcUL)) upper = TRUE;
+                else upper = MarksHitCount(&pm, &rcUL) < MarksHitCount(&pm, &rcLL);
+            }
             RECT rcS = upper ? rcUL : rcLL;
             FillRect(hdc, &rcS, sty->brBox);
             FrameRect(hdc, &rcS, sty->brBoxEdge);

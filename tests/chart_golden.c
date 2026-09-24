@@ -1943,10 +1943,24 @@ static int CheckViewStats(void) {
 // for the low (the bar at the bottom), and the overlays' color squares.
 // In every panel case with a box: a left corner of the price pane, no more
 // than LGD_MAX_PCT of the plot's width and of the pane's height, lower-left
-// unless the price's marks enter there and not the upper-left.
+// unless the price's marks enter there and not the upper-left, or, in both,
+// fewer candles enter the upper-left.
 static int RowBits(int mask, int* order) {
     int n = 0;
     for (int b = 0; b < 7; b++) if (mask & (1 << b)) order[n++] = b;
+    return n;
+}
+
+// The candles whose marks enter r, each tested in its own columns.
+static int MarksCount(const Scene* sc, const RECT* r) {
+    Marks m;
+    MarksOf(sc, &m);
+    int pad = m.bodyW + m.w, n = 0;
+    for (int j = 0; j < sc->in.count; j++) {
+        int cx = MarkX(sc, &m, j);
+        RECT c = { cx - pad, r->top, cx + pad + 1, r->bottom }, part;
+        if (IntersectRect(&part, &c, r) && MarksInRect(sc, &part)) n++;
+    }
     return n;
 }
 
@@ -2041,7 +2055,15 @@ static int CheckStatsBox(void) {
             BOOL atLL = EqualRect(&b, &ll), atUL = EqualRect(&b, &ul);
             BOOL inLL = MarksInRect(&sc, &ll), inUL = MarksInRect(&sc, &ul);
             BOOL sizeOk = w * 100 <= g->cw * LGD_MAX_PCT && h * 100 <= g->ch * LGD_MAX_PCT;
-            BOOL cornerOk = atLL ? (!inLL || inUL) : (atUL && inLL && !inUL);
+            // Both corners on the price: the one fewer candles enter (a
+            // candle's marks counted in its own columns); within one candle
+            // of each other either is right - this count and the engine's
+            // are two computations of the same pixels.
+            BOOL cornerOk;
+            if (inLL && inUL) {
+                int cLL = MarksCount(&sc, &ll), cUL = MarksCount(&sc, &ul);
+                cornerOk = (abs(cLL - cUL) <= 1) ? (atLL || atUL) : (atUL == (cUL < cLL));
+            } else cornerOk = atLL ? !inLL : (atUL && inLL);
             if (atUL) upper++;
             if (!sizeOk || !(atLL || atUL) || !cornerOk) {
                 printf("FAIL statistics box %s: %d,%d-%d,%d (%dx%d in a %dx%d plot), %s; the price's marks %s the lower-left, %s the upper-left\n",
