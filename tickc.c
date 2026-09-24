@@ -39,6 +39,7 @@
 #define ID_TRAY_INDICATORS 1007   // moving averages on/off (phase 25)
 #define ID_TRAY_RSI      1008   // the RSI band on/off (phase 39)
 #define ID_TRAY_THEME    1009   // the light theme on/off (phase 40)
+#define ID_TRAY_OPEN     1010   // show the panel, the bold default item (phase 47)
 // Symbol and interval from the tray menu (phase 17). Item i gets FIRST + i.
 // The ranges are 100 wide; #error below the tables ensures they never overlap.
 #define ID_TRAY_SYMBOL_FIRST   1100
@@ -213,7 +214,7 @@ static const RangeDef RANGES[] = {
 C_ASSERT(SYMBOL_COUNT   <= ID_TRAY_RANGE_W);
 C_ASSERT(INTERVAL_COUNT <= ID_TRAY_RANGE_W);
 C_ASSERT(ID_TRAY_SYMBOL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_INTERVAL_FIRST);
-C_ASSERT(RANGE_COUNT    <= ID_TRAY_RANGE_W);
+C_ASSERT(RANGE_COUNT + 1 <= ID_TRAY_RANGE_W);   // + 1: "None" (phase 47)
 C_ASSERT(ID_TRAY_INTERVAL_FIRST + ID_TRAY_RANGE_W <= ID_TRAY_PERIOD_FIRST);
 
 #define ALERT_TAU_FLASH    900.0  // the afterglow when an alert fires (ms)
@@ -3910,10 +3911,11 @@ static BOOL ViewIsDefault(AppContext* ctx) {
 // It sets its default bar size - through ApplyConfigChoice, which empties
 // the buffer and sets the want in one critical section - or, at the same
 // bar size, eases the view home from where it is. Picking the range that is
-// already selected, while at home, ends it: the free 300-candle view.
+// already selected, while at home, ends it: the free 300-candle view. -1
+// (the tray menu's "None", phase 47) ends the selected one from anywhere.
 static void SelectRange(AppContext* ctx, int r) {
-    if (r < 0 || r >= RANGE_COUNT) return;
-    if (ctx->rangeIdx == r && ctx->rangeWant > 0) {
+    if (r < -1 || r >= RANGE_COUNT) return;
+    if (r < 0 || (ctx->rangeIdx == r && ctx->rangeWant > 0)) {
         ctx->rangeIdx = -1;
         ResetView(ctx);
     } else {
@@ -6015,43 +6017,66 @@ static HMENU BuildSymbolMenu(void) {
     return h;
 }
 
+// The keys (phase 47): 1..7 pick the intervals in the panel, as the list
+// under the interval cell shows. In desktop mode the surface takes no keys,
+// and the menu shows none (see BuildTrayMenu).
 static HMENU BuildIntervalMenu(void) {
     HMENU h = CreatePopupMenu();
     if (!h) return NULL;
-    for (int i = 0; i < INTERVAL_COUNT; i++)
-        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_INTERVAL_FIRST + i), INTERVALS[i].label);
+    for (int i = 0; i < INTERVAL_COUNT; i++) {
+        wchar_t lbl[24];
+        if (g_desktopMode) swprintf_s(lbl, 24, L"%s", INTERVALS[i].label);
+        else               swprintf_s(lbl, 24, L"%s\t%d", INTERVALS[i].label, i + 1);
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_INTERVAL_FIRST + i), lbl);
+    }
     CheckMenuRadioItem(h, ID_TRAY_INTERVAL_FIRST, ID_TRAY_INTERVAL_FIRST + INTERVAL_COUNT - 1,
                        (UINT)(ID_TRAY_INTERVAL_FIRST + g_Ctx.ivIdx), MF_BYCOMMAND);
     return h;
 }
 
-// The ranges (phase 41). The checked one is the selected range; picking it
-// again ends it, like a second click on its pill.
+// The ranges (phase 41). The checked one is the selected range. Phase 47
+// adds "None", checked when no range is selected: up to phase 46 a range
+// was ended by picking its checked item again, like a second click on its
+// pill - which a radio group does not suggest. Picking the checked item now
+// does what a radio item does (see WM_COMMAND). Shift+1..8 in the panel.
 static HMENU BuildRangeMenu(void) {
     HMENU h = CreatePopupMenu();
     if (!h) return NULL;
-    for (int i = 0; i < RANGE_COUNT; i++)
-        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_PERIOD_FIRST + i), RANGES[i].label);
-    if (g_Ctx.rangeIdx >= 0)
-        CheckMenuRadioItem(h, ID_TRAY_PERIOD_FIRST, ID_TRAY_PERIOD_FIRST + RANGE_COUNT - 1,
-                           (UINT)(ID_TRAY_PERIOD_FIRST + g_Ctx.rangeIdx), MF_BYCOMMAND);
+    for (int i = 0; i < RANGE_COUNT; i++) {
+        wchar_t lbl[24];
+        if (g_desktopMode) swprintf_s(lbl, 24, L"%s", RANGES[i].label);
+        else               swprintf_s(lbl, 24, L"%s\tShift+%d", RANGES[i].label, i + 1);
+        AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_PERIOD_FIRST + i), lbl);
+    }
+    AppendMenuW(h, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(h, MF_STRING, (UINT_PTR)(ID_TRAY_PERIOD_FIRST + RANGE_COUNT), L"None");
+    CheckMenuRadioItem(h, ID_TRAY_PERIOD_FIRST, ID_TRAY_PERIOD_FIRST + RANGE_COUNT,
+                       (UINT)(ID_TRAY_PERIOD_FIRST + ((g_Ctx.rangeIdx >= 0) ? g_Ctx.rangeIdx : RANGE_COUNT)),
+                       MF_BYCOMMAND);
     return h;
 }
 
 // One of the settings menu's choices as a tray item (phase 45): the same
 // name and key as the gear menu's row, and the same check - SettingOn reads
-// the mode's choice, as the tray items always did.
+// the mode's choice, as the tray items always did. The key only in panel
+// mode (phase 47): the desktop surface takes no keys.
 static void AppendSettingItem(HMENU h, UINT id, int k) {
     wchar_t lbl[48];
-    swprintf_s(lbl, 48, L"%s\t%s", SET_LABEL[k], SET_KEY[k]);
+    if (g_desktopMode) swprintf_s(lbl, 48, L"%s", SET_LABEL[k]);
+    else               swprintf_s(lbl, 48, L"%s\t%s", SET_LABEL[k], SET_KEY[k]);
     AppendMenuW(h, MF_STRING | (SettingOn(&g_Ctx, k) ? MF_CHECKED : MF_UNCHECKED), id, lbl);
 }
 
 // The tray menu. A separate function so the check marks and content can be
 // tested without a tray icon.
 //
-//       Symbol            >   (o) BTC/USDT  ( ) ETH/USDT  ...
-//       Interval          >   (o) 1m  ( ) 5m  ...
+//       Show panel                   (bold, the default; not in desktop mode)
+//   ---------------------------
+//       Symbol       S    >   (o) BTC/USDT  ( ) ETH/USDT  ...
+//       Interval     B    >   (o) 1m  1   ( ) 5m  2  ...
+//       Range             >   (o) 1D  Shift+1  ...  ( ) None
+//       Volume ... Light theme   V M I T, checked
+//       Clear price alerts (n)
 //   ---------------------------
 //   [x] Desktop mode
 //       Default view      Ctrl+0     (grayed in desktop mode)
@@ -6066,15 +6091,29 @@ static void AppendSettingItem(HMENU h, UINT id, int k) {
 // when the panel is closed. It does get symbol and interval, though: the
 // overlay already lets it switch its own view, and SaveConfig skips
 // duplicates itself. The autostart check is read from the Run key every
-// time.
+// time. The keys after a tab are the panel's, and from phase 47 only panel
+// mode shows them: the desktop surface takes no keys. There is no "New
+// panel" item: Ctrl+N and [ + ] cascade from the panel's own place, which
+// the tray does not have when the panel has never been opened.
 static HMENU BuildTrayMenu(void) {
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return NULL;
+    // Phase 47: the panel as the bold default item, first - the Windows
+    // convention for a tray menu, and the item that says what the left click
+    // does. It shows the panel, never hides it (ShowPanel, as a second start
+    // does). Not in desktop mode, where the click does nothing either.
+    if (!g_desktopMode) {
+        AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, L"Show panel");
+        SetMenuDefaultItem(hMenu, ID_TRAY_OPEN, FALSE);
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    }
     {
         HMENU hSym = BuildSymbolMenu();
         HMENU hIv  = BuildIntervalMenu();
-        if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, L"Symbol");
-        if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  L"Interval");
+        // S and B open the same lists in the panel (phase 47); desktop mode
+        // shows no keys.
+        if (hSym) AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSym, g_desktopMode ? L"Symbol" : L"Symbol\tS");
+        if (hIv)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hIv,  g_desktopMode ? L"Interval" : L"Interval\tB");
         HMENU hRg = BuildRangeMenu();   // phase 41
         if (hRg)  AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRg,  L"Range");
         // The VOL toggle (phase 22; desktop mode has no toolbar), the MA
@@ -6105,7 +6144,7 @@ static HMENU BuildTrayMenu(void) {
                     ID_TRAY_DESKTOP, L"Desktop mode");
     }
     AppendMenuW(hMenu, MF_STRING | (g_desktopMode ? MF_GRAYED : MF_ENABLED),
-                ID_TRAY_RESET, L"Default view	Ctrl+0");
+                ID_TRAY_RESET, g_desktopMode ? L"Default view" : L"Default view\tCtrl+0");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     if (!g_isDuplicate) {
         AppendMenuW(hMenu, MF_STRING | (AutostartPresent() ? MF_CHECKED : MF_UNCHECKED),
@@ -6243,6 +6282,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 AlertsClear(&g_Ctx);
                 return 0;
             }
+            // The bold default item (phase 47). Not in desktop mode, where it
+            // is not in the menu: a posted message does not care about that.
+            if (LOWORD(wParam) == ID_TRAY_OPEN) {
+                if (!g_desktopMode) ShowPanel(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+                return 0;
+            }
             {
                 // Symbol and interval (phase 17). Range check first: a posted
                 // ID outside the tables is a silent no-op, not an index.
@@ -6256,8 +6301,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     ApplyConfigChoice(&g_Ctx, SYMBOL_COUNT + (id - ID_TRAY_INTERVAL_FIRST));
                     return 0;
                 }
-                if (id >= ID_TRAY_PERIOD_FIRST && id < ID_TRAY_PERIOD_FIRST + RANGE_COUNT) {
-                    SelectRange(&g_Ctx, id - ID_TRAY_PERIOD_FIRST);
+                // The ranges and "None" (phase 47) as a radio group: the
+                // checked item picked again changes nothing - up to phase 46
+                // it ended the range, as a second click on its pill does -
+                // and a range whose view has moved away goes home.
+                if (id >= ID_TRAY_PERIOD_FIRST && id <= ID_TRAY_PERIOD_FIRST + RANGE_COUNT) {
+                    int r = id - ID_TRAY_PERIOD_FIRST;
+                    if (r == RANGE_COUNT) r = -1;
+                    if (r == g_Ctx.rangeIdx && (r < 0 || g_Ctx.rangeWant > 0)) return 0;
+                    SelectRange(&g_Ctx, r);
                     return 0;
                 }
             }
