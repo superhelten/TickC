@@ -4192,6 +4192,16 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_SIZE:
             g_Ctx.wmValid = FALSE;   // the bitmap is built for the previous size
             InvalidateRect(hwnd, NULL, FALSE);
+            // Restored (phase 47): minimized, the client has no chart, so
+            // the clock skips the easing and dies - an ease cut off by the
+            // minimize stood frozen after the restore until the next fetch,
+            // and an offline counter stood still. The clock picks both up;
+            // with nothing left to move it dies on its first tick. Only for
+            // the published surface: CreateWindowExW sends WM_SIZE too, and a
+            // desktop surface that fails to attach is destroyed before it is
+            // published - its WM_NCDESTROY would not reset animRunning, and
+            // the next surface's clock would never start.
+            if (wParam != SIZE_MINIMIZED && hwnd == g_Ctx.hPopup) StartAnim(hwnd);
             return 0;
 
         case WM_MOUSEMOVE: {
@@ -4888,7 +4898,12 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // the same way. Before, only a fetch repainted it, so the
                 // number stood still for the whole backoff - "retrying in
                 // 12s" for twelve seconds - while no candle has come yet.
-                if (emptyFails > 0 && IsWindowVisible(hwnd)) {
+                // Not while minimized (phase 47): IsWindowVisible stays TRUE
+                // for a minimized window, and the clock ticked 60 times a
+                // second for a countdown nobody could see. WM_SIZE starts it
+                // again on restore.
+                BOOL onScreen = IsWindowVisible(hwnd) && !IsIconic(hwnd);
+                if (emptyFails > 0 && onScreen) {
                     int in_s = (retryTick > now) ? (int)((retryTick - now + 999) / 1000) : 0;
                     if (in_s != g_Ctx.emptySecsShown) {
                         g_Ctx.emptySecsShown = in_s;
@@ -4899,10 +4914,11 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
                 // IsWindowVisible is decisive: without it a disconnected
                 // line keeps the clock alive on a hidden panel, and we tick 60
-                // times a second without painting anything. TogglePopup starts
-                // it again when the panel is shown.
-                if (okTick != 0 && now - okTick > STALE_AFTER &&
-                    IsWindowVisible(hwnd)) {
+                // times a second without painting anything - and IsIconic
+                // for a minimized one (phase 47, onScreen above). TogglePopup
+                // starts it again when the panel is shown, WM_SIZE when it is
+                // restored.
+                if (okTick != 0 && now - okTick > STALE_AFTER && onScreen) {
                     int secs = (int)((now - okTick) / 1000);
                     if (secs != g_Ctx.staleSecsShown) {
                         g_Ctx.staleSecsShown = secs;
@@ -6127,8 +6143,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 // The clock must run while we are disconnected, otherwise
                 // the seconds counter in the subtitle freezes.
                 // New candles can move the Y target, and when disconnected
-                // the counter must run.
-                StartAnim(g_Ctx.hPopup);
+                // the counter must run. Not for a minimized panel (phase
+                // 47): nothing there eases, and WM_SIZE starts the clock
+                // when it is restored.
+                if (!IsIconic(g_Ctx.hPopup)) StartAnim(g_Ctx.hPopup);
                 InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
             }
             return 0;
