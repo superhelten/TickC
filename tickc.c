@@ -589,6 +589,20 @@ static volatile LONG g_probeDisplayChanges = 0;
 // 1 old key deleted, 2 autostart written under the new name, 3 old autostart
 // value deleted.
 static int      g_probeMigrate  = 0;
+// Phase 46, read on the main window: 117 what the last tray click did (0 none
+// yet, 1 hid a panel in front, 2 hid a panel that had just lost activation,
+// 3 raised a panel that was open behind others, 4 showed a hidden or new
+// one), 118 hand-overs from a second start, 119 the tray icon's state (0
+// connecting, 1 a live price, 2 a stale price, 3 offline with no price yet),
+// 120 trading-day fetches that succeeded, 121 the WinHTTP access type the
+// session was opened with. 78 on the panel: the status text of an empty
+// chart (0 none, 1 loading, 2 no connection).
+static int      g_probeTrayDecision = 0;
+static volatile LONG g_probeHandovers = 0;
+static int      g_probeIconState    = 0;
+static volatile LONG g_probeDayFetches = 0;
+static DWORD    g_probeAccessType   = 0;
+static int      g_probeEmptyMsg     = 0;
 #endif
 
 
@@ -1824,6 +1838,9 @@ static void WorkerFetchDay(AppContext* ctx) {
         ctx->dayValid = TRUE;
     }
     LeaveCriticalSection(&ctx->lock);
+#ifdef TICKER_PROBE
+    InterlockedIncrement(&g_probeDayFetches);
+#endif
 }
 
 static BOOL WorkerFetchPrice(AppContext* ctx) {
@@ -1978,6 +1995,9 @@ static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
         ctx->nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         wcscpy_s(ctx->nid.szTip, 128, ctx->fullPriceStr);
         Shell_NotifyIconW(NIM_MODIFY, &ctx->nid);
+#ifdef TICKER_PROBE
+        g_probeIconState = stale ? 2 : 1;
+#endif
     }
 }
 
@@ -3072,6 +3092,9 @@ static void DrawEmptyState(AppContext* ctx, HDC hdc, int W, int H, ULONGLONG now
         } else {
             wcscpy_s(msg, 96, L"Loading data from Binance...");
         }
+#ifdef TICKER_PROBE
+        g_probeEmptyMsg = (ctx->netFailures > 0) ? 2 : 1;
+#endif
         DrawTextW(hdc, msg, -1, &rcAll, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
         return;
     }
@@ -3095,6 +3118,9 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
 
     int n = ctx->candleCount;
     if (n <= 0) { DrawEmptyState(ctx, hdc, W, H, nowTick); return; }
+#ifdef TICKER_PROBE
+    g_probeEmptyMsg = 0;
+#endif
 
     int vs, vc;
     GetView(&ctx->ch, n, &vs, &vc);
@@ -4391,6 +4417,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // 74-77 (phase 43): where the volume stands - 0 off, 1 a pane
                 // of its own, 2 behind the candles - then the pane's top and
                 // bottom and the price pane's bottom, in client pixels.
+                // 78 (phase 46): the empty chart's status text, see
+                // g_probeEmptyMsg.
+                case 78: r = g_probeEmptyMsg; break;
                 case 74: case 75: case 76: case 77: {
                     RECT rcV;
                     GetClientRect(hwnd, &rcV);
@@ -5199,12 +5228,21 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ctx->tbHot       = -1;
             SaveWindowPlacement(ctx->hPopup);
             ShowWindow(ctx->hPopup, SW_HIDE);
+#ifdef TICKER_PROBE
+            g_probeTrayDecision = 1;
+#endif
             return;
         }
         if (IsIconic(ctx->hPopup)) ShowWindow(ctx->hPopup, SW_RESTORE);
         ForceForeground(ctx->hPopup);
+#ifdef TICKER_PROBE
+        g_probeTrayDecision = 3;
+#endif
         return;
     }
+#ifdef TICKER_PROBE
+    g_probeTrayDecision = 4;
+#endif
 
     BOOL created = FALSE;
     if (!ctx->hPopup) {
@@ -5519,6 +5557,20 @@ static void DestroyPanelSurface(void) {
     DestroyWindow(hp);
 }
 
+// Takes the icon out of the notification area. The test build also counts
+// the removals in the registry (phase 46): the process is gone by the time a
+// probe could ask, and the hidden test desktop has no notification area to
+// look at.
+static void RemoveTrayIcon(void) {
+    Shell_NotifyIconW(NIM_DELETE, &g_Ctx.nid);
+#ifdef TICKER_PROBE
+    static DWORD removed = 0;
+    removed++;
+    RegSetKeyValueW(HKEY_CURRENT_USER, REG_PATH, L"ProbeTrayRemoved", REG_DWORD,
+                    &removed, sizeof(removed));
+#endif
+}
+
 // ---------------------------------------------------------------------------
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -5602,7 +5654,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 return 0;
             }
             if (LOWORD(wParam) == ID_TRAY_EXIT) {
-                Shell_NotifyIconW(NIM_DELETE, &g_Ctx.nid);
+                RemoveTrayIcon();
                 // Gone before WinMain waits for the worker thread (phase 44).
                 DestroyPanelSurface();
                 PostQuitMessage(0);
@@ -5729,6 +5781,23 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // 116 (phase 44): the tray icon's flags as the next NIM_ADD after
             // an Explorer restart would send them; NIF_MESSAGE (1) must be set.
             if (wParam == 116) return (LRESULT)g_Ctx.nid.uFlags;
+            // 117-121 (phase 46): see g_probeTrayDecision. 122 is the delay
+            // before the next try at the desktop surface after lParam failed
+            // tries; 123 the network failures in a row, readable with the
+            // panel closed (field 9 lives on the panel).
+            if (wParam == 117) return (LRESULT)g_probeTrayDecision;
+            if (wParam == 118) return (LRESULT)g_probeHandovers;
+            if (wParam == 119) return (LRESULT)g_probeIconState;
+            if (wParam == 120) return (LRESULT)g_probeDayFetches;
+            if (wParam == 121) return (LRESULT)g_probeAccessType;
+            if (wParam == 122) return (LRESULT)EMBED_RETRY_MS;
+            if (wParam == 123) {
+                LRESULT nf;
+                EnterCriticalSection(&g_Ctx.lock);
+                nf = g_Ctx.netFailures;
+                LeaveCriticalSection(&g_Ctx.lock);
+                return nf;
+            }
             return 0;
 #endif
 
@@ -5850,6 +5919,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 
     if (!g_Ctx.hSession) return 1;
+#ifdef TICKER_PROBE
+    g_probeAccessType = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+#endif
 
     // Without this the default receive timeout is 30 seconds. Then a hanging
     // connection would hold the worker thread far beyond the wait at exit
