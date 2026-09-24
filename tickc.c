@@ -24,6 +24,9 @@
 
 #define WM_TRAYICON      (WM_USER + 1)
 #define WM_APP_DATA      (WM_APP + 1)   // the worker thread has new data
+// A second start hands over to the running main instance (phase 46): posted
+// to its main window, found by class and MainInstanceNames' title.
+#define WM_APP_SHOW      (WM_APP + 3)
 #ifdef TICKER_PROBE
 #define WM_APP_PROBE     (WM_APP + 2)   // test build only: read internal state (phase 18)
 #endif
@@ -75,6 +78,11 @@
 // (measured). With 1000 ms the desktop stood without a chart for 1.1 s. The
 // timer only runs while the surface is missing.
 #define EMBED_RETRY_MS   250
+#define EMBED_FAST_TRIES 8        // phase 46: then the delay doubles (EmbedRetryMs)
+#define EMBED_RETRY_MAX  10000
+// Phase 46: a tray click this soon after the panel lost activation counts as
+// a click on a panel that was in front. See TogglePopup.
+#define TRAY_CLICK_GRACE_MS 500
 #define ANIM_INTERVAL    16     // ~60 fps
 // Time-based interpolation, not a fixed step per tick: SetTimer(16) in
 // practice fires every ~15.6 ms and is coalesced under load. A fixed step
@@ -305,6 +313,14 @@ typedef struct {
     BOOL      dayValid;
     double    dayOpen, dayHigh, dayLow, dayVol;
     long long lastUpdMs;
+    // Phase 46: the UTC day (days since 1970) the statistics were fetched
+    // on - held from another day they are yesterday's and are neither drawn
+    // nor kept - and a request from the UI to fetch them on the next cycle,
+    // set when the panel is shown. It was every fifth cycle only, and the
+    // cycle count stands still while the panel is hidden: reopened, the quote
+    // line showed the day as it was when it was hidden, for up to 15 s.
+    long long dayUtc;
+    BOOL      dayRefresh;
 
     Candle candles[MAX_CANDLES];
     int candleCount;
@@ -330,6 +346,7 @@ typedef struct {
     ULONGLONG lastAnimTick;
     BOOL   animRunning;
     int    staleSecsShown;   // last painted seconds value, prevents 60 fps on a counter
+    int    emptySecsShown;   // the same for the empty chart's retry countdown (phase 46)
 
     // --- Overlay for symbol/interval selection ---
     // overlayOpen is the LOGICAL state and drives hit detection.
@@ -376,6 +393,12 @@ typedef struct {
     // dropped; hConnect is owned by the worker thread, so it does it itself
     // at the start of the next cycle. In the lock domain.
     BOOL      dropConn;
+    // When the panel last lost activation (phase 46), 0 = it has not since
+    // it was shown. UI-owned. See TogglePopup.
+    ULONGLONG popupDeactTick;
+    // The tray icon shows the offline dots (phase 46, ShowOfflineIcon).
+    // UI-owned.
+    BOOL      iconOffline;
 
     // --- Cached GDI objects ---
     // Fixed colors are created once instead of 16 times per repaint - by
@@ -503,6 +526,15 @@ static BOOL g_isDuplicate = FALSE;
 // painting as the panel, but no frame, no buttons, no input and no geometry
 // in the registry.
 static BOOL g_desktopMode = FALSE;
+// Failed tries at the desktop surface in a row (phase 46, EmbedRetryMs).
+// UI thread only.
+static int g_embedFails = 0;
+// One main instance per sign-in session (phase 46). The mutex says one runs;
+// its hidden main window carries g_mainTitle, so a second start can find it
+// among the duplicates' main windows, which share the class (pitfall 10).
+// Released when the message loop ends, not at exit - see WinMain.
+static HANDLE  g_mainMutex = NULL;
+static wchar_t g_mainTitle[48] = L"TickC";
 
 // The panel's lengths at its dpi (phase 37). Every fixed length in the
 // header, the buttons, the toolbar and the overlay is given at 96 dpi and
@@ -603,6 +635,8 @@ static int      g_probeIconState    = 0;
 static volatile LONG g_probeDayFetches = 0;
 static DWORD    g_probeAccessType   = 0;
 static int      g_probeEmptyMsg     = 0;
+// 79 on the panel: the seconds that status text counts down (-1 = none).
+static int      g_probeEmptySecs    = -1;
 #endif
 
 
@@ -612,6 +646,12 @@ static long long NowUnixMs(void) {
     GetSystemTimeAsFileTime(&ft);
     ULONGLONG t = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     return (long long)((t - 116444736000000000ULL) / 10000ULL);
+}
+
+// The UTC day, as days since 1970 (phase 46): the day Binance's trading-day
+// statistics and today's session (phase 27) are counted in.
+static long long UtcDayNow(void) {
+    return NowUnixMs() / 86400000LL;
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +711,20 @@ static DWORD NetBackoffMs(int failures, ULONGLONG tickSeed) {
     // assumed.
     if (out > NET_RETRY_MAX) out = NET_RETRY_MAX;
     return out;
+}
+
+// Desktop mode without a surface (phase 46): the delay before the next try
+// after `fails` failed tries in a row. The first EMBED_FAST_TRIES keep
+// EMBED_RETRY_MS, which is what an Explorer restart needs (the new WorkerW
+// is there after ~0.6 s, measured in phase 9); then it doubles to
+// EMBED_RETRY_MAX. It was 250 ms forever: without Explorer the UI thread
+// looked for Progman four times a second for as long as the process ran,
+// and a hung Progman held it up to 1 s per try. TaskbarCreated - Explorer
+// is back - starts the count over.
+static DWORD EmbedRetryMs(int fails) {
+    DWORD ms = EMBED_RETRY_MS;
+    for (int i = EMBED_FAST_TRIES; i < fails && ms < EMBED_RETRY_MAX; ++i) ms *= 2;
+    return (ms > EMBED_RETRY_MAX) ? EMBED_RETRY_MAX : ms;
 }
 
 // Price alerts (phase 23). Has an alert fired? signedLevel carries the side in
@@ -853,14 +907,39 @@ static void SaveDesktopMode(BOOL on) {
 #define AUTOSTART_VALUE_OLD L"Ticker"
 #endif
 
-// The path in quotation marks, "C:\Folder with spaces\TickC.exe". FALSE when
-// the path does not fit in MAX_PATH - a truncated path must never end up in
-// the registry.
-static BOOL AutostartCommand(wchar_t* out, size_t cch) {
+// The path in quotation marks, "C:\Folder with spaces\TickC.exe", and from
+// phase 46 the flag that says the start is the sign-in's: a start from
+// Explorer shows the panel, one at sign-in stays in the notification area.
+// `bare` gives the value as phases 13-45 wrote it, without the flag. FALSE
+// when the path does not fit in MAX_PATH - a truncated path must never end up
+// in the registry. The buffers are AUTOSTART_CCH: the path, two quotes and
+// the flag.
+#define AUTOSTART_ARG  L"--autostart"
+#define AUTOSTART_CCH  (MAX_PATH + 16)
+static BOOL AutostartCommand(wchar_t* out, size_t cch, BOOL bare) {
     wchar_t exe[MAX_PATH];
     DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH);
     if (len == 0 || len >= MAX_PATH) return FALSE;
-    return swprintf_s(out, cch, L"\"%s\"", exe) > 0;
+    return swprintf_s(out, cch, bare ? L"\"%s\"" : L"\"%s\" " AUTOSTART_ARG, exe) > 0;
+}
+
+// Is the Run value one of ours for this exe, with or without the flag?
+// `flagged` says which. A value written by phase 45 or earlier is the bare
+// path, and it must still count as "this exe" - otherwise the first click on
+// a checked "Start at sign-in" after the update would rewrite the value
+// instead of removing it.
+static BOOL AutostartIsOurs(BOOL* flagged) {
+    wchar_t have[AUTOSTART_CCH], want[AUTOSTART_CCH], bare[AUTOSTART_CCH];
+    DWORD cb = sizeof(have);
+    *flagged = FALSE;
+    if (!AutostartCommand(want, AUTOSTART_CCH, FALSE) ||
+        !AutostartCommand(bare, AUTOSTART_CCH, TRUE)) return FALSE;
+    // Wrong type, or too long for the buffer (ERROR_MORE_DATA), cannot
+    // possibly be our path.
+    if (RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
+                     RRF_RT_REG_SZ, NULL, have, &cb) != ERROR_SUCCESS) return FALSE;
+    if (_wcsicmp(have, want) == 0) { *flagged = TRUE; return TRUE; }
+    return _wcsicmp(have, bare) == 0;
 }
 
 // The check mark in the tray menu: does the value exist, whatever its type and
@@ -872,22 +951,18 @@ static BOOL AutostartPresent(void) {
 }
 
 // Click on "Start at sign-in":
-//   value == current path -> delete
-//   no value              -> write current path
-//   anything else         -> write current path (the exe has moved)
+//   value == current path -> delete (with or without --autostart, phase 46)
+//   no value              -> write current path and --autostart
+//   anything else         -> write current path and --autostart (the exe has moved)
 // The last branch is why the check mark means "the value exists", not "the
 // value is correct": a click on a checked but stale entry should fix the
 // path, not turn autostart off.
 static void ToggleAutostart(void) {
     if (g_isDuplicate) return;
-    wchar_t want[MAX_PATH + 2], have[MAX_PATH + 2];
-    if (!AutostartCommand(want, MAX_PATH + 2)) return;
-    // Wrong type, or too long for the buffer (ERROR_MORE_DATA), cannot
-    // possibly be our path and falls under "anything else".
-    DWORD cb = sizeof(have);
-    BOOL same = RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
-                             RRF_RT_REG_SZ, NULL, have, &cb) == ERROR_SUCCESS &&
-                _wcsicmp(have, want) == 0;
+    wchar_t want[AUTOSTART_CCH];
+    if (!AutostartCommand(want, AUTOSTART_CCH, FALSE)) return;
+    BOOL flagged;
+    BOOL same = AutostartIsOurs(&flagged);   // phase 46: with or without the flag
 
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, AUTOSTART_KEY, 0, NULL, 0,
@@ -901,6 +976,20 @@ static void ToggleAutostart(void) {
                        (DWORD)((wcslen(want) + 1) * sizeof(wchar_t)));
     }
     RegCloseKey(k);
+}
+
+// Phase 46: a Run value in the bare form (phases 13-45) gets the flag, so the
+// next sign-in starts quietly as before - without it, that start would now
+// open the panel. Runs at every start of a main instance, and only writes
+// when the value is ours and bare; a value pointing elsewhere is left to
+// ToggleAutostart, as before.
+static void UpgradeAutostart(void) {
+    BOOL flagged;
+    wchar_t want[AUTOSTART_CCH];
+    if (!AutostartIsOurs(&flagged) || flagged) return;
+    if (!AutostartCommand(want, AUTOSTART_CCH, FALSE)) return;
+    RegSetKeyValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE, REG_SZ, want,
+                    (DWORD)((wcslen(want) + 1) * sizeof(wchar_t)));
 }
 
 // The rename Ticker -> TickC (phase 30). Runs at every startup, before
@@ -949,8 +1038,8 @@ static void MigrateLegacyNames(void) {
     if (RegGetValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE_OLD,
                      RRF_RT_ANY, NULL, NULL, NULL) == ERROR_SUCCESS) {
         BOOL haveNew = AutostartPresent();
-        wchar_t want[MAX_PATH + 2];
-        if (!haveNew && AutostartCommand(want, MAX_PATH + 2)) {
+        wchar_t want[AUTOSTART_CCH];
+        if (!haveNew && AutostartCommand(want, AUTOSTART_CCH, FALSE)) {
             haveNew = RegSetKeyValueW(HKEY_CURRENT_USER, AUTOSTART_KEY, AUTOSTART_VALUE,
                                       REG_SZ, want,
                                       (DWORD)((wcslen(want) + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
@@ -1836,6 +1925,8 @@ static void WorkerFetchDay(AppContext* ctx) {
     if (ctx->configGen == gen) {
         ctx->dayOpen = o; ctx->dayHigh = h; ctx->dayLow = l; ctx->dayVol = v;
         ctx->dayValid = TRUE;
+        ctx->dayUtc   = UtcDayNow();   // phase 46
+        ctx->dayRefresh = FALSE;       // done - a failure leaves it for the next cycle
     }
     LeaveCriticalSection(&ctx->lock);
 #ifdef TICKER_PROBE
@@ -1873,13 +1964,22 @@ static BOOL WorkerFetchPrice(AppContext* ctx) {
 static DWORD WINAPI NetworkThread(LPVOID param) {
     AppContext* ctx = (AppContext*)param;
     int dayCycle = 0;   // phase 42: cycles since the last trading-day fetch
+    // The history's own backoff (phase 46): failures in a row, when the next
+    // try may go, and the config they were counted for - another symbol or
+    // interval starts clean. The thread's alone, so no lock.
+    int       histFails = 0;
+    ULONGLONG histNext  = 0;
+    unsigned  histGen   = 0;
     HANDLE waits[2] = { ctx->hStopEvent, ctx->hWakeEvent };
 
     for (;;) {
         EnterCriticalSection(&ctx->lock);
         HWND hp   = ctx->hPopup;
         BOOL hist = ctx->histPending;
-        BOOL dayOk = ctx->dayValid;   // phase 42
+        unsigned gen = ctx->configGen;
+        // Phase 42; phase 46: statistics from another UTC day, or a panel
+        // just shown, count as none - fetched in this cycle.
+        BOOL dayOk = ctx->dayValid && ctx->dayUtc == UtcDayNow() && !ctx->dayRefresh;
         BOOL drop = ctx->dropConn;
         ctx->dropConn = FALSE;
         LeaveCriticalSection(&ctx->lock);
@@ -1901,10 +2001,28 @@ static DWORD WINAPI NetworkThread(LPVOID param) {
         // If the UI wants older candles (phase 18), they are fetched first,
         // and the candles right after - two calls in that cycle, so the live
         // candle does not wait.
+        //
+        // Phase 46: the candles are fetched whatever the history did, and
+        // only they decide the line's health. A failed history used to skip
+        // them and count as a network failure, so a history path that kept
+        // failing froze the live chart and showed "offline" while the live
+        // fetches would have worked. WorkerFetchHistory releases histPending
+        // on a failure, and the UI asks again; the retry waits out a backoff
+        // of its own (NetBackoffMs), so a lasting failure is not asked every
+        // three seconds.
         BOOL ok;
         if (hp && IsWindowVisible(hp)) {
-            ok = hist ? WorkerFetchHistory(ctx) : TRUE;
-            if (ok) ok = WorkerFetchKlines(ctx);
+            if (gen != histGen) { histGen = gen; histFails = 0; histNext = 0; }
+            if (hist && GetTickCount64() >= histNext) {
+                if (WorkerFetchHistory(ctx)) {
+                    histFails = 0;
+                } else {
+                    if (histFails < 32) histFails++;
+                    ULONGLONG t = GetTickCount64();
+                    histNext = t + NetBackoffMs(histFails, t);
+                }
+            }
+            ok = WorkerFetchKlines(ctx);
             // The day's statistics (phase 42): every fifth cycle (15 s) - the
             // day's open does not move, and its high, low and volume are
             // followed live from the last price in between - and at once
@@ -1998,7 +2116,30 @@ static void UpdateIcon(AppContext* ctx, double price, BOOL stale) {
 #ifdef TICKER_PROBE
         g_probeIconState = stale ? 2 : 1;
 #endif
+        ctx->iconOffline = FALSE;
     }
+}
+
+// No price yet and the fetches fail (phase 46): no network at sign-in, a
+// proxy, or a geo-block. UpdateIcon returns on a price of 0, and "stale"
+// needs a first success, so the icon stood at "..." and the tooltip at
+// "Connecting to Binance..." for good, with no hint that anything had
+// failed. The dots in the stale price's dimmed green - the icon's one word
+// for "not live" - and the tooltip says what the panel's empty chart says.
+// Drawn once per outage, not per cycle: the icon does not change in between.
+static void ShowOfflineIcon(AppContext* ctx) {
+    if (ctx->iconOffline) return;
+    HICON hNewIcon = RenderMicroFontIcon("...", 0xFF2F6B45);
+    if (!hNewIcon) return;
+    if (ctx->nid.hIcon) DestroyIcon(ctx->nid.hIcon);
+    ctx->nid.hIcon  = hNewIcon;
+    ctx->nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;   // see UpdateIcon
+    wcscpy_s(ctx->nid.szTip, 128, L"TickC: no connection to Binance - retrying");
+    Shell_NotifyIconW(NIM_MODIFY, &ctx->nid);
+    ctx->iconOffline = TRUE;
+#ifdef TICKER_PROBE
+    g_probeIconState = 3;
+#endif
 }
 
 
@@ -2954,7 +3095,10 @@ static void DrawHeader(AppContext* ctx, HDC hdc, int W, BOOL stale, int staleSec
     have[QF_LAST] = TRUE;
     swprintf_s(val[QF_LAST], 32, L"%.2f", last);
     clr[QF_LAST] = ctx->sty.clr.text;
-    if (ctx->dayValid && ctx->dayOpen > 0.0) {
+    // Only the statistics of the UTC day it is now (phase 46): just after
+    // midnight UTC the held ones are yesterday's until the next cycle
+    // fetches today's, and yesterday's open is not today's change.
+    if (ctx->dayValid && ctx->dayOpen > 0.0 && ctx->dayUtc == UtcDayNow()) {
         // The day's open is the reference, as Bloomberg's change is the
         // day's; high and low follow the live price between two fetches.
         double chg = last - ctx->dayOpen;
@@ -3085,15 +3229,17 @@ static void DrawEmptyState(AppContext* ctx, HDC hdc, int W, int H, ULONGLONG now
         // Without a connection it used to say "Loading data from Binance..."
         // forever. The message lied about the state - now it says what is
         // actually happening, and when we retry.
+        int in_s = -1;
         if (ctx->netFailures > 0) {
             ULONGLONG nx = ctx->nextRetryTick;
-            int in_s = (nx > nowTick) ? (int)((nx - nowTick + 999) / 1000) : 0;
+            in_s = (nx > nowTick) ? (int)((nx - nowTick + 999) / 1000) : 0;
             swprintf_s(msg, 96, L"No connection - retrying in %ds", in_s);
         } else {
             wcscpy_s(msg, 96, L"Loading data from Binance...");
         }
 #ifdef TICKER_PROBE
         g_probeEmptyMsg = (ctx->netFailures > 0) ? 2 : 1;
+        g_probeEmptySecs = in_s;
 #endif
         DrawTextW(hdc, msg, -1, &rcAll, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
         return;
@@ -3120,6 +3266,7 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
     if (n <= 0) { DrawEmptyState(ctx, hdc, W, H, nowTick); return; }
 #ifdef TICKER_PROBE
     g_probeEmptyMsg = 0;
+    g_probeEmptySecs = -1;
 #endif
 
     int vs, vc;
@@ -3789,6 +3936,13 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         case WM_NCACTIVATE:
             return DefWindowProcW(hwnd, msg, wParam, -1);
 
+        // When the panel lost activation (phase 46): a tray click that
+        // follows within TRAY_CLICK_GRACE_MS found it in front - see
+        // TogglePopup. DefWindowProc still does the focus.
+        case WM_ACTIVATE:
+            g_Ctx.popupDeactTick = (LOWORD(wParam) == WA_INACTIVE) ? GetTickCount64() : 0;
+            break;
+
         // There is no NC surface to paint. No measured path painted anything
         // here after the fix above (focus change, WM_SETTEXT, resize), so
         // this is a guard, not the fix.
@@ -4420,6 +4574,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // 78 (phase 46): the empty chart's status text, see
                 // g_probeEmptyMsg.
                 case 78: r = g_probeEmptyMsg; break;
+                case 79: r = g_probeEmptySecs; break;
                 case 74: case 75: case 76: case 77: {
                     RECT rcV;
                     GetClientRect(hwnd, &rcV);
@@ -4591,10 +4746,26 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // The stale counter. The clock must run while we are
                 // disconnected, but the text only changes once a second - so
                 // we repaint only when the digit actually changes.
-                ULONGLONG okTick;
+                ULONGLONG okTick, retryTick;
+                int emptyFails;
                 EnterCriticalSection(&g_Ctx.lock);
                 okTick = g_Ctx.lastOkTick;
+                retryTick = g_Ctx.nextRetryTick;
+                emptyFails = (g_Ctx.candleCount == 0) ? g_Ctx.netFailures : 0;
                 LeaveCriticalSection(&g_Ctx.lock);
+
+                // The empty chart's "retrying in Ns" (phase 46) counts down
+                // the same way. Before, only a fetch repainted it, so the
+                // number stood still for the whole backoff - "retrying in
+                // 12s" for twelve seconds - while no candle has come yet.
+                if (emptyFails > 0 && IsWindowVisible(hwnd)) {
+                    int in_s = (retryTick > now) ? (int)((retryTick - now + 999) / 1000) : 0;
+                    if (in_s != g_Ctx.emptySecsShown) {
+                        g_Ctx.emptySecsShown = in_s;
+                        redraw = TRUE;
+                    }
+                    if (in_s > 0) settled = FALSE;
+                }
 
                 // IsWindowVisible is decisive: without it a disconnected
                 // line keeps the clock alive on a hidden panel, and we tick 60
@@ -5077,11 +5248,14 @@ static HWND FindDesktopWorkerW(void) {
     HWND progman = FindWindowW(L"Progman", NULL);
     if (!progman) return NULL;
 
+    // Phase 46: a Progman that did not answer the first is not asked the
+    // second - that halves what a hung Explorer can hold the UI thread for.
     DWORD_PTR res;
-    SendMessageTimeoutW(progman, PROGMAN_SPAWN_WORKERW, 0xD, 0x1,
-                        SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, &res);
-    SendMessageTimeoutW(progman, PROGMAN_SPAWN_WORKERW, 0, 0,
-                        SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, &res);
+    if (SendMessageTimeoutW(progman, PROGMAN_SPAWN_WORKERW, 0xD, 0x1,
+                            SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, &res)) {
+        SendMessageTimeoutW(progman, PROGMAN_SPAWN_WORKERW, 0, 0,
+                            SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, &res);
+    }
 
     HWND ww = FindWindowExW(progman, NULL, L"WorkerW", NULL);
     if (ww) return ww;
@@ -5217,9 +5391,22 @@ static void ApplyPanelStyle(AppContext* ctx, int dpi) {
 // Tray click. With a normal window the expected behavior is: if it is in
 // front and active, hide it; otherwise show it and give it focus. A
 // minimized window is restored.
+//
+// "In front" is the foreground window OR a panel that lost activation less
+// than TRAY_CLICK_GRACE_MS ago (phase 46). A real click on the icon makes
+// the taskbar the foreground window on the button's way DOWN, and the
+// callback comes on the way up: by then the panel is never the foreground,
+// so the test alone showed it again instead of hiding it. The posted clicks
+// in the tests never moved the foreground (pitfall 6), which hid it. The
+// grace is short on purpose: the price of a wrong guess - the user left the
+// panel and clicked the icon within half a second to bring it back - is a
+// hidden panel the next click shows, never one that cannot be reached.
 static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
-        if (!IsIconic(ctx->hPopup) && GetForegroundWindow() == ctx->hPopup) {
+        BOOL front   = (GetForegroundWindow() == ctx->hPopup);
+        BOOL justLeft = !front && ctx->popupDeactTick != 0 &&
+                        GetTickCount64() - ctx->popupDeactTick <= TRAY_CLICK_GRACE_MS;
+        if (!IsIconic(ctx->hPopup) && (front || justLeft)) {
             ctx->ch.hoverIdx = -1;
             ctx->overlayOpen = FALSE;
             ctx->overlayF    = 0.0;
@@ -5228,8 +5415,9 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ctx->tbHot       = -1;
             SaveWindowPlacement(ctx->hPopup);
             ShowWindow(ctx->hPopup, SW_HIDE);
+            ctx->popupDeactTick = 0;   // SW_HIDE deactivates; that is not a click
 #ifdef TICKER_PROBE
-            g_probeTrayDecision = 1;
+            g_probeTrayDecision = front ? 1 : 2;
 #endif
             return;
         }
@@ -5294,11 +5482,13 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             if (!attached) {
                 // No WorkerW (Explorer is starting, or not running). hPopup
                 // is not set, so WM_NCDESTROY leaves the timer alone - it is
-                // set here.
+                // set here, later for each failure in a row (phase 46).
                 DestroyWindow(hp);
-                SetTimer(ctx->hWnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
+                if (g_embedFails < INT_MAX) g_embedFails++;
+                SetTimer(ctx->hWnd, TIMER_EMBED_ID, EmbedRetryMs(g_embedFails), NULL);
                 return;
             }
+            g_embedFails = 0;
         } else {
             SquareCorners(hp);
         }
@@ -5339,6 +5529,12 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         ShowWindow(ctx->hPopup, SW_SHOW);
         ForceForeground(ctx->hPopup);
     }
+    ctx->popupDeactTick = 0;   // phase 46: shown, so not "just left"
+    // The day's statistics with the candles, not up to five cycles later
+    // (phase 46, see dayRefresh).
+    EnterCriticalSection(&ctx->lock);
+    ctx->dayRefresh = TRUE;
+    LeaveCriticalSection(&ctx->lock);
     SetEvent(ctx->hWakeEvent);   // fetch candles now, not in up to 3 seconds
 
     // If the line is down as the panel opens, the clock must start here.
@@ -5354,6 +5550,19 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     }
 
     InvalidateRect(ctx->hPopup, NULL, FALSE);
+}
+
+// A second start of TickC (phase 46): the panel comes forward, whatever it
+// was - hidden, minimized, behind other windows or already in front. Not
+// TogglePopup, which hides a panel that is in front, or one that has just
+// lost activation to the Explorer window the start came from.
+static void ShowPanel(AppContext* ctx, HINSTANCE hInst) {
+    if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
+        if (IsIconic(ctx->hPopup)) ShowWindow(ctx->hPopup, SW_RESTORE);
+        ForceForeground(ctx->hPopup);
+        return;
+    }
+    TogglePopup(ctx, hInst);
 }
 
 // Switches between the panel and the desktop surface while the process runs
@@ -5378,6 +5587,7 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     // The timer tries to build a missing desktop surface. It must not fire
     // after we have gone back to the panel.
     KillTimer(hWnd, TIMER_EMBED_ID);
+    g_embedFails = 0;   // phase 46: a new mode starts with fast tries
 
     if (ctx->hPopup) {
         HWND hp = ctx->hPopup;
@@ -5571,6 +5781,24 @@ static void RemoveTrayIcon(void) {
 #endif
 }
 
+// A second start while the process draws on the desktop (phase 46). The
+// surface is already on screen and takes no input, and the start must not
+// undo the user's choice of mode, so the answer is a word from the tray
+// icon about where the controls are. No sound: nothing is wrong. nid is
+// copied, as in FireAlert.
+static void ShowRunningNote(AppContext* ctx) {
+#ifdef TICKER_PROBE
+    if (g_probeMute) return;
+#endif
+    NOTIFYICONDATAW n = ctx->nid;
+    n.uFlags      = NIF_INFO;
+    n.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
+    wcscpy_s(n.szInfoTitle, 64, L"TickC is already running");
+    wcscpy_s(n.szInfo, 256, L"It is drawing the chart on the desktop. Right-click this icon "
+                            L"for the menu; turn off Desktop mode there for the panel.");
+    Shell_NotifyIconW(NIM_MODIFY, &n);
+}
+
 // ---------------------------------------------------------------------------
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -5588,10 +5816,31 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 POINT pt;
                 GetCursorPos(&pt);
                 SetForegroundWindow(hwnd);
-                TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd, NULL);
+                // Phase 46: TPM_RIGHTBUTTON lets the right button pick an
+                // item, as in every other tray menu, and the WM_NULL after
+                // is the documented follow-up (TrackPopupMenu's remarks):
+                // without a message to our window after the menu, the next
+                // one can close the moment it opens.
+                TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+                               pt.x, pt.y, 0, hwnd, NULL);
+                PostMessageW(hwnd, WM_NULL, 0, 0);
                 DestroyMenu(hMenu);
             }
             break;
+
+        // A second start of TickC has handed over to us (phase 46; see
+        // HandOverToMainInstance). Posted, so it arrives in the message loop,
+        // after the lock and the thread exist; the hWakeEvent check is the
+        // same guard as WM_POWERBROADCAST's all the same. A duplicate's main
+        // window has another title and is never sent it.
+        case WM_APP_SHOW:
+#ifdef TICKER_PROBE
+            InterlockedIncrement(&g_probeHandovers);
+#endif
+            if (g_isDuplicate || !g_Ctx.hWakeEvent) return 0;
+            if (g_desktopMode) ShowRunningNote(&g_Ctx);
+            else ShowPanel(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+            return 0;
 
         case WM_COMMAND:
             if (LOWORD(wParam) == ID_TRAY_DESKTOP) {
@@ -5666,9 +5915,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_APP_DATA: {
             double price;
             ULONGLONG okTick;
+            int failures;
             EnterCriticalSection(&g_Ctx.lock);
             price  = g_Ctx.lastPrice;
             okTick = g_Ctx.lastOkTick;
+            failures = g_Ctx.netFailures;
             LeaveCriticalSection(&g_Ctx.lock);
 #ifdef TICKER_PROBE
             // Injected price (phase 23): wParam 1 carries the price x 100 in
@@ -5693,6 +5944,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!stale) g_Ctx.staleSecsShown = 0;
 
             UpdateIcon(&g_Ctx, price, stale);
+            // No price to show and the last fetch failed (phase 46): from the
+            // first failure, as the panel's empty chart says "No connection".
+            if (price <= 0.0 && failures > 0) ShowOfflineIcon(&g_Ctx);
             // The price alerts (phase 23) are checked HERE, not in the thread
             // and not in MergeCandles: this is the one place every new price
             // passes on the UI thread, with the panel open (the candles'
@@ -5790,13 +6044,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (wParam == 119) return (LRESULT)g_probeIconState;
             if (wParam == 120) return (LRESULT)g_probeDayFetches;
             if (wParam == 121) return (LRESULT)g_probeAccessType;
-            if (wParam == 122) return (LRESULT)EMBED_RETRY_MS;
+            if (wParam == 122) return (LRESULT)EmbedRetryMs((int)lParam);
             if (wParam == 123) {
                 LRESULT nf;
                 EnterCriticalSection(&g_Ctx.lock);
                 nf = g_Ctx.netFailures;
                 LeaveCriticalSection(&g_Ctx.lock);
                 return nf;
+            }
+            //   124  WRITING (phase 46): the held trading day becomes
+            //        yesterday's, as at midnight UTC, and a visible panel is
+            //        repainted before SendMessage returns - so field 68 read
+            //        right after shows the quote line without the fetch that
+            //        the next cycle makes.
+            if (wParam == 124) {
+                EnterCriticalSection(&g_Ctx.lock);
+                g_Ctx.dayUtc -= 1;
+                LeaveCriticalSection(&g_Ctx.lock);
+                if (g_Ctx.hPopup && IsWindowVisible(g_Ctx.hPopup)) {
+                    InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
+                    UpdateWindow(g_Ctx.hPopup);
+                }
+                return 1;
             }
             return 0;
 #endif
@@ -5839,7 +6108,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             return TRUE;
 
+        // The main window is destroyed from outside: a WM_CLOSE from
+        // taskkill (without /F), an installer or an updater. Up to phase 45
+        // only "Quit TickC" removed the icon, and this path left a dead one
+        // in the notification area until the pointer passed over it.
         case WM_DESTROY:
+            RemoveTrayIcon();
             SaveConfig(&g_Ctx);
             DestroyPanelSurface();   // the panel is not owned: see there
             PostQuitMessage(0);
@@ -5882,6 +6156,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
                 if (g_desktopMode) {
                     if (!g_Ctx.hPopup) {
+                        // Explorer is back: fast tries again (phase 46).
+                        g_embedFails = 0;
                         SetTimer(hwnd, TIMER_EMBED_ID, EMBED_RETRY_MS, NULL);
                     } else if (GetParent(g_Ctx.hPopup) != FindDesktopWorkerW()) {
                         DestroyWindow(g_Ctx.hPopup);
@@ -5894,6 +6170,49 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     return 0;
 }
 
+// The main instance's mutex and window title (phase 46). "Local\": one per
+// sign-in session, as the registry and the tray are. The test build has its
+// own names, as it has its own registry key: a test run must never hand over
+// to the user's TickC.exe, nor stop it. It also carries a hash of its own
+// path, so two test exes (two agents, or a red and a green build) do not
+// take each other for the main instance; two runs of the SAME exe do.
+static void MainInstanceNames(wchar_t* mutexName, size_t cch) {
+#ifdef TICKER_PROBE
+    wchar_t exe[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH), h = 2166136261u;   // FNV-1a
+    for (DWORD i = 0; i < len && i < MAX_PATH; ++i) {
+        wchar_t c = exe[i];
+        h ^= (DWORD)((c >= L'A' && c <= L'Z') ? c + 32 : c);   // paths ignore case
+        h *= 16777619u;
+    }
+    swprintf_s(mutexName, cch, L"Local\\TickerTest.MainInstance.%08X", h);
+    swprintf_s(g_mainTitle, 48, L"TickerTest %08X", h);
+#else
+    wcscpy_s(mutexName, cch, L"Local\\TickC.MainInstance");
+    wcscpy_s(g_mainTitle, 48, L"TickC");
+#endif
+}
+
+// A main instance already runs: bring its panel forward and let this
+// process end (phase 46). Its mutex can exist before its window does - both
+// starts at once, or a slow first start - so the window is looked for for up
+// to 3 s. AllowSetForegroundWindow passes on this start's right to take the
+// foreground (the user launched it), without which the panel would open
+// behind Explorer.
+static void HandOverToMainInstance(void) {
+    for (int t = 0; t < 30; ++t) {
+        HWND h = FindWindowW(L"BTCTickerWindowClass", g_mainTitle);
+        if (h) {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(h, &pid);
+            if (pid) AllowSetForegroundWindow(pid);
+            PostMessageW(h, WM_APP_SHOW, 0, 0);
+            return;
+        }
+        Sleep(100);
+    }
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
@@ -5904,10 +6223,56 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // as a bitmap by Windows at 150 %. Every length goes through Dp.
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    // No single-instance mutex any more: [ + ] starts precisely one more
-    // instance. Each process has its own worker thread, its own tray icon and
-    // its own window classes (classes are per process, so the names do not
-    // collide).
+    // The command line comes first (phase 46): whether this start is a
+    // duplicate decides whether it may run beside a main instance, and that
+    // is decided before the tray icon or any window exists - a start that
+    // hands over must leave nothing behind.
+    //   --dup x y w h sym iv   written by SpawnInstance; exactly this form.
+    //                          If the check fails, we start as a normal main
+    //                          instance instead of guessing.
+    //   --desktop-mode         the desktop surface for this run.
+    //   --autostart            the Run value's start at sign-in: quiet.
+    BOOL argDup = FALSE, argDesktop = FALSE, argAutostart = FALSE;
+    int dupV[6] = { 0 };
+    {
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        if (argv && argc == 8 && wcscmp(argv[1], L"--dup") == 0) {
+            for (int i = 0; i < 6; ++i) dupV[i] = _wtoi(argv[2 + i]);
+            argDup = dupV[2] >= 240 && dupV[2] <= 8192 && dupV[3] >= 160 && dupV[3] <= 8192 &&
+                     dupV[4] >= 0 && dupV[4] < SYMBOL_COUNT &&
+                     dupV[5] >= 0 && dupV[5] < INTERVAL_COUNT;
+        } else if (argv) {
+            for (int i = 1; i < argc; ++i) {
+                if (wcscmp(argv[i], L"--desktop-mode") == 0) argDesktop = TRUE;
+                else if (wcscmp(argv[i], AUTOSTART_ARG) == 0) argAutostart = TRUE;
+            }
+        }
+        if (argv) LocalFree(argv);
+    }
+
+    // One main instance (phase 46). Phase 8 removed the old mutex because it
+    // stopped [ + ]; duplicates still start freely - each process has its own
+    // worker thread, its own tray icon and its own window classes (classes
+    // are per process, so the names do not collide) - but a second plain
+    // start stacked another main instance: a second worker, a second icon,
+    // two sets of registry writes and, in desktop mode, a second surface.
+    // It shows the first one's panel now and ends. A second start at sign-in
+    // (--autostart) ends without a word. If the mutex cannot be created at
+    // all, we run rather than refuse.
+    {
+        wchar_t mutexName[64];
+        MainInstanceNames(mutexName, 64);
+        if (!argDup) {
+            SetLastError(ERROR_SUCCESS);   // a success need not clear it (pitfall 103)
+            g_mainMutex = CreateMutexW(NULL, FALSE, mutexName);
+            if (g_mainMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+                CloseHandle(g_mainMutex);
+                if (!argAutostart) HandOverToMainInstance();
+                return 0;
+            }
+        }
+    }
 
     memset(&g_Ctx, 0, sizeof(AppContext));
     g_Ctx.ch.hoverIdx = -1;   // 0 from memset would mean "hover on the first candle"
@@ -5915,12 +6280,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.rangeIdx   = -1; // phase 41: 0 would mean "1D selected"
     g_Ctx.ch.dispValid  = FALSE; // snap on the first frame
 
-    g_Ctx.hSession = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    // The proxy (phase 46): AUTOMATIC_PROXY follows the proxy the user has
+    // set in Windows, a PAC script included. DEFAULT_PROXY, used up to phase
+    // 45, reads only the machine's WinHTTP setting (netsh winhttp), which is
+    // empty on nearly every machine, so behind a company or school proxy no
+    // request ever got out - and without phase 46's offline state, nothing
+    // said so. Windows 8.1 and later; older ones refuse the value and fall
+    // back to the old type.
+    DWORD access = WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
+    g_Ctx.hSession = WinHttpOpen(L"TickC/1.0", access,
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!g_Ctx.hSession) {
+        access = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+        g_Ctx.hSession = WinHttpOpen(L"TickC/1.0", access,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    }
 
     if (!g_Ctx.hSession) return 1;
 #ifdef TICKER_PROBE
-    g_probeAccessType = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+    g_probeAccessType = access;
 #endif
 
     // Without this the default receive timeout is 30 seconds. Then a hanging
@@ -5955,7 +6333,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Broadcast to top-level windows when Explorer has restarted.
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 
-    g_Ctx.hWnd =CreateWindowExW(0, wc.lpszClassName, L"TickC", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    // The title is how a second start finds a main instance (phase 46); a
+    // duplicate's hidden window gets another one.
+    g_Ctx.hWnd =CreateWindowExW(0, wc.lpszClassName, argDup ? L"TickC duplicate" : g_mainTitle,
+                                0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
 
     g_Ctx.nid.cbSize           = sizeof(NOTIFYICONDATAW);
     g_Ctx.nid.hWnd             = g_Ctx.hWnd;
@@ -5986,38 +6367,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // MUST come before CreateThread: the first fetch must go to the right
     // pair, and the watermark must be correct from the first frame.
     MigrateLegacyNames();   // phase 30: before the first read from the registry
+    if (!argDup) UpgradeAutostart();   // phase 46
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
                &g_savedPanelW, &g_savedPanelH);
 
-    // Duplicate: "--dup x y w h sym iv", written by SpawnInstance. Overrides
-    // what LoadConfig read, with the same limits - a hand-written command
-    // line must not be able to index outside the tables. If the check fails,
-    // we start as a normal main instance instead of guessing.
-    {
-        int argc = 0;
-        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-        // Desktop mode takes no arguments and cannot be combined with
-        // --dup: a duplicate is started from [ + ], which does not exist here.
-        if (argv && argc == 2 && wcscmp(argv[1], L"--desktop-mode") == 0) {
-            g_desktopMode = TRUE;
-        }
-        if (argv && argc == 8 && wcscmp(argv[1], L"--dup") == 0) {
-            int v[6];
-            for (int i = 0; i < 6; ++i) v[i] = _wtoi(argv[2 + i]);
-            if (v[2] >= 240 && v[2] <= 8192 && v[3] >= 160 && v[3] <= 8192 &&
-                v[4] >= 0 && v[4] < SYMBOL_COUNT &&
-                v[5] >= 0 && v[5] < INTERVAL_COUNT) {
-                g_isDuplicate    = TRUE;
-                g_savedPanelX    = v[0];
-                g_savedPanelY    = v[1];
-                g_savedPanelW    = v[2];
-                g_savedPanelH    = v[3];
-                g_Ctx.symIdx     = v[4];
-                g_Ctx.ivIdx      = v[5];
-                g_Ctx.intervalMs = INTERVALS[v[5]].ms;
-            }
-        }
-        if (argv) LocalFree(argv);
+    // Duplicate: "--dup x y w h sym iv", read and checked at the top.
+    // Overrides what LoadConfig read, with the same limits - a hand-written
+    // command line must not be able to index outside the tables. Desktop
+    // mode cannot be combined with --dup: a duplicate is started from [ + ],
+    // which does not exist there.
+    if (argDup) {
+        g_isDuplicate    = TRUE;
+        g_savedPanelX    = dupV[0];
+        g_savedPanelY    = dupV[1];
+        g_savedPanelW    = dupV[2];
+        g_savedPanelH    = dupV[3];
+        g_Ctx.symIdx     = dupV[4];
+        g_Ctx.ivIdx      = dupV[5];
+        g_Ctx.intervalMs = INTERVALS[dupV[5]].ms;
+    } else if (argDesktop) {
+        g_desktopMode = TRUE;
     }
     // Without --desktop-mode the registry decides: the tray menu remembers
     // the last chosen mode (phase 12). The flag wins for this run, and a
@@ -6061,16 +6430,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.hWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);  // auto reset
     g_Ctx.hThread    = CreateThread(NULL, 0, NetworkThread, &g_Ctx, 0, NULL);
 
-    // A duplicate is started from a click and must show itself at once - a
-    // main instance starts in the notification area. After the lock and the
+    // A duplicate is started from a click and must show itself at once. So,
+    // from phase 46, is a main instance started by hand: up to phase 45 it
+    // started in the notification area alone - often in the overflow, where
+    // nothing showed that the start had worked, so users started it again.
+    // The start at sign-in (--autostart, the Run value) stays in the
+    // notification area, as every start did before. After the lock and the
     // events: TogglePopup enters the lock and wakes the thread. The desktop
-    // surface likewise - it exists only while it is shown.
-    if (g_isDuplicate || g_desktopMode) TogglePopup(&g_Ctx, hInstance);
+    // surface is shown at every start - it exists only while it is shown.
+    if (g_isDuplicate || g_desktopMode || !argAutostart) TogglePopup(&g_Ctx, hInstance);
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+    }
+
+    // The main instance's name is let go here, not at exit (phase 46): the
+    // wait for the worker below can take seconds, and a start in that time
+    // would otherwise hand over to a window whose loop has ended - and
+    // nothing would open. It becomes the main instance instead. The title
+    // goes too, so no start finds this window again.
+    if (g_mainMutex) {
+        SetWindowTextW(g_Ctx.hWnd, L"");
+        CloseHandle(g_mainMutex);
+        g_mainMutex = NULL;
     }
 
     // Stop the thread before we tear down anything it can touch.
