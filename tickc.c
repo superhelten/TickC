@@ -330,6 +330,11 @@ typedef struct {
     // and the hover. ch.viewStart/viewCount/followLive are lock-protected like
     // candles[]; the rest is UI-owned. See chart.h.
     ChartState ch;
+    // The pointer's x when the crosshair was last set from it (phase 47);
+    // ch.hoverY is its y. UI-owned. The display eases after a wheel notch,
+    // a double-click or a new candle, and the candle under a resting pointer
+    // changes with it: the clock asks HitCandle again at this point.
+    int  hoverX;
     BOOL panning;        // dragging the chart sideways right now
     int  panAnchorX;     // mouse X when the panning started
 
@@ -3723,6 +3728,25 @@ static void OnAxisClick(HWND hwnd, const ChartRect* g, int my) {
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
+// The price column's hover for a pointer at row axY, -1 = not in the column.
+// WM_MOUSEMOVE sets it, and from phase 47 the clock too, whenever the axis
+// eases under a pointer that rests: a tag that slid away from the pointer
+// stayed red - "a click removes me" - while the click, which asks
+// AxisAlertAt afresh, set a new alert. A fresh tag the pointer is no longer
+// on becomes a tag like the others, whichever of the two moved. TRUE when
+// what is drawn changes.
+static BOOL AxisHoverSet(const ChartRect* g, int axY) {
+    int aHot = (axY >= 0) ? AxisAlertAt(g, axY) : -1;
+    if (g_Ctx.alertFresh != 0.0 &&
+        (aHot < 0 || g_Ctx.alerts[g_Ctx.symIdx][aHot] != g_Ctx.alertFresh)) {
+        g_Ctx.alertFresh = 0.0;
+    }
+    BOOL changed = (axY != g_Ctx.axisHotY || aHot != g_Ctx.alertHot);
+    g_Ctx.axisHotY = axY;
+    g_Ctx.alertHot = aHot;
+    return changed;
+}
+
 // Click on a pill in the toolbar. Only WM_LBUTTONDOWN reaches here: from
 // phase 44 WM_LBUTTONDBLCLK swallows the second click of a double-click on a
 // cell (it deselected the range the first click picked). Before that both
@@ -4237,24 +4261,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // x > edge: the column x = edge is the line's last pixel, the
             // tags start at edge + 1. The whole surface is dirty: the ghost
             // line runs straight across the chart, like the crosshair.
+            // The cursor that has left the newly set tag makes it a tag like
+            // all the others, red next time (AxisHoverSet).
             {
-                int axY = -1, aHot = -1;
+                int axY = -1;
                 if (!g_Ctx.overlayOpen && !g_Ctx.panning && g_Ctx.ch.dispValid &&
                     mx > g.edge && my >= g.top && my <= g.bottom) {
-                    axY  = my;
-                    aHot = AxisAlertAt(&g, my);
+                    axY = my;
                 }
-                // The cursor has left the newly set tag: from now on it is
-                // a tag like all the others, and turns red next time.
-                if (g_Ctx.alertFresh != 0.0 &&
-                    (aHot < 0 || g_Ctx.alerts[g_Ctx.symIdx][aHot] != g_Ctx.alertFresh)) {
-                    g_Ctx.alertFresh = 0.0;
-                }
-                if (axY != g_Ctx.axisHotY || aHot != g_Ctx.alertHot) {
-                    g_Ctx.axisHotY = axY;
-                    g_Ctx.alertHot = aHot;
-                    InvalidateRect(hwnd, NULL, FALSE);
-                }
+                if (AxisHoverSet(&g, axY)) InvalidateRect(hwnd, NULL, FALSE);
             }
 
             // The guard comes after the TrackMouseEvent arming above. If we
@@ -4313,6 +4328,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                                                ? g_Ctx.ch.viewCount : g_Ctx.candleCount);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, mx, my);
                     g_Ctx.ch.hoverY   = my;
+                    g_Ctx.hoverX      = mx;
                 }
                 LeaveCriticalSection(&g_Ctx.lock);
                 if (atWall) RequestHistory(&g_Ctx);   // phase 18
@@ -4325,6 +4341,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int idx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, mx, my);
             LeaveCriticalSection(&g_Ctx.lock);
 
+            g_Ctx.hoverX = mx;   // phase 47: the clock asks again here while the display eases
             if (idx != g_Ctx.ch.hoverIdx || (idx >= 0 && my != g_Ctx.ch.hoverY)) {
                 g_Ctx.ch.hoverIdx = idx;
                 g_Ctx.ch.hoverY   = my;
@@ -4386,7 +4403,14 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // A view that moved has left the range's home (phase 41).
                 GetView(&g_Ctx.ch, g_Ctx.candleCount, &ws1, &wc1);
                 if (ws1 != ws0 || wc1 != wc0) g_Ctx.rangeWant = 0;
+                // The candle under the pointer NOW; the display has not
+                // moved yet. From phase 47 the clock asks again on every
+                // eased frame, so the crosshair stays under the pointer and
+                // lands on the candle there - before, it rode the candle it
+                // started on away from a pointer that had not moved.
                 g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &g, pt.x, pt.y);
+                g_Ctx.ch.hoverY   = pt.y;
+                g_Ctx.hoverX      = pt.x;
             }
             LeaveCriticalSection(&g_Ctx.lock);
 
@@ -4502,6 +4526,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     ChartRect gH = PanelGeometry(rcH.right, rcH.bottom);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gH, LOWORD(lParam), HIWORD(lParam));
                     g_Ctx.ch.hoverY   = HIWORD(lParam);
+                    g_Ctx.hoverX      = LOWORD(lParam);
                     InvalidateRect(hwnd, NULL, FALSE);
                     r = g_Ctx.ch.hoverIdx;
                     break;
@@ -4817,12 +4842,33 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                             { &g_Ctx.ch.dispMax,    tMax,        snapY },
                             { &g_Ctx.ch.dispVolMax, tVol,        snapV },
                         };
+                        BOOL viewMoved = FALSE, axisMoved = FALSE;
                         for (int e = 0; e < 5; ++e) {
                             if (*eases[e].v == eases[e].t) continue;
                             *eases[e].v = AnimStep(*eases[e].v, eases[e].t, dt,
                                                    ANIM_TAU_VIEW, eases[e].snap);
                             redraw = TRUE;
                             if (*eases[e].v != eases[e].t) settled = FALSE;
+                            if (e < 2) viewMoved = TRUE;
+                            else if (e < 4) axisMoved = TRUE;
+                        }
+
+                        // The hover follows the display under a pointer that
+                        // rests (phase 47). The candles slide under it after a
+                        // wheel notch, a double-click or a new candle, and the
+                        // crosshair rode the candle it was set on away from
+                        // the pointer until the next mouse move; the keys
+                        // clear it instead, which stays so. The price axis
+                        // rescales under a pointer in the price column, and
+                        // an alert tag that slid away stayed red. Same
+                        // functions as the mouse move and the click, on the
+                        // display just eased (pitfall 14). Not during a drag,
+                        // whose moves set both themselves.
+                        if (!g_Ctx.panning) {
+                            if (viewMoved && g_Ctx.ch.hoverIdx >= 0)
+                                g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, tn, &gE, g_Ctx.hoverX, g_Ctx.ch.hoverY);
+                            if (axisMoved && g_Ctx.axisHotY >= 0 && !g_Ctx.overlayOpen)
+                                AxisHoverSet(&gE, g_Ctx.axisHotY);
                         }
                     }
                 }
@@ -4916,6 +4962,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     EnterCriticalSection(&g_Ctx.lock);
                     g_Ctx.ch.hoverIdx = HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gd, mx, my);
                     g_Ctx.ch.hoverY   = my;
+                    g_Ctx.hoverX      = mx;
                     LeaveCriticalSection(&g_Ctx.lock);
                     StartAnim(hwnd);
                     InvalidateRect(hwnd, NULL, FALSE);
