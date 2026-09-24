@@ -638,6 +638,9 @@ static DWORD    g_probeAccessType   = 0;
 static int      g_probeEmptyMsg     = 0;
 // 79 on the panel: the seconds that status text counts down (-1 = none).
 static int      g_probeEmptySecs    = -1;
+// Phase 47, 85 on the panel: ticks of the animation clock since start. A
+// timer that should be dead but is not shows as a count that keeps rising.
+static volatile LONG g_probeAnimTicks = 0;
 #endif
 
 
@@ -4606,6 +4609,50 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // g_probeEmptyMsg.
                 case 78: r = g_probeEmptyMsg; break;
                 case 79: r = g_probeEmptySecs; break;
+                // 80-86 (phase 47): the animation clock is running; the pan
+                // anchor (the view a drag measures from); the menu row under
+                // the pointer or the keyboard; the candle a pointer at
+                // (LOWORD, HIWORD) of lParam would be on now, and the alert a
+                // pointer at row lParam in the price column would be on now -
+                // both without touching the hover, so a probe can compare
+                // them with what the hover says; the clock's ticks since
+                // start; the client size, width << 16 | height.
+                case 80: r = g_Ctx.animRunning; break;
+                case 81: r = g_Ctx.ch.panAnchorView; break;
+                case 82: r = g_Ctx.overlayHot; break;
+                case 83: case 84: {
+                    RECT rcP;
+                    GetClientRect(hwnd, &rcP);
+                    ChartRect gP = PanelGeometry(rcP.right, rcP.bottom);
+                    r = (wParam == 83)
+                        ? HitCandle(&g_Ctx.ch, g_Ctx.candleCount, &gP, LOWORD(lParam), HIWORD(lParam))
+                        : AxisAlertAt(&gP, (int)lParam);
+                    break;
+                }
+                case 85: r = (LRESULT)g_probeAnimTicks; break;
+                case 86: {
+                    RECT rcS;
+                    GetClientRect(hwnd, &rcS);
+                    r = ((LRESULT)rcS.right << 16) | (rcS.bottom & 0xFFFF);
+                    break;
+                }
+                // 106 (phase 47): WRITING. A backfill of lParam candles (1-50)
+                // lands, as PrependCandles does it for the worker, with no
+                // repaint after it: the shift is pending until the next frame
+                // or timer tick, the moment a drag can start in.
+                case 106: {
+                    int k = (int)lParam;
+                    if (k < 1 || k > 50 || g_Ctx.candleCount <= 0 ||
+                        g_Ctx.candleCount + k > MAX_CANDLES) break;
+                    Candle pre[50];
+                    for (int i = 0; i < k; ++i) {
+                        pre[i] = g_Ctx.candles[0];
+                        pre[i].openTime -= (long long)(k - i) * g_Ctx.intervalMs;
+                    }
+                    PrependCandles(&g_Ctx, pre, k);
+                    r = g_Ctx.candleCount;
+                    break;
+                }
                 case 74: case 75: case 76: case 77: {
                     RECT rcV;
                     GetClientRect(hwnd, &rcV);
@@ -4652,6 +4699,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // place, and dies once everything has settled - at rest no timer runs.
         case WM_TIMER:
             if (wParam == TIMER_ANIM_ID) {
+#ifdef TICKER_PROBE
+                InterlockedIncrement(&g_probeAnimTicks);
+#endif
                 ULONGLONG now = GetTickCount64();
                 double dt = (double)(now - g_Ctx.lastAnimTick);
                 g_Ctx.lastAnimTick = now;
@@ -6099,6 +6149,67 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     UpdateWindow(g_Ctx.hPopup);
                 }
                 return 1;
+            }
+            //   125  READING (phase 47): the tray menu as the next right-click
+            //        would build it. The low byte of lParam asks: 0 the
+            //        default (bold) item's id, -1 none; 1 how many items,
+            //        submenus included, carry a key after a tab; 2 the state
+            //        (GetMenuState) of the item with the id in the high word,
+            //        -1 when there is none; 3 whether that item's label has a
+            //        key. Bit 8 builds it as desktop mode would: the flag is
+            //        set around the build alone, on this thread, so nothing
+            //        else sees it.
+            if (wParam == 125) {
+                BOOL wasDesk = g_desktopMode;
+                if (lParam & 0x100) g_desktopMode = TRUE;
+                HMENU hm = BuildTrayMenu();
+                g_desktopMode = wasDesk;
+                if (!hm) return -2;
+                LRESULT res = -1;
+                UINT q = (UINT)(lParam & 0xFF), qid = (UINT)((lParam >> 16) & 0xFFFF);
+                if (q == 0) {
+                    UINT d = GetMenuDefaultItem(hm, FALSE, 0);
+                    res = (d == (UINT)-1) ? -1 : (LRESULT)d;
+                } else if (q == 1) {
+                    res = 0;
+                    HMENU stack[4] = { hm, NULL, NULL, NULL };
+                    int depth = 1;
+                    while (depth > 0) {
+                        HMENU cur = stack[--depth];
+                        int cnt = GetMenuItemCount(cur);
+                        for (int i = 0; i < cnt; ++i) {
+                            wchar_t t[64];
+                            if (GetMenuStringW(cur, (UINT)i, t, 64, MF_BYPOSITION) > 0 && wcschr(t, L'\t')) res++;
+                            HMENU sub = GetSubMenu(cur, i);
+                            if (sub && depth < 4) stack[depth++] = sub;
+                        }
+                    }
+                } else if (q == 2) {
+                    UINT st = GetMenuState(hm, qid, MF_BYCOMMAND);
+                    res = (st == (UINT)-1) ? -1 : (LRESULT)st;
+                } else if (q == 3) {
+                    wchar_t t[64];
+                    res = (GetMenuStringW(hm, qid, t, 64, MF_BYCOMMAND) > 0) ? (wcschr(t, L'\t') != NULL) : -1;
+                }
+                DestroyMenu(hm);
+                return res;
+            }
+            //   126  WRITING (phase 47): a new candle, one interval after the
+            //        last, is merged as the worker merges a fetch - the next
+            //        day at 1d, which a clock cannot be asked for. Returns the
+            //        candle count.
+            if (wParam == 126) {
+                LRESULT cnt;
+                EnterCriticalSection(&g_Ctx.lock);
+                if (g_Ctx.candleCount > 0) {
+                    Candle nc = g_Ctx.candles[g_Ctx.candleCount - 1];
+                    nc.openTime += g_Ctx.intervalMs;
+                    MergeCandles(&g_Ctx, &nc, 1);
+                }
+                cnt = g_Ctx.candleCount;
+                LeaveCriticalSection(&g_Ctx.lock);
+                if (g_Ctx.hPopup) InvalidateRect(g_Ctx.hPopup, NULL, FALSE);
+                return cnt;
             }
             return 0;
 #endif
