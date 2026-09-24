@@ -193,7 +193,9 @@ static const IntervalDef INTERVALS[] = {
 // size can be picked afterwards and the range stays - 1M on 1h is 720
 // candles - unless it cannot be shown there (fewer than MIN_VIEW candles,
 // or more than the buffer holds: 1Y on 1m), which ends it. YTD counts from
-// 1 January 00:00 UTC; Max is as much as the exchange and the buffer give.
+// 1 January 00:00 UTC and grows with the year (phase 47: it is anchored,
+// the others are durations - see RangeWantAt); Max is as much as the
+// exchange and the buffer give.
 #define RANGE_DAYS_YTD  (-1)
 #define RANGE_DAYS_MAX  (-2)
 typedef struct { const wchar_t* label; int days; long long ivMs; } RangeDef;
@@ -304,6 +306,10 @@ typedef struct {
     // stay there after the backfill.
     int  rangeIdx;
     int  rangeWant;
+    // The home is year-to-date (phase 47), set with rangeWant: the worker
+    // thread counts YTD's want again with every candle it merges, as the
+    // year grows. Lock-protected like rangeWant, which it qualifies.
+    BOOL rangeYtd;
     // The trading day (phase 42): Binance's statistics for the UTC day, as
     // Bloomberg's quote line shows the day's open, high, low and volume.
     // UTC, so it is the day HOD/LOD/PDC draw. Lock-protected: the worker
@@ -373,7 +379,7 @@ typedef struct {
     // --- Worker thread ---
     // The lock covers candles[], candleCount, viewStart, viewCount,
     // followLive, lastPrice, hPopup, frontShift, histPending, histDone,
-    // rangeWant (phase 41) and hSession (phase 44: WinMain closes it at exit
+    // rangeWant (phase 41), rangeYtd (phase 47) and hSession (phase 44: WinMain closes it at exit
     // while the worker may still run). hConnect is the worker's alone.
     // Everything else is touched only by the UI thread.
     CRITICAL_SECTION lock;
@@ -668,6 +674,50 @@ static long long NowUnixMs(void) {
 // statistics and today's session (phase 27) are counted in.
 static long long UtcDayNow(void) {
     return NowUnixMs() / 86400000LL;
+}
+
+// How many candles of ivMs a range's home view holds (phase 41; split out
+// of RangeWantFor in phase 47, so the worker thread can ask too). days is a
+// RANGES[].days value; 0 when the range cannot be shown at this bar size
+// (fewer than MIN_VIEW candles, or more than the buffer holds).
+//
+// A duration rounds UP (phase 47): 5Y is 1826 days, 260.86 weeks, and the
+// truncation gave 260 - the view ended short of the five years the table
+// promises (261). 1Y on 1w is 53 weeks now, for the same reason.
+//
+// YTD is anchored, not a duration: from the candle 1 January 00:00 UTC opens
+// in to the newest one, which opens at lastOpenMs. The count grows by one
+// with each new day at 1d - up to phase 46 it was computed once, and a
+// followed view kept that count, so every midnight UTC pushed 1 January out
+// while the header still said YTD. Rounded up, so the week that began before
+// 1 January is in at 1w. With no candle yet (lastOpenMs 0: the buffer is
+// being emptied for a new bar size), up to now by the clock - the same count
+// once the forming candle is the newest. A buffer whose newest candle is
+// from before 1 January (the year has just turned) counts nothing: 0.
+static int RangeWantAt(int days, long long ivMs, long long lastOpenMs) {
+    if (ivMs <= 0) return 0;
+    if (days == RANGE_DAYS_MAX) return MAX_CANDLES;
+    long long want;
+    if (days == RANGE_DAYS_YTD) {
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        SYSTEMTIME jan = { 0 };
+        jan.wYear = st.wYear; jan.wMonth = 1; jan.wDay = 1;
+        FILETIME ft;
+        if (!SystemTimeToFileTime(&jan, &ft)) return 0;
+        ULONGLONG t = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        long long jan1 = (long long)((t - 116444736000000000ULL) / 10000ULL);
+        if (lastOpenMs <= 0)
+            want = (NowUnixMs() - jan1) / ivMs + 1;   // + 1: the candle still forming
+        else if (lastOpenMs < jan1)
+            want = 0;
+        else
+            want = (lastOpenMs - jan1 + ivMs - 1) / ivMs + 1;
+    } else {
+        want = ((long long)days * 86400000LL + ivMs - 1) / ivMs;
+    }
+    if (want < MIN_VIEW || want > MAX_CANDLES) return 0;
+    return (int)want;
 }
 
 // ---------------------------------------------------------------------------
@@ -1355,6 +1405,16 @@ static void MergeCandles(AppContext* ctx, const Candle* in, int count) {
     // first opening showed 8 candles instead of 300, in every build since
     // phase 1 - and every duplicate from [ + ] opens just before it has data.
     if (ctx->ch.followLive) {
+        // YTD (phase 47) holds one more candle with each new day, so 1
+        // January stays the first; a duration (1D ... 5Y) keeps its count
+        // and moves on. At the turn of the year the count is 0 until a week
+        // of the new one is in: the home is left, and the view keeps its
+        // size, as after a pan. The cell goes out and the header shows the
+        // span; R or the cell asks again, and ends the range then.
+        if (ctx->rangeWant > 0 && ctx->rangeYtd && ctx->candleCount > 0) {
+            ctx->rangeWant = RangeWantAt(RANGE_DAYS_YTD, ctx->intervalMs,
+                                         ctx->candles[ctx->candleCount - 1].openTime);
+        }
         if (ctx->rangeWant > 0) {
             // At home in a range (phase 41): as many as it wants, up to what
             // the buffer holds - the backfill brings the rest.
@@ -3473,26 +3533,11 @@ static void StartAnim(HWND hwnd) {
 }
 
 // How many candles a range's home view holds at a bar size (phase 41); 0
-// when the range cannot be shown there. See RANGES.
-static int RangeWantFor(int r, long long ivMs) {
-    if (r < 0 || r >= RANGE_COUNT || ivMs <= 0) return 0;
-    if (RANGES[r].days == RANGE_DAYS_MAX) return MAX_CANDLES;
-    long long want;
-    if (RANGES[r].days == RANGE_DAYS_YTD) {
-        SYSTEMTIME st;
-        GetSystemTime(&st);
-        SYSTEMTIME jan = { 0 };
-        jan.wYear = st.wYear; jan.wMonth = 1; jan.wDay = 1;
-        FILETIME ft;
-        if (!SystemTimeToFileTime(&jan, &ft)) return 0;
-        ULONGLONG t = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-        long long jan1 = (long long)((t - 116444736000000000ULL) / 10000ULL);
-        want = (NowUnixMs() - jan1) / ivMs + 1;   // + 1: the candle still forming
-    } else {
-        want = (long long)RANGES[r].days * 86400000LL / ivMs;
-    }
-    if (want < MIN_VIEW || want > MAX_CANDLES) return 0;
-    return (int)want;
+// when the range cannot be shown there. See RANGES and RangeWantAt.
+// lastOpenMs is the newest candle's open, 0 when there is none.
+static int RangeWantFor(int r, long long ivMs, long long lastOpenMs) {
+    if (r < 0 || r >= RANGE_COUNT) return 0;
+    return RangeWantAt(RANGES[r].days, ivMs, lastOpenMs);
 }
 
 // Switches symbol or interval. Bumps configGen and empties the buffer in the
@@ -3526,8 +3571,9 @@ static void ApplyConfigChoice(AppContext* ctx, int hit) {
     // SAME critical section as the emptying: the next MergeCandles fills the
     // view, and with rangeWant set after the lock it would first get the
     // 300-candle default. A range that cannot be shown at the new bar size
-    // ends here.
-    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs);
+    // ends here. The buffer is empty, so YTD counts by the clock.
+    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs, 0);
+    ctx->rangeYtd  = (ctx->rangeIdx >= 0 && RANGES[ctx->rangeIdx].days == RANGE_DAYS_YTD);
     if (ctx->rangeWant == 0) ctx->rangeIdx = -1;
     LeaveCriticalSection(&ctx->lock);
 
@@ -3879,7 +3925,9 @@ static void OnToolbarClick(HWND hwnd, int th) {
 // double-click, Esc and opening the panel all go back to it.
 static void ResetView(AppContext* ctx) {
     EnterCriticalSection(&ctx->lock);
-    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs);
+    ctx->rangeWant = RangeWantFor(ctx->rangeIdx, ctx->intervalMs,
+                                  (ctx->candleCount > 0) ? ctx->candles[ctx->candleCount - 1].openTime : 0);
+    ctx->rangeYtd  = (ctx->rangeIdx >= 0 && RANGES[ctx->rangeIdx].days == RANGE_DAYS_YTD);
     if (ctx->rangeWant == 0) ctx->rangeIdx = -1;
     int home = (ctx->rangeWant > 0) ? ctx->rangeWant : DEFAULT_VIEW;
     ctx->ch.viewCount  = 0;
