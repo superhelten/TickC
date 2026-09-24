@@ -535,6 +535,10 @@ static int g_savedPanelW = 0;   // panel size from the registry, 0 = unused
 static int g_savedPanelH = 0;
 static int g_savedPanelX = 0;   // set by LoadConfig, GEOM_UNSET = unused
 static int g_savedPanelY = 0;
+// The dpi the saved size is in device pixels at (phase 48), 0 = not known:
+// geometry from before phase 48, and a duplicate's, which comes from a live
+// panel on the same monitor.
+static int g_savedPanelDpi = 0;
 // Started via [ + ]. A duplicate never writes to the registry - neither
 // geometry nor symbol - and exits the process when the panel is closed.
 // The registry is the main instance's memory; otherwise whichever closed last
@@ -869,7 +873,7 @@ static DWORD RegReadDword(HKEY k, const wchar_t* name, DWORD fallback) {
     return fallback;
 }
 
-static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* outH) {
+static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* outH, int* outDpi) {
     ctx->symIdx     = 0;
     ctx->ivIdx      = 0;
     ctx->intervalMs = INTERVALS[0].ms;
@@ -883,7 +887,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->lightTheme     = FALSE;   // phase 40: dark in both modes
     ctx->lightThemeDesk = FALSE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
-    *outW = 0; *outH = 0;
+    *outW = 0; *outH = 0; *outDpi = 0;
 
     HKEY k;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, KEY_READ, &k) != ERROR_SUCCESS) {
@@ -898,6 +902,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     DWORD px = RegReadDword(k, L"PanelX", 0);
     DWORD py = RegReadDword(k, L"PanelY", 0);
     DWORD dev = RegReadDword(k, L"PanelGeomDevice", 0);   // phase 37
+    DWORD gdpi = RegReadDword(k, L"PanelGeomDpi", 0);     // phase 48
     DWORD sv = RegReadDword(k, L"ShowVolume", 1);   // phase 22, on by default
     DWORD si = RegReadDword(k, L"ShowIndicators", 1);   // phase 25, on by default
     DWORD svd = RegReadDword(k, L"ShowVolumeDesktop", 0);       // phase 26, OFF by default
@@ -948,6 +953,14 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
             if (*outH > 0) *outH = MulDiv(*outH, sd, 96);
             if (hasPos) { *outX = MulDiv(*outX, sd, 96); *outY = MulDiv(*outY, sd, 96); }
         }
+    }
+    // Phase 48: the dpi the size was saved at. Device pixels are only half a
+    // unit - 1920x1080 at 144 is the panel 1280x720 is at 96 - and
+    // PlacePopupInitially scales the size when the panel opens on a monitor
+    // at another dpi, as Windows' WM_DPICHANGED would have for a running one.
+    // Geometry from phases 37-47 has no dpi and is taken as it is.
+    else if (gdpi >= 48 && gdpi <= 480) {
+        *outDpi = (int)gdpi;
     }
 }
 
@@ -1244,6 +1257,7 @@ static void SaveGeometry(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0 || g_desktopMode) return;
     g_savedPanelX = x; g_savedPanelY = y;
     g_savedPanelW = w; g_savedPanelH = h;
+    g_savedPanelDpi = g_Ctx.sty.dpi;   // phase 48: the unit of w and h
     if (g_isDuplicate) return;
     HKEY k;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH, 0, NULL, 0,
@@ -1251,20 +1265,17 @@ static void SaveGeometry(int x, int y, int w, int h) {
         return;
     }
     DWORD dw = (DWORD)w, dh = (DWORD)h;
-    DWORD dx = (DWORD)(LONG)x, dy = (DWORD)(LONG)y, one = 1;
+    DWORD dx = (DWORD)(LONG)x, dy = (DWORD)(LONG)y, one = 1, gd = (DWORD)g_savedPanelDpi;
     RegSetValueExW(k, L"PanelWidth",  0, REG_DWORD, (const BYTE*)&dw, sizeof(dw));
     RegSetValueExW(k, L"PanelHeight", 0, REG_DWORD, (const BYTE*)&dh, sizeof(dh));
     RegSetValueExW(k, L"PanelX",      0, REG_DWORD, (const BYTE*)&dx, sizeof(dx));
     RegSetValueExW(k, L"PanelY",      0, REG_DWORD, (const BYTE*)&dy, sizeof(dy));
     RegSetValueExW(k, L"PanelHasPos", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
     RegSetValueExW(k, L"PanelGeomDevice", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));   // phase 37
+    RegSetValueExW(k, L"PanelGeomDpi", 0, REG_DWORD, (const BYTE*)&gd, sizeof(gd));        // phase 48
     RegCloseKey(k);
 }
 
-// Saves position and size as the window stands NOW. A minimized or
-// maximized window is not saved as such - then we would remember a
-// taskbar strip or the whole screen as "the user's size".
-// GetWindowPlacement gives the restored geometry in both cases.
 // The panel's WINDOWPLACEMENT. rcNormalPosition is in workspace coordinates
 // (pitfall 42), which equal screen coordinates here; the test build can
 // shift them as a taskbar on the left or at the top would (phase 48, see
@@ -1278,6 +1289,32 @@ static BOOL GetPanelPlacement(HWND hwnd, WINDOWPLACEMENT* wp) {
     return TRUE;
 }
 
+// And the one write (phase 48): a saved rectangle goes back through
+// SetWindowPlacement, in the coordinates GetWindowPlacement gave it in. Up to
+// phase 47 PlacePopupInitially restored it with SetWindowPos, which takes
+// screen coordinates, so with a taskbar on the left or at the top every save
+// and restore moved the panel by the bar's width (review A3). The pair
+// undoes itself whatever origin Windows gives this frameless popup's
+// workspace - the docs say the work area's, and a popup that maximizes to
+// the whole monitor (pitfall 22) may not get one at all; neither can be seen
+// on this machine. Called on the new, hidden panel only: SW_HIDE keeps it so
+// until TogglePopup shows it.
+static void SetPanelPlacement(HWND hwnd, int x, int y, int w, int h) {
+    WINDOWPLACEMENT wp;
+    if (!GetPanelPlacement(hwnd, &wp)) return;
+    wp.flags   = 0;
+    wp.showCmd = SW_HIDE;
+    SetRect(&wp.rcNormalPosition, x, y, x + w, y + h);
+#ifdef TICKER_PROBE
+    OffsetRect(&wp.rcNormalPosition, g_fakeWorkDx, g_fakeWorkDy);
+#endif
+    SetWindowPlacement(hwnd, &wp);
+}
+
+// Saves position and size as the window stands NOW. A minimized or
+// maximized window is not saved as such - then we would remember a
+// taskbar strip or the whole screen as "the user's size".
+// GetWindowPlacement gives the restored geometry in both cases.
 static void SaveWindowPlacement(HWND hwnd) {
     if (!hwnd) return;
     WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
@@ -4048,7 +4085,8 @@ static void HidePanel(HWND hwnd) {
 // child halfway outside. Then the restored geometry is used. Otherwise
 // GetWindowRect, which is screen coordinates - rcNormalPosition is
 // work-area coordinates, and differs when the taskbar sits at the top
-// or on the left.
+// or on the left. The duplicate opens there with SetWindowPos (see
+// PlacePopupInitially).
 static void SpawnInstance(HWND hwnd) {
     RECT r;
     if (IsZoomed(hwnd)) {
@@ -5658,16 +5696,35 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 // Handles a taskbar on any edge + multiple monitors.
 
 
-// Places the window the first time it is created: the saved position if it
-// exists and is still visible, otherwise centered.
-static void PlacePopupInitially(HWND hwnd) {
+// The saved rectangle, if there is one and it is still on a monitor. TogglePopup
+// creates the panel there and PlacePopupInitially puts it there exactly.
+static BOOL SavedPanelRect(RECT* r) {
     int w = (g_savedPanelW > 0) ? g_savedPanelW : POPUP_W;
     int h = (g_savedPanelH > 0) ? g_savedPanelH : POPUP_H;
+    if (g_savedPanelX == GEOM_UNSET || g_savedPanelY == GEOM_UNSET ||
+        !PlacementIsVisible(g_savedPanelX, g_savedPanelY, w, h)) return FALSE;
+    SetRect(r, g_savedPanelX, g_savedPanelY, g_savedPanelX + w, g_savedPanelY + h);
+    return TRUE;
+}
 
-    if (g_savedPanelX != GEOM_UNSET && g_savedPanelY != GEOM_UNSET &&
-        PlacementIsVisible(g_savedPanelX, g_savedPanelY, w, h)) {
-        SetWindowPos(hwnd, NULL, g_savedPanelX, g_savedPanelY, w, h,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+// Places the window the first time it is created: the saved position if it
+// exists and is still visible, otherwise centered.
+//
+// The size is device pixels at g_savedPanelDpi (phase 48). The style is
+// already built for the monitor the panel was created on (TogglePopup), and
+// if that monitor's dpi is not the one the size was saved at - its scale was
+// changed while TickC was not running - the size is scaled once to keep the
+// panel's logical size, as WM_DPICHANGED does for a running panel.
+static void PlacePopupInitially(HWND hwnd) {
+    RECT r;
+    if (SavedPanelRect(&r)) {
+        int w = r.right - r.left, h = r.bottom - r.top;
+        int sd = g_savedPanelDpi, nd = g_Ctx.sty.dpi;
+        if (sd > 0 && nd > 0 && sd != nd) { w = MulDiv(w, nd, sd); h = MulDiv(h, nd, sd); }
+        // A duplicate's rectangle is its parent's GetWindowRect plus the
+        // cascade (SpawnInstance): screen coordinates, not a placement's.
+        if (g_isDuplicate) SetWindowPos(hwnd, NULL, r.left, r.top, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        else               SetPanelPlacement(hwnd, r.left, r.top, w, h);
         return;
     }
     ResetToDefaultView(hwnd);
@@ -5946,6 +6003,16 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         // and can put the window off screen. PlacePopupInitially sets the
         // correct geometry right after.
         //
+        // But the panel is created AT its saved rectangle when there is one
+        // on a monitor (phase 48). A per-monitor aware window takes the dpi
+        // of the monitor it is created on, and the style below reads it
+        // (PanelDpi). Created at 0,0 and moved to a saved rectangle on a
+        // 150 % monitor, the panel was styled for the primary's dpi and then
+        // either got a WM_DPICHANGED that scaled a size already in device
+        // pixels - a panel half as large again every session - or, with no
+        // message, kept the primary's fonts (review E5). The desktop surface
+        // is placed by AttachToDesktop and keeps 0,0.
+        //
         // No WS_EX_TOOLWINDOW and no owner, so the window keeps its button
         // in the taskbar. No WS_EX_TOPMOST.
         //
@@ -5970,11 +6037,13 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         DPI_AWARENESS_CONTEXT prevDpi = g_desktopMode
             ? SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
             : NULL;
+        RECT rc0 = { 0, 0, POPUP_W, POPUP_H };
+        if (!g_desktopMode) SavedPanelRect(&rc0);   // unchanged when there is none
         HWND hp = CreateWindowExW(
             0,
             L"BTCPopupClass", L"TickC",
             style,
-            0, 0, POPUP_W, POPUP_H,
+            rc0.left, rc0.top, rc0.right - rc0.left, rc0.bottom - rc0.top,
             NULL, NULL, hInst, NULL);
         BOOL attached = hp && g_desktopMode && AttachToDesktop(hp);
         if (prevDpi) SetThreadDpiAwarenessContext(prevDpi);
@@ -6987,7 +7056,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     MigrateLegacyNames();   // phase 30: before the first read from the registry
     if (!argDup) UpgradeAutostart();   // phase 46
     LoadConfig(&g_Ctx, &g_savedPanelX, &g_savedPanelY,
-               &g_savedPanelW, &g_savedPanelH);
+               &g_savedPanelW, &g_savedPanelH, &g_savedPanelDpi);
 
     // Duplicate: "--dup x y w h sym iv", read and checked at the top.
     // Overrides what LoadConfig read, with the same limits - a hand-written
@@ -7000,6 +7069,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         g_savedPanelY    = dupV[1];
         g_savedPanelW    = dupV[2];
         g_savedPanelH    = dupV[3];
+        g_savedPanelDpi  = 0;   // phase 48: a live panel's size, on this monitor
         g_Ctx.symIdx     = dupV[4];
         g_Ctx.ivIdx      = dupV[5];
         g_Ctx.intervalMs = INTERVALS[dupV[5]].ms;
