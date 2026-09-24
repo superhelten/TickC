@@ -59,5 +59,6 @@ mountain_15m_alerts 1280x720 96febddb6a22fca7
 mountain_dpi144_rsi 1920x1080 cf06d92a723acb87
 mountain_rsi_400x250 400x250 fe858f3ece0c6a1b
 mountain_light_560x300 560x300 7037f06bb9753dd8
+mountain_1m_dense 1280x720 817b294a5fadef26
 mountain_desktop_3840x1600 3840x1600 6686f4d9656c00db
 mountain_light_desktop 1920x1080 8ca004c181f1eb94

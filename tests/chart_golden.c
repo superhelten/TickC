@@ -171,6 +171,9 @@ static const Case CASES[] = {
     // A 185 px price pane: the fill's top (the highest close, 7 % under the
     // pane's top, on 15 Sep) lies under the averages' legend.
     { "mountain_light_560x300",  560, 300, FALSE, HOUR_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    // More candles than pixels: many points per column, and the fill's
+    // top edge runs up and down the same column.
+    { "mountain_1m_dense",      1280, 720, FALSE, MIN_MS,      2400, FALSE,   0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_desktop_3840x1600",3840,1600,TRUE, MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_light_desktop", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
 };
