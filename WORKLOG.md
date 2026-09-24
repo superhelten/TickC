@@ -3792,6 +3792,73 @@ fake the modifier state, pitfall 63), the shutdown under a black-holed
 network, and the candle gap (the fixtures always seed) - these are
 reviewed, not tested. **Exe 230 400 → 230 912 bytes (+512).**
 
+### Phase 45 — UI improvements from the review
+
+Branch `phase-45`, merged with `--no-ff`. The UI half of phase 44's deep
+review, on the Bloomberg model. Two agents worked side by side, split by
+file (the engine, and the app), and every picture was looked at before a
+golden was written.
+
+**The engine.**
+- **Dates on the time axis.** Under 1d every label was a clock ("18:00
+  00:00 06:00") or, at 1h, "09-12 00:00" on every tick - no day anywhere.
+  Now the label on the candle a local day begins with reads "21 Sep" and
+  the others the time, as on the terminal; at 4h in CEST the day begins
+  at 02:00 local, so "begins with" means "opens less than one interval
+  after midnight". The spacing is measured on the widest label the axis
+  can show (`ChartTimeLabelW`), not the first one, so the phase 11 and 44
+  collision rules hold. The hover box's time row reads "16 Sep 12:00".
+  1d and 1w keep "YYYY-MM-DD", formatted as the UTC date: they open at
+  00:00 UTC, and west of UTC the local conversion gave the day before
+  (unit check `CheckTimeForms`, which a CEST machine could not see).
+- **Stronger bars in the volume pane.** The phase 21 colors were blended
+  toward the background so the bars could stand behind the candles; in a
+  pane of their own they were faint, in the light theme pastel. Two theme
+  roles, `volPaneUp`/`volPaneDown` (dark 05A046/9E3346, light
+  5DAB95/E27381, off the exact blend lines, pitfall 87), for the pane;
+  the fallback behind the candles and the desktop keep the muted ones -
+  the desktop is meant to be quiet. The legend now stands on a
+  background-colored box, so it is text on bg (the contrast check has 37
+  pairs, lowest 4.60:1).
+- **One rule between panes.** Grid line 4 of the price pane and the next
+  pane's top line, 6 px apart, read as a double rule; line 4 is left out
+  when a pane follows (its price label stays).
+- A found bug: `bandOn` was `bandBottom > bottom`, true with only the
+  volume pane on, so a zero-height band drew its top line on the pane's
+  bottom row. It is `bandBottom > bandTop` now.
+
+**The app.**
+- **The symbol is a dropdown under its cell** (overlay kind 3), styled as
+  the interval dropdown - no longer the two-column picker in the middle
+  of the chart, which a right-click in the chart still opens. While a
+  menu is open, its box is client area in `WM_NCHITTEST`: the dropdown
+  opens over the range field, whose gaps are caption, and a real click
+  there would have moved the window instead of picking a symbol.
+- **One selection color.** The current symbol and interval in every list
+  are an accent row with light text, as the selected range cell; they
+  were candle-up green.
+- **Keys in the settings menu** (V, M, I, T, right-aligned, dim), and the
+  tray menu uses the same names: "Volume", "Averages, VWAP and levels",
+  "RSI 14", "Light theme".
+- **The symbol cell's hover** gets the text-colored frame the row-2 cells
+  got in phase 42; a fill alone was 1.05:1 on the light background.
+
+**Verified.** `chart_golden`: new unit checks for the hover time at 96,
+144 and 192 dpi and for the time forms; 31 cases changed and exactly the
+five desktop cases did not (volume on the desktop keeps its muted bars);
+36/36 twice after the pictures were looked at. `shot_ui45.ps1` (10
+checks): the symbol cell opens kind 3, the gap under it is client area
+while it is open and caption when closed, a row picks ETH, Esc closes
+without a change, a right-click still opens the picker, and the three
+lists captured for the eye. **Red run** against phase 44: 5 fail, the
+dropdown checks. Green twice. The other scripts pass; `shot_range`
+expects kind 3 from the symbol cell now, and `shot_theme` counts the
+light box on the small dropdown (5 000 px instead of 20 000 for the old
+picker). `golden.ps1 -Hidden` against phase 44: every difference lies at
+y >= 565 at 1280x720 (the missing line 4, the pane, the time axis) and in
+the hover box's time row; the header is untouched. **Exe 230 912 →
+232 960 bytes (+2 048).**
+
 ---
 
 ## Known limitations
@@ -4674,16 +4741,16 @@ reviewed, not tested. **Exe 230 400 → 230 912 bytes (+512).**
 
 ## Backups
 
-**Only `tickc.c.bak38` and `chart.c.bak38` are left** (2026-09-24). From
+**Only `tickc.c.bak39` and `chart.c.bak39` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 44 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 45 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak37` (phases 34–43) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak38` (phases 34–44) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43) and `.bak38` (phase 44). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44) and `.bak39` (phase 45). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
