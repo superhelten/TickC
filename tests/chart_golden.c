@@ -428,9 +428,10 @@ static const Golden* FindGolden(const char* name) {
 // --- Contrast (phase 40) ---
 // Every text/surface pair the chart and the app draw, as theme roles. The
 // light theme must give WCAG AA (4.5:1) on each; the check runs before the
-// pictures, and a table edit that breaks it fails the run. The dark theme is
-// not held to it: its muted grays (dim on box 3.7:1, yesterday's levels 4.0)
-// are older, deliberate choices, recorded in the work log.
+// pictures, and a table edit that breaks it fails the run. The dark theme
+// was not held to it until phase 51: its muted grays on the box (dim 3.7:1,
+// yesterday's levels 4.0) are older, deliberate choices, recorded in the
+// work log, and are named in DARK_ALLOW below.
 typedef struct { const char* where; size_t text, surface; } ContrastPair;
 #define CP(w, t, s) { w, offsetof(ChartTheme, t), offsetof(ChartTheme, s) }
 static const ContrastPair CONTRAST_PAIRS[] = {
@@ -477,6 +478,27 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     // rectangle of the background, and its pair is text on bg; the phase 43
     // pairs (text on volUp, on volDown) are gone with it.
     CP("volume legend",           text,      bg),
+    // Phase 51: the stamp of the line and the mountain in the series'
+    // colors (Bloomberg's white box with a black number), and the view's
+    // high and low labels in the chart - on the background, and on the
+    // mountain's fill, where they stand without a patch.
+    CP("price stamp, line/mountain", onStamp, stamp),
+    CP("high/low labels",         text,      bg),
+    CP("high/low labels on fill", text,      mountain),
+};
+
+// Phase 51: the dark theme is checked too. Its pairs on the box surface are
+// older, deliberate choices (phase 40 left the dark table alone) and stay
+// under 4.5:1 on any background: dim and yesterday's gray on the box. They
+// are named here with the ratio they have, and must not drop below it;
+// every other dark pair must reach 4.5:1. The black background of phase 51
+// lifted the pairs on bg (dim 4.12 -> 4.57, yesterday's labels 4.45 -> 4.94).
+typedef struct { const char* where; double floor; } ContrastAllow;
+static const ContrastAllow DARK_ALLOW[] = {
+    { "ghost tag, slots full",  3.69 },
+    { "yesterday's level tags", 3.99 },
+    { "hover box labels",       3.69 },
+    { "overlay headings",       3.69 },
 };
 
 static double RelLum(COLORREF c) {
@@ -491,23 +513,26 @@ static double ContrastRatio(COLORREF a, COLORREF b) {
     return (la > lb) ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
 }
 
-static int CheckContrast(const ChartTheme* t, const char* name) {
-    int n = (int)(sizeof(CONTRAST_PAIRS) / sizeof(CONTRAST_PAIRS[0])), bad = 0;
+static int CheckContrast(const ChartTheme* t, const char* name, const ContrastAllow* allow, int nAllow) {
+    int n = (int)(sizeof(CONTRAST_PAIRS) / sizeof(CONTRAST_PAIRS[0])), bad = 0, known = 0;
     double worst = 99.0;
     for (int i = 0; i < n; i++) {
         const ContrastPair* p = &CONTRAST_PAIRS[i];
         COLORREF fg = *(const COLORREF*)((const char*)t + p->text);
         COLORREF bg = *(const COLORREF*)((const char*)t + p->surface);
-        double r = ContrastRatio(fg, bg);
-        if (r < worst) worst = r;
-        if (r < 4.5) {
-            printf("FAIL contrast %s: %s %02X%02X%02X on %02X%02X%02X is %.2f:1\n", name, p->where,
+        double r = ContrastRatio(fg, bg), need = 4.5;
+        for (int a = 0; a < nAllow; a++)
+            if (strcmp(allow[a].where, p->where) == 0) { need = allow[a].floor - 0.005; known++; }
+        if (need >= 4.5 && r < worst) worst = r;
+        if (r < need) {
+            printf("FAIL contrast %s: %s %02X%02X%02X on %02X%02X%02X is %.2f:1 (needs %.2f)\n", name, p->where,
                    GetRValue(fg), GetGValue(fg), GetBValue(fg),
-                   GetRValue(bg), GetGValue(bg), GetBValue(bg), r);
+                   GetRValue(bg), GetGValue(bg), GetBValue(bg), r, (need < 4.5) ? need + 0.005 : 4.5);
             bad++;
         }
     }
-    if (!bad) printf("ok   contrast %s: %d text pairs, lowest %.2f:1\n", name, n, worst);
+    if (!bad) printf("ok   contrast %s: %d text pairs, lowest %.2f:1%s\n", name, n, worst,
+                     known ? ", and the named older pairs at their floors" : "");
     return bad;
 }
 
@@ -1004,12 +1029,15 @@ static int CheckChartTypes(void) {
             if (c->line == text[r] || c->mountain == text[r] ||
                 OnBlendLine(c->bg, text[r], c->line) || OnBlendLine(c->bg, text[r], c->mountain)) on++;
         }
-        BOOL fillOk = OnBlendLine(c->bg, c->line, c->mountain);
+        // Phase 51: the fill is Bloomberg's navy under a white line, no
+        // longer a blend of the line toward the background (its own check is
+        // CheckBloomberg); here it must only be a color of its own.
+        BOOL fillOk = (c->mountain != c->line && c->mountain != c->bg);
         if (on || !fillOk) {
-            printf("FAIL chart types %s: line/mountain on %d text blend line(s), mountain %s Blend(bg, line)\n",
+            printf("FAIL chart types %s: line/mountain on %d text blend line(s), mountain %s a color of its own\n",
                    t ? "light" : "dark", on, fillOk ? "is" : "is NOT");
             bad++;
-        } else printf("ok   chart types %s: mountain = Blend(bg, line), off every text role's blend line\n",
+        } else printf("ok   chart types %s: line and mountain off every text role's blend line\n",
                       t ? "light" : "dark");
     }
     // The axis per type, straight from PriceRangeFor.
@@ -1253,6 +1281,392 @@ static int CheckDeskLine(void) {
     return bad;
 }
 
+// --- Phase 51: the Bloomberg GIP chart area ---
+// The reference is the user's screenshot of Bloomberg's GIP Standard Chart
+// (SPX Index, 1Y, mountain): a black background, a navy fill under a white
+// line, a dotted grid in both directions, a price axis with a line and ticks,
+// and the last price in a white box with a black number.
+
+// The theme's own properties, both tables. HEXRGB prints a COLORREF as
+// RRGGBB, the way the tables and chart.h write colors.
+#define HEXRGB(c) ((unsigned)((GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c)))
+static int CheckBloombergTheme(void) {
+    int bad = 0;
+    const ChartTheme* d = &ChartThemeDark;
+    const ChartTheme* l = &ChartThemeLight;
+#define MINC(c) min(min(GetRValue(c), GetGValue(c)), GetBValue(c))
+#define MAXC(c) max(max(GetRValue(c), GetGValue(c)), GetBValue(c))
+    COLORREF m = d->mountain;
+    BOOL navy = GetRValue(m) <= 0x10 && GetGValue(m) >= 0x10 && GetGValue(m) <= 0x30 &&
+                GetBValue(m) >= 0x28 && GetBValue(m) <= 0x48 && GetBValue(m) > GetGValue(m) &&
+                GetGValue(m) > GetRValue(m);
+    COLORREF lm = l->mountain;
+    BOOL lightBlue = GetRValue(lm) >= 0xC8 && GetBValue(lm) >= GetGValue(lm) &&
+                     GetGValue(lm) >= GetRValue(lm) && GetBValue(lm) - GetRValue(lm) >= 0x10;
+    BOOL ok = d->bg == RGB(0, 0, 0) && MINC(d->line) >= 0xF0 && navy &&
+              MINC(d->stamp) >= 0xF0 && MAXC(d->onStamp) <= 0x10 &&
+              lightBlue && MAXC(l->stamp) <= 0x70 && GetBValue(l->stamp) > GetRValue(l->stamp) &&
+              MINC(l->onStamp) >= 0xF0;
+    if (!ok) {
+        printf("FAIL bloomberg theme: dark bg %06X (want 000000), line %06X (white), mountain %06X (navy), stamp %06X on %06X "
+               "(white, black); light mountain %06X (light blue), stamp %06X on %06X (navy, white)\n",
+               HEXRGB(d->bg), HEXRGB(d->line), HEXRGB(m), HEXRGB(d->stamp), HEXRGB(d->onStamp),
+               HEXRGB(lm), HEXRGB(l->stamp), HEXRGB(l->onStamp));
+        bad++;
+    } else printf("ok   bloomberg theme: black bg, white line on a navy fill, white stamp; light blue fill, navy stamp\n");
+#undef MINC
+#undef MAXC
+    // Pitfall 87 for every line and surface a probe counts, both themes: none
+    // on the blend line from bg to a text color. On black every darker copy
+    // of a text color is on it - the old blends toward the background
+    // (the bars behind the price, the alert line) had to leave it.
+    const ChartTheme* th[2] = { d, l };
+    for (int t = 0; t < 2; t++) {
+        const ChartTheme* c = th[t];
+        const COLORREF text[] = { c->text, c->dim, c->axis, c->up, c->down, c->session, c->prev,
+                                  c->sma, c->ema, c->vwap, c->rsi, c->alert, c->alertText,
+                                  c->onAlert, c->onHot, c->quote, c->onAccent,
+                                  t ? RGB(0x1F, 0x23, 0x28) : RGB(0xFF, 0xFF, 0xFF) };   // the watermark's ink
+        const COLORREF role[] = { c->grid, c->gridDot, c->axisLine, c->cross, c->volUp, c->volDown,
+                                  c->volPaneUp, c->volPaneDown, c->alertLine, c->line, c->mountain };
+        static const char* const NAME[] = { "grid", "gridDot", "axisLine", "cross", "volUp", "volDown",
+                                            "volPaneUp", "volPaneDown", "alertLine", "line", "mountain" };
+        int nt = (int)(sizeof(text) / sizeof(text[0])), on = 0;
+        for (int r = 0; r < (int)(sizeof(role) / sizeof(role[0])); r++)
+            for (int q = 0; q < nt; q++)
+                if (role[r] == text[q] || OnBlendLine(c->bg, text[q], role[r])) {
+                    printf("FAIL bloomberg theme %s: %s %06X lies on the blend line of text color %06X\n",
+                           t ? "light" : "dark", NAME[r], HEXRGB(role[r]), HEXRGB(text[q]));
+                    on++;
+                }
+        // The grid's dots stay weaker than the crosshair's: the dotted line
+        // that follows the hand is the one to read.
+        BOOL weaker = ContrastRatio(c->gridDot, c->bg) < ContrastRatio(c->cross, c->bg);
+        if (!weaker) printf("FAIL bloomberg theme %s: the grid's dots %06X are not weaker than the crosshair %06X\n",
+                            t ? "light" : "dark", HEXRGB(c->gridDot), HEXRGB(c->cross));
+        if (on || !weaker) bad++;
+        else printf("ok   bloomberg theme %s: lines and surfaces off every text blend line, grid dots under the crosshair\n",
+                    t ? "light" : "dark");
+    }
+    return bad;
+}
+
+// The engine's hover box, as ChartDrawBody places it (FALSE: none drawn).
+static BOOL HoverBoxOf(const Scene* sc, RECT* rc) {
+    const ChartRect* g = &sc->g;
+    int n = sc->in.count, dpi = sc->k->dpi;
+    if (sc->st.hoverIdx < 0 || sc->st.hoverIdx >= n) return FALSE;
+    double dc = (sc->st.dispCount < 1.0) ? 1.0 : sc->st.dispCount;
+    double hrel = (double)sc->st.hoverIdx - sc->st.dispStart;
+    if (hrel < 0.0 || hrel >= dc) return FALSE;
+    double slot = (double)g->cw / dc;
+    int hx = g->left + (int)((hrel + 0.5) * slot), hy = sc->st.hoverY;
+    BOOL volPane = g->volBottom > g->bottom, bandOn = g->bandBottom > g->bandTop;
+    BOOL inVol = volPane && hy > g->bottom && hy <= g->volBottom;
+    BOOL inBand = bandOn && hy > (volPane ? g->volBottom : g->bottom);
+    int lo = inBand ? g->bandTop : inVol ? g->volTop : g->top;
+    int hi = inBand ? g->bandBottom : inVol ? g->volBottom : g->bottom;
+    if (hy < lo) hy = lo;
+    if (hy > hi) hy = hi;
+    int rows = 6 + ((sc->st.dispIndF > 0.0) ? 3 : 0) + ((bandOn && sc->st.dispRsiF > 0.0) ? 1 : 0);
+    int boxW = ChartPx(dpi, HOVER_BOX_W), boxH = ChartPx(dpi, 4) + rows * ChartPx(dpi, 13) + ChartPx(dpi, 5);
+    int bx = hx + ChartPx(dpi, 12);
+    if (bx + boxW > g->right) bx = hx - ChartPx(dpi, 12) - boxW;
+    if (bx < g->left) bx = g->left;
+    int by = hy - boxH / 2;
+    if (by + boxH > g->bottom) by = g->bottom - boxH;
+    if (by < g->top) by = g->top;
+    SetRect(rc, bx, by, bx + boxW, by + boxH);
+    return TRUE;
+}
+
+// The dotted grid: a horizontal of single pixels (no two side by side), and
+// verticals of single pixels at the time labels - each over a label, and
+// none on the desktop, which has no time axis to anchor them to.
+static int GridRowDots(const Scene* sc, int y, int* adj) {
+    int n = 0;
+    *adj = 0;
+    for (int x = sc->g.left; x < sc->g.edge; x++) {
+        if (PxAt(sc, x, y) != sc->sty.clr.gridDot) continue;
+        n++;
+        if (x + 1 < sc->g.edge && PxAt(sc, x + 1, y) == sc->sty.clr.gridDot) (*adj)++;
+    }
+    return n;
+}
+
+static int GridColumns(const Scene* sc, int* labeled, int* adjacent, int* inVol) {
+    const ChartRect* g = &sc->g;
+    int cols = 0;
+    *labeled = 0; *adjacent = 0; *inVol = 0;
+    int axisB = ChartPanesBottom(g);
+    for (int x = g->left; x < g->right; x++) {
+        int c = 0, adj = 0;
+        for (int y = g->top + 1; y < g->bottom; y++) {
+            BOOL gridRow = FALSE;
+            for (int i = 0; i <= 4; i++) if (y == g->top + (g->ch * i) / 4) gridRow = TRUE;
+            if (gridRow || PxAt(sc, x, y) != sc->sty.clr.gridDot) continue;
+            c++;
+            if (PxAt(sc, x, y + 1) == sc->sty.clr.gridDot) adj++;
+        }
+        if (c < g->ch / 12) continue;
+        cols++;
+        if (adj) (*adjacent)++;
+        if (!sc->k->desktop &&
+            CountPx(sc, x - 40, axisB + 1, x + 41, sc->s.H, sc->sty.clr.axis, TRUE) > 0) (*labeled)++;
+        if (g->volBottom > g->bottom &&
+            CountPx(sc, x, g->volTop + 1, x + 1, g->volBottom, sc->sty.clr.gridDot, TRUE) > 0) (*inVol)++;
+    }
+    return cols;
+}
+
+static int CheckBloombergGrid(void) {
+    int bad = 0;
+    static const char* const ROWS[] = { "panel_1h_1280x720", "mountain_1h_1280x720", "light_1h_hover",
+                                        "dpi144_1h_1920x1080", "vol_rsi_15m_560x300" };
+    for (int i = 0; i < (int)(sizeof(ROWS) / sizeof(ROWS[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(ROWS[i]))) { printf("FAIL bloomberg grid %s: no scene\n", ROWS[i]); bad++; continue; }
+        int y = sc.g.top + sc.g.ch / 4, adj = 0;
+        int n = GridRowDots(&sc, y, &adj);
+        int want = (sc.g.edge - sc.g.left) / 10;
+        if (n < want || adj) {
+            printf("FAIL bloomberg grid %s: row %d has %d dot pixels (want >= %d), %d side by side (want 0)\n",
+                   ROWS[i], y, n, want, adj);
+            bad++;
+        } else printf("ok   bloomberg grid %s: row %d dotted, %d single pixels\n", ROWS[i], y, n);
+        int labeled, adjacent, inVol;
+        int cols = GridColumns(&sc, &labeled, &adjacent, &inVol);
+        BOOL volWant = sc.g.volBottom > sc.g.bottom;
+        if (cols < 3 || labeled != cols || adjacent || (volWant && inVol != cols)) {
+            printf("FAIL bloomberg grid %s: %d dotted verticals (want >= 3), %d over a time label, %d not dotted, %d through the volume pane\n",
+                   ROWS[i], cols, labeled, adjacent, inVol);
+            bad++;
+        } else printf("ok   bloomberg grid %s: %d dotted verticals, each over its time label%s\n", ROWS[i], cols,
+                      volWant ? " and through the volume pane" : "");
+        SceneClose(&sc);
+    }
+    // The desktop: no time labels, so no verticals.
+    Scene sd;
+    if (!SceneOpen(&sd, FindCase("line_desktop_1920x1080"))) { printf("FAIL bloomberg grid: no scene\n"); return bad + 1; }
+    int labeled, adjacent, inVol;
+    int cols = GridColumns(&sd, &labeled, &adjacent, &inVol);
+    if (cols) { printf("FAIL bloomberg grid desktop: %d verticals without a time axis\n", cols); bad++; }
+    else printf("ok   bloomberg grid desktop: no verticals\n");
+    SceneClose(&sd);
+    return bad;
+}
+
+// The price column as an axis: a line on column edge down each pane, and a
+// tick PX(3) long at each price label drawn. None on the desktop.
+static int CheckBloombergAxis(void) {
+    int bad = 0;
+    static const char* const AX[] = { "panel_1h_1280x720", "ohlc_dpi144_1h", "light_15m_alerts",
+                                      "vol_rsi_15m_560x300", "mountain_1h_1280x720" };
+    for (int i = 0; i < (int)(sizeof(AX) / sizeof(AX[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(AX[i]))) { printf("FAIL bloomberg axis %s: no scene\n", AX[i]); bad++; continue; }
+        const ChartRect* g = &sc.g;
+        COLORREF a = sc.sty.clr.axisLine;
+        int e = g->edge, dpi = sc.k->dpi;
+        int onPrice = CountPx(&sc, e, g->top, e + 1, g->bottom + 1, a, TRUE), wantP = g->bottom - g->top + 1 - 2;
+        int onVol = 0, wantV = 0, onBand = 0, wantB = 0;
+        if (g->volBottom > g->bottom) {
+            onVol = CountPx(&sc, e, g->volTop, e + 1, g->volBottom + 1, a, TRUE);
+            wantV = g->volBottom - g->volTop + 1 - 2;
+        }
+        if (g->bandBottom > g->bandTop) {
+            onBand = CountPx(&sc, e, g->bandTop, e + 1, g->bandBottom + 1, a, TRUE);
+            wantB = g->bandBottom - g->bandTop + 1 - 2;
+        }
+        int ticks = 0, tickLen = ChartPx(dpi, 3);
+        for (int q = 0; q <= 4; q++) {
+            int y = g->top + (g->ch * q) / 4;
+            if (CountPx(&sc, e + 1, y, e + 1 + tickLen, y + 1, a, TRUE) == tickLen) ticks++;
+        }
+        if (onPrice < wantP || onVol < wantV || onBand < wantB || ticks < 2) {
+            printf("FAIL bloomberg axis %s: line %d of %d px in the price pane, %d of %d in the volume pane, %d of %d in the band, %d ticks (want >= 2)\n",
+                   AX[i], onPrice, wantP, onVol, wantV, onBand, wantB, ticks);
+            bad++;
+        } else printf("ok   bloomberg axis %s: the line down every pane, %d ticks\n", AX[i], ticks);
+        SceneClose(&sc);
+    }
+    Scene sd;
+    if (!SceneOpen(&sd, FindCase("line_desktop_1920x1080"))) { printf("FAIL bloomberg axis: no scene\n"); return bad + 1; }
+    int onD = CountPx(&sd, sd.g.edge, 0, sd.g.edge + 1, sd.s.H, sd.sty.clr.axisLine, TRUE);
+    if (onD) { printf("FAIL bloomberg axis desktop: %d px of an axis line\n", onD); bad++; }
+    else printf("ok   bloomberg axis desktop: no axis line\n");
+    SceneClose(&sd);
+    return bad;
+}
+
+// The stamp: white with a black number for the line and the mountain on the
+// panel (navy with a white one in the light theme); up/down with bg for the
+// candles, the bars and every type on the desktop.
+static int CheckBloombergStamp(void) {
+    int bad = 0;
+    static const struct { const char* name; BOOL series; } ST[] = {
+        { "line_1h_1280x720", TRUE }, { "mountain_1h_1280x720", TRUE }, { "line_light_15m_alerts", TRUE },
+        { "mountain_light_1h_hover", TRUE }, { "mountain_dpi144_rsi", TRUE },
+        { "panel_1h_1280x720", FALSE }, { "ohlc_1h_1280x720", FALSE },
+        { "line_desktop_1920x1080", FALSE }, { "mountain_desktop_3840x1600", FALSE },
+    };
+    for (int i = 0; i < (int)(sizeof(ST) / sizeof(ST[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(ST[i].name))) { printf("FAIL bloomberg stamp %s: no scene\n", ST[i].name); bad++; continue; }
+        Marks m;
+        MarksOf(&sc, &m);
+        int n = sc.in.count, dpi = sc.k->dpi;
+        int yl = MarkY(&sc, &m, s_candles[n - 1].close);
+        int half = sc.k->desktop ? DeskPillH(sc.k->H) / 2 : ChartPx(dpi, 8);
+        int x0 = sc.g.edge + 1, x1 = sc.k->W - ChartPx(dpi, AXIS_PAD_R) + ChartPx(dpi, 3);
+        int area = (x1 - x0) * 2 * half;
+        int nS = CountPx(&sc, x0, yl - half, x1, yl + half, sc.sty.clr.stamp, TRUE);
+        int nO = CountPx(&sc, x0, yl - half, x1, yl + half, sc.sty.clr.onStamp, TRUE);
+        int nUD = CountPx(&sc, x0, yl - half, x1, yl + half, sc.sty.clr.up, TRUE) +
+                  CountPx(&sc, x0, yl - half, x1, yl + half, sc.sty.clr.down, TRUE);
+        BOOL ok = ST[i].series ? (nS * 2 >= area && nO > 10 && nUD == 0) : (nUD * 2 >= area);
+        if (!ok) {
+            printf("FAIL bloomberg stamp %s: %d px of stamp color, %d of its text, %d of up/down in %d (want %s)\n",
+                   ST[i].name, nS, nO, nUD, area, ST[i].series ? "the series' white/navy box" : "up/down");
+            bad++;
+        } else printf("ok   bloomberg stamp %s: %s\n", ST[i].name,
+                      ST[i].series ? "the series' box with its number" : "up/down, as before");
+        SceneClose(&sc);
+    }
+    return bad;
+}
+
+// The view's high and low as labels in the chart (panel only). Present beside
+// their points in the plain cases; in every panel case each label - a group
+// of text-colored pixels in the price pane outside the hover box - is clear
+// of the price's marks, the legend, the level names, the alert lines, the
+// hover box, and stays left of the plot's right edge (so off the stamp and
+// the tags in the column).
+static int HiLoWindow(const Scene* sc, BOOL high) {
+    Marks m;
+    MarksOf(sc, &m);
+    const ChartRect* g = &sc->g;
+    int dpi = sc->k->dpi, best = -1;
+    BOOL closes = (sc->k->type == CHART_LINE || sc->k->type == CHART_MOUNTAIN);
+    double bv = 0.0;
+    for (int j = (int)floor(m.dStart); j < m.dStart + m.vc + 1 && j < sc->in.count; j++) {
+        if (j < 0) continue;
+        int x = MarkX(sc, &m, j);
+        if (x < g->left || x >= g->right) continue;
+        double v = closes ? s_candles[j].close : (high ? s_candles[j].high : s_candles[j].low);
+        if (best < 0 || (high ? v > bv : v < bv)) { best = j; bv = v; }
+    }
+    if (best < 0) return 0;
+    int cx = MarkX(sc, &m, best), cy = MarkY(sc, &m, bv);
+    int y0 = high ? cy - ChartPx(dpi, 24) : cy - ChartPx(dpi, 12);
+    int y1 = high ? cy + ChartPx(dpi, 12) : cy + ChartPx(dpi, 24);
+    if (y0 < g->top) y0 = g->top;
+    if (y1 > g->bottom + 1) y1 = g->bottom + 1;
+    return CountPx(sc, cx - ChartPx(dpi, 100), y0, cx + ChartPx(dpi, 100), y1, sc->sty.clr.text, TRUE);
+}
+
+static int CheckBloombergHiLo(void) {
+    int bad = 0;
+    static const char* const PRESENT[] = { "panel_1h_1280x720", "ohlc_1h_1280x720", "line_1h_1280x720",
+                                           "mountain_1h_1280x720", "dpi144_1h_1920x1080", "rsi_light_1h" };
+    for (int i = 0; i < (int)(sizeof(PRESENT) / sizeof(PRESENT[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(PRESENT[i]))) { printf("FAIL bloomberg high/low %s: no scene\n", PRESENT[i]); bad++; continue; }
+        int h = HiLoWindow(&sc, TRUE), l = HiLoWindow(&sc, FALSE);
+        if (h < 10 || l < 10) {
+            printf("FAIL bloomberg high/low %s: %d text px by the high, %d by the low (want >= 10 each)\n", PRESENT[i], h, l);
+            bad++;
+        } else printf("ok   bloomberg high/low %s: labels by the high (%d px) and the low (%d px)\n", PRESENT[i], h, l);
+        SceneClose(&sc);
+    }
+    int labels = 0, cases = 0;
+    for (int i = 0; i < NCASES; i++) {
+        const Case* k = &CASES[i];
+        if (k->desktop) continue;
+        Scene sc;
+        if (!SceneOpen(&sc, k)) { printf("FAIL bloomberg high/low %s: no scene\n", k->name); bad++; continue; }
+        cases++;
+        const ChartRect* g = &sc.g;
+        RECT hb = { 0, 0, 0, 0 };
+        BOOL hasBox = HoverBoxOf(&sc, &hb);
+        RECT box[8];
+        int nb = 0, maxH = ChartPx(k->dpi, 16);
+        for (int y = g->top; y <= g->bottom; y++) {
+            for (int x = g->left; x < g->edge; x++) {
+                if (hasBox && x >= hb.left && x < hb.right && y >= hb.top && y < hb.bottom) continue;
+                if (PxAt(&sc, x, y) != sc.sty.clr.text) continue;
+                int b = 0;
+                for (; b < nb; b++)
+                    if (x >= box[b].left - 12 && x < box[b].right + 12 &&
+                        y >= box[b].top - 16 && y < box[b].bottom + 16 && y + 1 - box[b].top <= maxH) break;
+                if (b == nb) {
+                    if (nb == 8) continue;
+                    SetRect(&box[nb], x, y, x + 1, y + 1);
+                    nb++;
+                } else {
+                    if (x < box[b].left) box[b].left = x;
+                    if (x + 1 > box[b].right) box[b].right = x + 1;
+                    if (y + 1 > box[b].bottom) box[b].bottom = y + 1;
+                }
+            }
+        }
+        if (nb > 2) { printf("FAIL bloomberg high/low %s: %d text groups in the price pane (want <= 2)\n", k->name, nb); bad++; }
+        for (int b = 0; b < nb; b++) {
+            labels++;
+            const RECT* r = &box[b];
+            int marks;
+            if (k->type == CHART_LINE || k->type == CHART_MOUNTAIN)
+                marks = CountPx(&sc, r->left, r->top, r->right, r->bottom, sc.sty.clr.line, TRUE);
+            else
+                marks = CountPx(&sc, r->left, r->top, r->right, r->bottom, sc.sty.clr.up, TRUE) +
+                        CountPx(&sc, r->left, r->top, r->right, r->bottom, sc.sty.clr.down, TRUE);
+            int others = 0;
+            const COLORREF oc[] = { sc.sty.clr.sma, sc.sty.clr.ema, sc.sty.clr.vwap, sc.sty.clr.session,
+                                    sc.sty.clr.prev, sc.sty.clr.alertLine, sc.sty.clr.stamp };
+            for (int q = 0; q < (int)(sizeof(oc) / sizeof(oc[0])); q++)
+                others += CountPx(&sc, r->left, r->top, r->right, r->bottom, oc[q], TRUE);
+            RECT grown = hb, tmp;
+            InflateRect(&grown, 1, 1);
+            BOOL onBox = hasBox && IntersectRect(&tmp, r, &grown);
+            if (marks || others || onBox || r->right > g->right) {
+                printf("FAIL bloomberg high/low %s: label at %d,%d-%d,%d has %d px of the price's marks, %d of the legend,"
+                       " levels, alert lines or stamp, %s the hover box, right edge %d (plot ends at %d)\n",
+                       k->name, r->left, r->top, r->right, r->bottom, marks, others, onBox ? "touches" : "clear of",
+                       r->right, g->right);
+                bad++;
+            }
+        }
+        SceneClose(&sc);
+    }
+    if (!bad) printf("ok   bloomberg high/low: %d labels in %d panel cases, none struck or covering\n", labels, cases);
+    return bad;
+}
+
+// The black background everywhere the dark theme draws: not one pixel of the
+// old 0D1117 left, and the navy under the mountain's line.
+static int CheckBloombergBg(void) {
+    int bad = 0;
+    static const char* const BG[] = { "panel_1h_1280x720", "mountain_1h_1280x720", "rsi_1h_band_hover",
+                                      "desktop_1m_1920x1080", "line_desktop_3840x1600" };
+    for (int i = 0; i < (int)(sizeof(BG) / sizeof(BG[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(BG[i]))) { printf("FAIL bloomberg bg %s: no scene\n", BG[i]); bad++; continue; }
+        int old = CountPx(&sc, 0, 0, sc.s.W, sc.s.H, RGB(0x0D, 0x11, 0x17), TRUE);
+        int blk = CountPx(&sc, 0, 0, sc.s.W, sc.s.H, RGB(0, 0, 0), TRUE);
+        if (old || blk * 4 < sc.s.W * sc.s.H) {
+            printf("FAIL bloomberg bg %s: %d px of the old 0D1117, %d of black in %d\n", BG[i], old, blk, sc.s.W * sc.s.H);
+            bad++;
+        } else printf("ok   bloomberg bg %s: black, none of the old background\n", BG[i]);
+        SceneClose(&sc);
+    }
+    return bad;
+}
+
+static int CheckBloomberg(void) {
+    return CheckBloombergTheme() + CheckBloombergBg() + CheckBloombergGrid() + CheckBloombergAxis() +
+           CheckBloombergStamp() + CheckBloombergHiLo();
+}
+
 // --- Phase 49: draw time per type (--perf, not part of the run) ---
 // TickC's whole buffer, 6000 1m candles, all in view at 3840x1600 - the
 // densest frame the app can draw - once as a panel with the volume pane and
@@ -1313,10 +1727,13 @@ int main(int argc, char** argv) {
     if (!update && s_goldCount == 0) printf("no goldens in %s - run with --update\n", goldPath);
 
     unsigned long long hashes[NCASES] = { 0 };
-    int contrastFails = CheckContrast(&ChartThemeLight, "light") + CheckPriceFloor() +
+    int contrastFails = CheckContrast(&ChartThemeLight, "light", NULL, 0) +
+                        CheckContrast(&ChartThemeDark, "dark", DARK_ALLOW,
+                                      (int)(sizeof(DARK_ALLOW) / sizeof(DARK_ALLOW[0]))) +
+                        CheckPriceFloor() +
                         CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms() +
                         CheckGhostRank() + CheckGhostRow() + CheckLegendAlert() + CheckVolTag() +
-                        CheckLevelLabels() + CheckChartTypes() + CheckDeskLine();
+                        CheckLevelLabels() + CheckChartTypes() + CheckDeskLine() + CheckBloomberg();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -1384,6 +1801,6 @@ int main(int argc, char** argv) {
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
     if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis, hover time, time forms,\n"
-                              "ghost rank and row, legend alert, volume tag, level labels, chart types)\n", contrastFails);
+                              "ghost rank and row, legend alert, volume tag, level labels, chart types, bloomberg)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }

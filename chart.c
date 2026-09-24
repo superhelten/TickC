@@ -1116,6 +1116,11 @@ const ChartTheme ChartThemeDark = {
     CLR_BTNHOT,    // onAccent: white
     CLR_LINE,      // line (phase 49)
     CLR_MOUNTAIN,  // mountain
+    // Phase 51, not drawn yet: the grid, the axis and the stamp as they are.
+    CLR_GRID,      // gridDot
+    CLR_GRID,      // axisLine
+    CLR_UP,        // stamp
+    CLR_BG,        // onStamp
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -1170,6 +1175,10 @@ const ChartTheme ChartThemeLight = {
     RGB(0xFF, 0xFF, 0xFF),   // onAccent   6.5 on the accent
     RGB(0x1B, 0x36, 0x5D),   // line       phase 49: deep navy, 11.6 on bg
     RGB(0xDA, 0xDE, 0xE4),   // mountain   Blend(bg, line, 36)
+    RGB(0xE8, 0xEA, 0xEE),   // gridDot    phase 51, not drawn yet
+    RGB(0xE8, 0xEA, 0xEE),   // axisLine
+    RGB(0x08, 0x80, 0x5A),   // stamp
+    RGB(0xFA, 0xFA, 0xFB),   // onStamp
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -2621,6 +2630,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // apart in the middle of an animation.
 #ifdef TICKER_PROBE
     st->probeCrossTag = 0;
+    st->probeHiLoMask = 0;   // phase 51: no high/low labels yet
 #endif
     if (st->hoverIdx < 0 || st->hoverIdx >= n) return;
     double hrel = (double)st->hoverIdx - dStart;

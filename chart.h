@@ -64,8 +64,9 @@ typedef struct {
     // Test build only: what the last ChartDrawBody measured. 45: the session
     // blocks (us), 56: yesterday (us), 39: the averages (us), 57: bitmask of
     // level labels drawn, 58: crosshair tag drawn, 59: the label block (us).
+    // Phase 51: bit 0 the view's high label drawn, bit 1 the low's.
     LONGLONG probeSessUs, probePrevUs, probeIndUs, probeLblUs;
-    int      probeLblMask, probeCrossTag;
+    int      probeLblMask, probeCrossTag, probeHiLoMask;
 #endif
 } ChartState;
 
@@ -130,6 +131,13 @@ typedef struct {
     // probe can count it (see CLR_LINE). Last in the struct, so the tables'
     // positional initializers keep their order.
     COLORREF line, mountain;
+    // Phase 51: the Bloomberg GIP chart area. gridDot is the dotted grid
+    // (grid stays the solid rules: the lines between panes, and the
+    // desktop's grid); axisLine the price column's axis line and its ticks;
+    // stamp and onStamp the last-price stamp of the line and the mountain,
+    // which takes the series' color on Bloomberg, where the candles and the
+    // bars keep up/down with bg on it.
+    COLORREF gridDot, axisLine, stamp, onStamp;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
