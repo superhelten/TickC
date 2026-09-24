@@ -2589,6 +2589,7 @@ static void RequestHistory(AppContext* ctx) {
 
 #define OVL_ROWS_MAX  20    // phase 49: 16 until the chart types' four rows
 #define OVL_ROW_H     22
+#define OVL_ROW_MIN   16    // phase 49: the settings menu's rows on a low panel
 #define OVL_COL_W     104
 #define OVL_PAD       10
 #define OVL_HDR_H     18
@@ -2664,14 +2665,23 @@ static void OverlayLayout(int W, int H, OverlayRects* r) {
         ToolbarLayout(W, tb);
         const RECT* a = &tb[TBAR_GEAR];
         if (a->right > a->left) {
-            const int pad = Dp(OVL_DD_PAD), rowH = Dp(OVL_ROW_H), hdrH = Dp(OVL_HDR_H), bw = Dp(OVL_SET_W);
+            const int pad = Dp(OVL_DD_PAD), hdrH = Dp(OVL_HDR_H), bw = Dp(OVL_SET_W);
             int bx = a->right - bw, by = a->bottom + Dp(2);
             if (bx < 0) bx = 0;
-            // Phase 49: a third section, CHART TYPE, with a row per type.
-            // 45 + 238 px at 96 dpi: a panel lower than 283 px cuts the
-            // last rows off, as the box is cut at H (C and the tray menu
-            // still reach them).
-            int bh = pad * 2 + hdrH * 3 + (SET_COUNT + CHART_TYPE_COUNT) * rowH;
+            // Phase 49: a third section, CHART TYPE, with a row per type -
+            // 45 + 238 px at 96 dpi, more than a panel lower than 283 px
+            // has under the gear. There the rows share the room, down to
+            // OVL_ROW_MIN (17 px at the 250 px minimum, where the 11 px
+            // font and the 11 px box still fit), so every row stays in the
+            // menu; below that the box is cut at H, as before.
+            const int nRows = SET_COUNT + CHART_TYPE_COUNT;
+            int rowH = Dp(OVL_ROW_H);
+            int room = H - by - pad * 2 - hdrH * 3;
+            if (nRows * rowH > room) {
+                rowH = room / nRows;
+                if (rowH < Dp(OVL_ROW_MIN)) rowH = Dp(OVL_ROW_MIN);
+            }
+            int bh = pad * 2 + hdrH * 3 + nRows * rowH;
             if (by + bh > H) bh = H - by;
             r->box.left = bx; r->box.top = by;
             r->box.right = bx + bw; r->box.bottom = by + bh;
