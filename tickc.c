@@ -5103,6 +5103,15 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // frame, bit 0 the high, bit 1 the low (the engine's
                 // probeHiLoMask).
                 case 94: r = g_Ctx.ch.probeHiLoMask; break;
+                // 95-97 (phase 52): the last frame's statistics box (its
+                // rows, bit 7 the upper-left corner), the time axis's two
+                // rows (form, unit, separators, coarse labels) and the
+                // volume pane (series color, average line, framed legend,
+                // tag) - the engine's probeLegendMask, probeTimeAxis and
+                // probeVolMask, see chart.h.
+                case 95: r = g_Ctx.ch.probeLegendMask; break;
+                case 96: r = g_Ctx.ch.probeTimeAxis; break;
+                case 97: r = g_Ctx.ch.probeVolMask; break;
                 case 86: {
                     RECT rcS;
                     GetClientRect(hwnd, &rcS);

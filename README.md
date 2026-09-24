@@ -2,12 +2,12 @@
 
 A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
 Two source files. No runtime, no installer, no dependencies beyond what ships with Windows.
-The whole thing compiles to a single exe of about 256 KB.
+The whole thing compiles to a single exe of about 263 KB.
 
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
 
-![The chart panel: the quote line, the mountain on black, SMA 20, EMA 50, VWAP, the day levels, the view's high and low, and the volume pane](docs/images/panel.png)
+![The chart panel: the quote line, the mountain on black with the statistics box, SMA 20, EMA 50, VWAP, the day levels, the view's high and low, the steel-blue volume pane with its average line, and the two-row time axis](docs/images/panel.png)
 
 ## What it does
 
@@ -23,6 +23,12 @@ PDH, PDL, PDC).
 - **The Bloomberg look,** after the terminal's GIP chart: a black background, a white line over
 a navy fill, a dotted grid, a price axis with a tick at each label, a white box for the last
 price of the line and the mountain, and the view's high and low marked `H` and `L` by their points.
+A statistics box in the corner of the price pane lists Last Price, the high and the low with their
+dates, the average, and SMA, EMA and VWAP when they're on; it moves to the other left corner when
+the price is in the way, and drops rows on a small panel. For the line and the mountain the volume
+bars are steel blue, and a 20-bar average of the volume runs over the bars as a line. The time
+axis has two rows, like Bloomberg's (days over the month, months over the year), and the axis
+numbers are in Arial.
 - **Four chart types,** as in Bloomberg: candles, OHLC bars, a line of the closes, and a
 mountain (the line with the area under it filled). Pick one under CHART TYPE in the gear
 menu, step through them with `C`, or use "Chart type" in the tray menu. The panel and

@@ -67,6 +67,16 @@ typedef struct {
     // Phase 51: bit 0 the view's high label drawn, bit 1 the low's.
     LONGLONG probeSessUs, probePrevUs, probeIndUs, probeLblUs;
     int      probeLblMask, probeCrossTag, probeHiLoMask;
+    // Phase 52. probeLegendMask: the statistics box's rows drawn, bit 0
+    // Last Price, 1 High, 2 Average, 3 Low, 4 SMA, 5 EMA, 6 VWAP, and bit 7
+    // set when the box stands in the upper-left corner (0 = no box).
+    // probeTimeAxis: the time axis's two rows - the fine row's form (bits
+    // 0-3, CHART_TROW_*), the coarse row's unit (bits 4-7, CHART_TUNIT_*),
+    // the separators drawn (bits 8-15) and the coarse labels drawn (bits
+    // 16-23). probeVolMask: the volume pane - bit 0 the bars in the series'
+    // one color, bit 1 the volume's average line, bit 2 the framed legend,
+    // bit 3 the value tag.
+    int      probeLegendMask, probeTimeAxis, probeVolMask;
 #endif
 } ChartState;
 
@@ -138,12 +148,18 @@ typedef struct {
     // which takes the series' color on Bloomberg, where the candles and the
     // bars keep up/down with bg on it.
     COLORREF gridDot, axisLine, stamp, onStamp;
-    // fillCell: the cell a level name or the averages' legend stands on
-    // where the mountain's fill covers it. The dark theme's navy carries
+    // fillCell: the cell a level name (until phase 52 also the averages'
+    // one-line legend) stands on where the mountain's fill covers it. The dark theme's navy carries
     // every such text at 4.5:1 (the cell is the fill itself, and only cuts
     // the lines through the text); the light fill does not, so there it is
     // the background, as in phase 49.
     COLORREF fillCell;
+    // Phase 52: the volume pane of the line and the mountain, Bloomberg's
+    // one series color: the bars, the legend's swatch and the value tag's
+    // surface (volSeries), and the number on that tag (onVolSeries). The
+    // candles and the OHLC bars keep up/down bars, as they keep the up/down
+    // stamp (phase 51).
+    COLORREF volSeries, onVolSeries;
 } ChartTheme;
 
 extern const ChartTheme ChartThemeDark;    // the CLR_ values; TickC's look
@@ -195,6 +211,12 @@ typedef struct {
 //
 // AXIS_PAD_R also stays above RESIZE_BORDER, so no digit stands in the zone
 // where the pointer becomes a resize arrow.
+// Phase 52: the panel's axis font is Arial (see ChartStyleCreate), whose
+// digits are 8 px (13 at 144 dpi, 17 at 192) and tabular. The column keeps
+// its width in Lucida's cells - the header's layout and every hit test stay
+// where they were - and the room it gains goes to a ninth character: a
+// six-digit price with its cents, "112345.67", is 68 px in 72, where Lucida
+// had to drop to whole dollars. The desktop keeps Lucida (DeskAxisW).
 #define AXIS_Y_CHARS     8
 #define AXIS_CHAR_W      9
 #define AXIS_LBL_GAP     4
@@ -215,14 +237,35 @@ typedef struct {
 // high (tmHeight), so 18 px gives text from bottom + 2 to bottom + 17 = H - 1
 // without touching the row y = bottom, where the lowest wick and the bottom
 // grid line stand (the clip is inclusive there, see DrawChart).
-#define PAD_B            18
+// Phase 52: two rows (see TIME_ROW_*) of Arial's 17 px cell, 34 px: the fine
+// row's cell from bottom + 1, the coarse row's from bottom + 16 to bottom +
+// 32. At 144 and 192 dpi the cells are 26 and 35 px in 51 and 68 (checked in
+// tests/chart_golden.c). The price pane pays the 16 px: 400x250 keeps 126 px
+// of price with the volume pane, over PRICE_PANE_MIN.
+#define PAD_B            34
 // Minimum distance between two time labels. Used as
 // max(TIME_DX_MIN, label width + TIME_LBL_GAP), the width the widest label
 // the axis can show (ChartTimeLabelW). Until phase 45 1h and 4h wrote
 // "MM-DD HH:MM", 99 px in the axis font; now every intraday label is "HH:MM"
-// or, where a day begins, "21 Sep" - 54 px, so 80 rules.
+// or, where a day begins, "21 Sep" - 54 px, so 80 rules. Phase 52: the fine
+// row's widest is "00:00", 36 px in Arial; 80 still rules.
 #define TIME_DX_MIN      80
 #define TIME_LBL_GAP     12
+// The time axis's two rows (phase 52, Bloomberg's "Dec | 2021 2022"): the
+// fine row's form, and the coarse row's unit, whose name stands centered in
+// each span it has in view with a separator where it changes.
+#define CHART_TROW_CLOCK   0   // "14:35"; the coarse row names the day
+#define CHART_TROW_DAY     1   // "21"; the coarse row names the month
+#define CHART_TROW_MONTH   2   // "Sep"; the coarse row names the year
+#define CHART_TROW_YEAR    3   // "2026"; no coarse row
+#define CHART_TUNIT_NONE   0
+#define CHART_TUNIT_DAY    1   // "21 Sep"
+#define CHART_TUNIT_MONTH  2   // "Sep 2026"
+#define CHART_TUNIT_YEAR   3   // "2026"
+// The rows' text cells: the fine row's top TIME_ROW_TOP under the lowest
+// pane's bottom row, the coarse row's TIME_ROW_PITCH under it.
+#define TIME_ROW_TOP       1
+#define TIME_ROW_PITCH     15
 // The hover box's width. Its time row is "21 Sep 14:35" on intraday
 // intervals (phase 45); tests/chart_golden.c measures that it fits.
 #define HOVER_BOX_W      104
@@ -260,8 +303,9 @@ typedef struct {
 // placed first (it is opted into and has nowhere else to go); the volume
 // gets its pane only when the price keeps PRICE_PANE_MIN, and otherwise
 // stands behind the candles as before, in VOL_FRAC of the price pane. Only
-// the smallest panels with RSI on do that: 400x250 keeps 142 px of price
-// with one pane and would get 96 with two.
+// the smallest panels with RSI on do that: 400x250 keeps 126 px of price
+// with one pane and would get about 80 with two (phase 52's two-row time
+// axis took 16 px of both).
 #define VOL_FRAC         0.22
 #define VOL_PANE_FRAC    0.20
 #define VOL_PANE_MIN     40
@@ -294,7 +338,7 @@ typedef struct {
 // price pane with its own fixed 0..100 scale and the 70/30 levels dashed. The
 // band is RSI_BAND_FRAC of the chart height, at least RSI_BAND_MIN, and it is
 // left out when the price pane would get less than PRICE_PANE_MIN - a 400x250
-// panel keeps 142 px of price. Teal: not green (up), not a blue or violet of
+// panel keeps 126 px of price. Teal: not green (up), not a blue or violet of
 // the averages, not a gold or amber of VWAP and the alerts.
 // PANE_GAP is the space above every pane under the price (phase 43: the
 // volume pane's too).
@@ -427,6 +471,32 @@ typedef struct {
 // bars keep the up/down stamp, and so does every type on the desktop.
 #define CLR_STAMP          RGB(0xFF, 0xFF, 0xFF)
 #define CLR_ON_STAMP       RGB(0x00, 0x00, 0x00)
+// The volume pane of the line and the mountain (phase 52): GIP's steel
+// blue, sampled from the screenshot - the legend's swatch and the value tag
+// are solid there (637DA0 and 657FA7; the thin bars are resampled toward the
+// black gaps between them). The tag carries a black number, as the stamp
+// does: 4.97:1.
+#define CLR_VOL_SERIES     RGB(0x63, 0x7D, 0xA0)
+#define CLR_ON_VOL_SERIES  RGB(0x00, 0x00, 0x00)
+
+// The statistics box (phase 52), Bloomberg's legend: framed in boxEdge on the
+// box surface, LGD_INSET_X inside the plot's left edge and LGD_INSET_Y from
+// the price pane's bottom (or top), rows LGD_ROW_H apart under a LGD_PAD_T
+// top and over a LGD_PAD_B bottom margin, each with a LGD_SWATCH square or
+// glyph LGD_PAD_X inside the frame. The box takes at most LGD_MAX_PCT of the
+// plot's width and of the price pane's height; see ChartDrawBody for what
+// gives way first. The volume legend is the same frame, LGD_VOL_INSET inside
+// the volume pane's corner. VOL_MA_PERIOD: the volume's average line.
+#define LGD_INSET_X        6
+#define LGD_INSET_Y        4
+#define LGD_ROW_H          15
+#define LGD_PAD_T          3
+#define LGD_PAD_B          4
+#define LGD_PAD_X          5
+#define LGD_SWATCH         9
+#define LGD_MAX_PCT        50
+#define LGD_VOL_INSET      3
+#define VOL_MA_PERIOD      20
 
 // Batches for PolyPolygon / Polyline; see chart.c.
 #define VOL_BATCH 256
@@ -459,6 +529,15 @@ void      PriceRange(const Candle* candles, int vs, int vc, double* outMin, doub
 // with the same ChartState.chartType the frame is drawn with.
 void      PriceRangeFor(const Candle* candles, int vs, int vc, int chartType, double* outMin, double* outMax);
 double    VolumeMax(const Candle* candles, int vs, int vc);
+// Phase 52: the view's statistics, as the statistics box and the high and
+// low labels show them - over the candles whose middle is in the plot
+// (cw pixels wide, the display dStart/dCount), in the prices the axis
+// scales on for the chart type (high and low for the candles and the bars,
+// the close for the line and the mountain). avg is the mean CLOSE of the
+// same candles, for every type. FALSE when no candle's middle is in view.
+typedef struct { int iHigh, iLow, count; double high, low, avg; } ChartViewStat;
+BOOL      ChartViewStats(const Candle* candles, int n, double dStart, double dCount, int cw,
+                         int chartType, ChartViewStat* out);
 void      ApplyFrontShift(ChartState* st, long long frontShift);
 void      SyncDisp(ChartState* st, const Candle* candles, int n);
 
@@ -477,11 +556,14 @@ BOOL      RsiValueAt(const Candle* c, int n, int idx, double* out);
 int       PriceDecimals(double step);
 void      FormatSpan(int vc, long long intervalMs, wchar_t* out, size_t cch);
 // A moment as a clock (phase 45): "HH:MM" local under 1 day, the UTC date
-// "YYYY-MM-DD" from 1 day up. The chart's own labels go through the same
-// helper in chart.c, with the date where a day begins.
+// "YYYY-MM-DD" from 1 day up. The hover box and the statistics box use the
+// same helper in chart.c with the date; the time axis has its own two rows
+// (phase 52).
 void      FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffsetMs, wchar_t* out, size_t cch);
 // The widest time-axis label for the interval in the font selected into hdc
-// (phase 45): the spacing of the labels is measured on it.
+// (phase 45): the spacing of the labels is measured on it. Phase 52: the
+// fine row's forms - a clock under 1 day, the day, every month's name, the
+// year.
 int       ChartTimeLabelW(HDC hdc, long long intervalMs);
 long long ChartUtcOffsetMs(void);
 void      FormatVolume(double v, wchar_t* out, size_t cch);

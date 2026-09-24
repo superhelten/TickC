@@ -63,7 +63,7 @@ typedef struct {
     // 0 as `alerts` puts it, 1 ghostDy px from alert 0's row, 2 ghostDy px
     // from the stamp's row, 3 the first row from a third down whose rounded
     // price lies 3 px or more away, 4 no ghost and alert 0 on the legend's
-    // middle row, 5 ghostDy px from the price pane's bottom row. loudLast:
+    // middle row (phase 52: in the statistics box), 5 ghostDy px from the price pane's bottom row. loudLast:
     // the last candle has 50 times its volume.
     double base;
     int  ghost, ghostDy;
@@ -130,8 +130,13 @@ static const Case CASES[] = {
     // and the averages, where the hover box (139 px) is taller than the price
     // pane (126 px): the box keeps out of the header and hangs into the pane
     // below.
-    { "vol_1h_gap_hover",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 568, FALSE,  96, FALSE, FALSE },
-    { "vol_rsi_15m_290_hover",   560, 290, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0, 280, 107, FALSE,  96, FALSE, TRUE },
+    // Phase 52: the two-row time band (PAD_B 34) moves the panes up 16 px:
+    // the price pane ends at 552 and the volume pane begins at 558, so the
+    // gap's pointer is 555; and the panel with both panes and a 126 px price
+    // pane is 306 px high now (290 would drop the volume pane behind the
+    // candles), hence the case's new name.
+    { "vol_1h_gap_hover",       1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 555, FALSE,  96, FALSE, FALSE },
+    { "vol_rsi_15m_306_hover",   560, 306, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0, 280, 107, FALSE,  96, FALSE, TRUE },
     // Phase 46: the axis column's rank and the rows. The pointer in the price
     // column 12 px under an alert (outside its 8 px hit zone) and 10 px over
     // the stamp; a 15 dollar symbol with 12 candles, where one cent is ~50 px
@@ -280,8 +285,10 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base, ChartState*
         } else if (k->ghost == 5) {
             in.axisHotY = g.bottom + ChartPx(k->dpi, k->ghostDy);
         } else if (k->ghost == 4) {
-            // The legend's text starts 4 px under the top and is 15 px tall.
-            alerts[0] = AlertPriceAtY(&st, &g, g.top + ChartPx(k->dpi, 4) + ChartPx(k->dpi, 7));
+            // Phase 52: the legend is the statistics box, in the upper-left
+            // corner here (the price enters the lower-left); 40 px under the
+            // pane's top is among its rows. CheckLegendAlert checks that.
+            alerts[0] = AlertPriceAtY(&st, &g, g.top + ChartPx(k->dpi, 40));
             in.axisHotY = -1;
             in.alertFlashF = 0.0;
         }
@@ -447,9 +454,6 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     CP("axis labels",             axis,      bg),
     CP("RSI value tag",           rsi,       box),
     CP("RSI legend",              rsi,       bg),
-    CP("SMA legend",              sma,       bg),
-    CP("EMA legend",              ema,       bg),
-    CP("VWAP legend",             vwap,      bg),
     CP("today's level labels",    session,   bg),
     CP("yesterday's level labels",prev,      bg),
     CP("hover box text",          text,      box),
@@ -489,9 +493,17 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     // on the theme's fillCell (the navy in the dark theme, bg in the light).
     CP("today's level names on fill", session, fillCell),
     CP("yesterday's names on fill",   prev,    fillCell),
-    CP("SMA legend on fill",      sma,       fillCell),
-    CP("EMA legend on fill",      ema,       fillCell),
-    CP("VWAP legend on fill",     vwap,      fillCell),
+    // Phase 52: the averages' one-line legend is gone into the statistics
+    // box, where the rows are text on the box and the colors are squares;
+    // its pairs on bg and on the fill went with it.
+    // Phase 52: the statistics box and the volume legend are framed boxes on
+    // the box surface (Bloomberg's), their text in the text color and the
+    // high/average/low glyphs in the axis color; the volume tag of the line
+    // and the mountain carries its number on the series' steel blue.
+    CP("statistics box text",     text,      box),
+    CP("statistics box glyphs",   axis,      box),
+    CP("volume legend box",       text,      box),
+    CP("volume tag, line/mountain", onVolSeries, volSeries),
 };
 
 // Phase 51: the dark theme is checked too. Its pairs on the box surface are
@@ -732,6 +744,50 @@ static int CountPx(const Scene* sc, int x0, int y0, int x1, int y1, COLORREF c, 
     return n;
 }
 
+// Phase 52: the 1 px frames of color edge whose top left corner lies in
+// [x0, x1) x [y0, y1) - the statistics box and the volume legend are framed
+// in boxEdge, as the hover box is. A corner is an edge pixel with edge to its
+// right and below and none to its left and above; the frame's width and
+// height are its top row's and left column's runs, and its bottom row and
+// right column must be mostly edge too (a hover box drawn over part of it
+// leaves most). Crosshair tags are solid boxEdge, but they stand in the price
+// column, outside every range the checks scan.
+static COLORREF PxOr(const Scene* sc, int x, int y) {
+    if (x < 0 || y < 0 || x >= sc->s.W || y >= sc->s.H) return (COLORREF)-1;
+    return PxAt(sc, x, y);
+}
+
+static int FindFrames(const Scene* sc, int x0, int y0, int x1, int y1, COLORREF edge, RECT* out, int max) {
+    int n = 0, minW = ChartPx(sc->k->dpi, 24), minH = ChartPx(sc->k->dpi, 12);
+    for (int y = y0; y < y1 && n < max; y++)
+        for (int x = x0; x < x1 && n < max; x++) {
+            if (PxOr(sc, x, y) != edge || PxOr(sc, x + 1, y) != edge || PxOr(sc, x, y + 1) != edge) continue;
+            if (PxOr(sc, x - 1, y) == edge || PxOr(sc, x, y - 1) == edge) continue;
+            int w = 0, h = 0;
+            while (PxOr(sc, x + w, y) == edge) w++;
+            while (PxOr(sc, x, y + h) == edge) h++;
+            if (w < minW || h < minH) continue;
+            int bot = CountPx(sc, x, y + h - 1, x + w, y + h, edge, TRUE);
+            int rgt = CountPx(sc, x + w - 1, y, x + w, y + h, edge, TRUE);
+            if (bot * 10 < w * 6 || rgt * 10 < h * 6) continue;
+            SetRect(&out[n++], x, y, x + w, y + h);
+        }
+    return n;
+}
+
+// The statistics box: the frame in the price pane whose left edge stands
+// PX(6) inside the plot's left edge (the hover box, the other frame there,
+// is clamped to the edge itself). FALSE when there is none.
+static BOOL LegendBoxOf(const Scene* sc, RECT* rc) {
+    RECT fr[8];
+    const ChartRect* g = &sc->g;
+    int x = g->left + ChartPx(sc->k->dpi, 6);
+    int n = FindFrames(sc, x, g->top, x + 1, g->bottom + 1, sc->sty.clr.boxEdge, fr, 8);
+    for (int i = 0; i < n; i++)
+        if (fr[i].bottom <= g->bottom + 1) { *rc = fr[i]; return TRUE; }
+    return FALSE;
+}
+
 // F2: the ghost tag - the price a click would set - has a place in the
 // column's rank. 12 px under an alert, the alert keeps its surface and loses
 // its number (the phase 29 rule for the crosshair tag): the strip of the
@@ -812,41 +868,25 @@ static int CheckGhostRow(void) {
     return bad;
 }
 
-// F8: an alert line through the indicator legend. The legend is opaque over
-// it, as over the level lines: on the alert's row, under the legend, no line.
-static int CheckLegendAlert(void) {
-    int bad = 0;
-    Scene sc;
-    if (!SceneOpen(&sc, FindCase("legend_alert_row"))) { printf("FAIL legend alert: no scene\n"); return 1; }
-    int ya = AlertY(&sc.st, &sc.g, fabs(sc.in.alerts[0]));
-    int x0 = sc.g.left + ChartPx(sc.k->dpi, 6);
-    int n = CountPx(&sc, x0, ya, x0 + ChartPx(sc.k->dpi, 200), ya + 1, sc.sty.clr.alertLine, TRUE);
-    int beyond = CountPx(&sc, sc.g.right - ChartPx(sc.k->dpi, 200), ya, sc.g.right, ya + 1, sc.sty.clr.alertLine, TRUE);
-    if (n || beyond == 0) {
-        printf("FAIL legend alert: %d px of the alert line (row %d) through the legend, %d px beyond it\n", n, ya, beyond);
-        bad++;
-    } else printf("ok   legend alert: the line (row %d) stops at the legend, %d px of it beyond\n", ya, beyond);
-    SceneClose(&sc);
-    return bad;
-}
-
 // F6: the last candle is out of view and louder than every visible one. Its
 // value tag would be pinned to the pane's top, where no bar is; the stamp's
 // rule says not drawn. Control: the same candle in view, where its bar
 // reaches the top and the tag belongs there.
+// Phase 52: the tag is filled with the bars' color, not the box: anything
+// but the background in its rows is the tag.
 static int CheckVolTag(void) {
     int bad = 0;
     Scene sc;
     if (!SceneOpen(&sc, FindCase("vol_loud_last_panned"))) { printf("FAIL volume tag: no scene\n"); return 1; }
     int x0 = sc.g.edge + 1, x1 = sc.axR + ChartPx(sc.k->dpi, 3);
-    int n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.box, TRUE);
+    int n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.bg, FALSE);
     if (n) { printf("FAIL volume tag: %d px of a tag at the pane's top for a candle out of view\n", n); bad++; }
     else printf("ok   volume tag: none for a louder last candle out of view\n");
     SceneClose(&sc);
     Case live = *FindCase("vol_loud_last_panned");
     live.view = 300; live.back = 0;
     if (!SceneOpen(&sc, &live)) { printf("FAIL volume tag: no scene\n"); return bad + 1; }
-    n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.box, TRUE);
+    n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.bg, FALSE);
     if (!n) { printf("FAIL volume tag (control): no tag for the loud last candle in view\n"); bad++; }
     else printf("ok   volume tag (control): the loud last candle in view keeps its tag (%d px)\n", n);
     SceneClose(&sc);
@@ -918,8 +958,17 @@ static int CheckLevelLabels(void) {
                 }
             }
         }
+        RECT lbN = { 0, 0, 0, 0 };
+        BOOL hasLbN = LegendBoxOf(&sc, &lbN);
         for (int b = 0; b < nb; b++) {
             labels++;
+            // Phase 52: a name gives way to the statistics box.
+            RECT tmpN;
+            if (hasLbN && IntersectRect(&tmpN, &box[b], &lbN)) {
+                printf("FAIL level labels %s: the label at %d,%d-%d,%d is on the statistics box\n", k->name,
+                       box[b].left, box[b].top, box[b].right, box[b].bottom);
+                bad++;
+            }
             // Phase 49: the marks of the case's chart type. The candles and
             // the OHLC bars are up and down; the line and the mountain are
             // the line - and the mountain's fill must not show inside a
@@ -1210,39 +1259,38 @@ static int CheckChartTypes(void) {
         }
         SceneClose(&sc);
     }
-    // The averages' legend over the mountain stands on the background: in
-    // the legend's box, no fill. Precondition (pitfall 127): the line rises
-    // into the legend's rows under the legend's columns - closes drawn above
-    // the legend's bottom, so without the rule the fill would be in the box.
-    {
+    // Phase 52: the averages' legend is a row of the statistics box, which is
+    // opaque: over the mountain, no fill inside the box. Precondition (pitfall
+    // 127): the fill reaches into the box - closes under its columns are
+    // drawn above its bottom, so without the box the fill would be there. In
+    // every panel mountain case where that holds; it must hold in one.
+    int onFill = 0;
+    for (int i = 0; i < NCASES; i++) {
+        if (CASES[i].type != CHART_MOUNTAIN || CASES[i].desktop) continue;
         Scene sc;
-        if (!SceneOpen(&sc, FindCase("mountain_light_560x300"))) { printf("FAIL chart types: no scene\n"); return bad + 1; }
-        const ChartRect* g = &sc.g;
-        int dpi = sc.k->dpi, ly = g->top + ChartPx(dpi, 4), lh = ChartPx(dpi, 15);
-        int lx0 = INT_MAX, lx1 = -1;
-        for (int y = ly; y < ly + lh; y++)
-            for (int x = g->left; x < g->right; x++) {
-                COLORREF c = PxAt(&sc, x, y);
-                if (c == sc.sty.clr.sma || c == sc.sty.clr.ema || c == sc.sty.clr.vwap) {
-                    if (x < lx0) lx0 = x;
-                    if (x > lx1) lx1 = x;
+        if (!SceneOpen(&sc, &CASES[i])) { printf("FAIL chart types: no scene\n"); return bad + 1; }
+        RECT b = { 0, 0, 0, 0 };
+        if (LegendBoxOf(&sc, &b)) {
+            Marks m;
+            MarksOf(&sc, &m);
+            int reach = 0;   // closes under the box's columns drawn above its bottom
+            for (int j = m.vs; j < m.vs + m.vc; j++) {
+                int x = MarkX(&sc, &m, j);
+                if (x >= b.left && x < b.right && MarkY(&sc, &m, s_candles[j].close) < b.bottom) reach++;
+            }
+            int inBox = CountPx(&sc, b.left, b.top, b.right, b.bottom, sc.sty.clr.mountain, TRUE);
+            if (reach > 0) {
+                onFill++;
+                if (inBox) {
+                    printf("FAIL chart types %s: %d px of the fill inside the statistics box\n", CASES[i].name, inBox);
+                    bad++;
                 }
             }
-        int inLegend = (lx1 >= lx0) ? CountPx(&sc, lx0, ly, lx1 + 1, ly + lh, sc.sty.clr.mountain, TRUE) : -1;
-        Marks m;
-        MarksOf(&sc, &m);
-        int reach = 0;   // closes under the legend's columns drawn above its bottom
-        for (int j = m.vs; j < m.vs + m.vc; j++) {
-            int x = MarkX(&sc, &m, j);
-            if (x >= lx0 && x <= lx1 && MarkY(&sc, &m, s_candles[j].close) < ly + lh) reach++;
         }
-        if (reach == 0 || inLegend != 0) {
-            printf("FAIL chart types: %d closes rise into the legend (%d..%d), %d px of fill inside it\n",
-                   reach, lx0, lx1, inLegend);
-            bad++;
-        } else printf("ok   chart types: %d closes rise into the legend's box, and no fill shows in it\n", reach);
         SceneClose(&sc);
     }
+    if (onFill == 0) { printf("FAIL chart types: no statistics box stood on the mountain's fill\n"); bad++; }
+    else printf("ok   chart types: %d statistics boxes on the mountain's fill, none shows the fill inside\n", onFill);
     if (!bad) printf("ok   chart types: %d typed cases - own marks, own scale, none drawn as candles\n", typed);
     return bad;
 }
@@ -1362,9 +1410,11 @@ static int CheckBloombergTheme(void) {
                                   c->onAlert, c->onHot, c->quote, c->onAccent,
                                   t ? RGB(0x1F, 0x23, 0x28) : RGB(0xFF, 0xFF, 0xFF) };   // the watermark's ink
         const COLORREF role[] = { c->grid, c->gridDot, c->axisLine, c->cross, c->volUp, c->volDown,
-                                  c->volPaneUp, c->volPaneDown, c->alertLine, c->line, c->mountain };
+                                  c->volPaneUp, c->volPaneDown, c->alertLine, c->line, c->mountain,
+                                  c->volSeries };
         static const char* const NAME[] = { "grid", "gridDot", "axisLine", "cross", "volUp", "volDown",
-                                            "volPaneUp", "volPaneDown", "alertLine", "line", "mountain" };
+                                            "volPaneUp", "volPaneDown", "alertLine", "line", "mountain",
+                                            "volSeries" };
         int nt = (int)(sizeof(text) / sizeof(text[0])), on = 0;
         for (int r = 0; r < (int)(sizeof(role) / sizeof(role[0])); r++)
             for (int q = 0; q < nt; q++)
@@ -1731,11 +1781,16 @@ static int CheckBloombergHiLo(void) {
         const ChartRect* g = &sc.g;
         RECT hb = { 0, 0, 0, 0 };
         BOOL hasBox = HoverBoxOf(&sc, &hb);
+        // Phase 52: the statistics box's text is the text color too; its
+        // frame is found in the picture, and a label must keep out of it.
+        RECT lb = { 0, 0, 0, 0 };
+        BOOL hasLb = LegendBoxOf(&sc, &lb);
         RECT box[8];
         int nb = 0, maxH = ChartPx(k->dpi, 16), joinX = ChartPx(k->dpi, 24), joinY = ChartPx(k->dpi, 16);
         for (int y = g->top; y <= g->bottom; y++) {
             for (int x = g->left; x < g->edge; x++) {
                 if (hasBox && x >= hb.left && x < hb.right && y >= hb.top && y < hb.bottom) continue;
+                if (hasLb && x >= lb.left && x < lb.right && y >= lb.top && y < lb.bottom) continue;
                 if (PxAt(&sc, x, y) != sc.sty.clr.text) continue;
                 // One label is one group: "H 63030.12" has a space, so the
                 // pixels join across 24 px at 96 dpi (the level names' check uses 12).
@@ -1788,6 +1843,9 @@ static int CheckBloombergHiLo(void) {
             RECT grown = hb, tmp;
             InflateRect(&grown, 1, 1);
             BOOL onBox = hasBox && IntersectRect(&tmp, r, &grown);
+            RECT lg = lb;
+            InflateRect(&lg, 1, 1);
+            if (hasLb && IntersectRect(&tmp, r, &lg)) onBox = TRUE;
             // The geometry: the ink grown by two rows each way lies inside
             // the label's cell and the row above it, which the engine keeps
             // free of lines (HiLoFree); marks in the ink itself.
@@ -1799,7 +1857,7 @@ static int CheckBloombergHiLo(void) {
             BOOL onMarks = MarksInRect(&sc, r);
             if (marks || others || onBox || r->right > g->right || lined >= 0 || onMarks) {
                 printf("FAIL bloomberg high/low %s: label at %d,%d-%d,%d has %d px of the price's marks, %d of the legend,"
-                       " levels, alert lines or stamp, %s the hover box, right edge %d (plot ends at %d),"
+                       " levels, alert lines or stamp, %s the hover box or the statistics box, right edge %d (plot ends at %d),"
                        " line row %d through its cell, marks under it %d\n",
                        k->name, r->left, r->top, r->right, r->bottom, marks, others, onBox ? "touches" : "clear of",
                        r->right, g->right, lined, onMarks);
@@ -1830,6 +1888,489 @@ static int CheckBloombergBg(void) {
         SceneClose(&sc);
     }
     return bad;
+}
+
+// --- Phase 52: the Bloomberg look, part 2 - legends and axes ---
+// The same screenshot is the answer key: the statistics box in the price
+// pane (Last Price, High on, Average, Low on, with the overlays as rows), the
+// volume pane in one steel blue with a white average line, a framed legend
+// and a blue tag, the time axis in two rows with a separator where the
+// coarse unit changes, and a narrow proportional font for the axis numbers.
+
+// The view's statistics against an independent count: the candles whose
+// middle is in the plot, the high and low in the prices the axis scales on,
+// the mean close.
+static int CheckViewStats(void) {
+    int bad = 0;
+    static const char* const VS[] = { "panel_1h_1280x720", "mountain_1h_1280x720", "panel_1h_panned_zoomed",
+                                       "range_1y_1d", "ohlc_1m_dense" };
+    for (int i = 0; i < (int)(sizeof(VS) / sizeof(VS[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(VS[i]))) { printf("FAIL view stats %s: no scene\n", VS[i]); bad++; continue; }
+        Marks m;
+        MarksOf(&sc, &m);
+        BOOL closes = (sc.k->type == CHART_LINE || sc.k->type == CHART_MOUNTAIN);
+        int cnt = 0, ih = -1, il = -1;
+        double hi = 0, lo = 0, sum = 0;
+        for (int j = 0; j < sc.in.count; j++) {
+            double fx = ((double)j - m.dStart + 0.5) * m.slot;
+            if (fx < 0.0 || fx >= (double)sc.g.cw) continue;
+            double hv = closes ? s_candles[j].close : s_candles[j].high, lv = closes ? s_candles[j].close : s_candles[j].low;
+            if (ih < 0 || hv > hi) { ih = j; hi = hv; }
+            if (il < 0 || lv < lo) { il = j; lo = lv; }
+            sum += s_candles[j].close;
+            cnt++;
+        }
+        ChartViewStat vs;
+        BOOL ok = ChartViewStats(s_candles, sc.in.count, sc.st.dispStart, sc.st.dispCount, sc.g.cw, sc.k->type, &vs);
+        if (!ok || vs.count != cnt || vs.iHigh != ih || vs.iLow != il || fabs(vs.avg - sum / cnt) > 1e-6 ||
+            vs.high != hi || vs.low != lo) {
+            printf("FAIL view stats %s: %d candles, high #%d %.2f, low #%d %.2f, avg %.4f (want %d, #%d %.2f, #%d %.2f, %.4f)\n",
+                   VS[i], vs.count, vs.iHigh, vs.high, vs.iLow, vs.low, vs.avg, cnt, ih, hi, il, lo, sum / cnt);
+            bad++;
+        } else printf("ok   view stats %s: %d candles, high, low and the mean close\n", VS[i], cnt);
+        SceneClose(&sc);
+    }
+    return bad;
+}
+
+// The statistics box. Where it is expected, its rows (bit 0 Last Price, 1
+// High, 2 Average, 3 Low, 4 SMA, 5 EMA, 6 VWAP, in that order down the box):
+// the box's height is exactly its rows, and each row has its text and its
+// mark - the series' color square for Last Price (the stamp's white or navy
+// for the line and the mountain, up or down for the candles and the bars),
+// a T for the high (the bar on top), a -o- for the average, an inverted T
+// for the low (the bar at the bottom), and the overlays' color squares.
+// An overlay with no value at the box's candle has no row.
+// In every panel case with a box: a left corner of the price pane, no more
+// than LGD_MAX_PCT of the plot's width and of the pane's height, lower-left
+// unless the price's marks enter there and not the upper-left, or, in both,
+// fewer candles enter the upper-left.
+static int RowBits(int mask, int* order) {
+    int n = 0;
+    for (int b = 0; b < 7; b++) if (mask & (1 << b)) order[n++] = b;
+    return n;
+}
+
+// The candles whose marks enter r, each tested in its own columns.
+static int MarksCount(const Scene* sc, const RECT* r) {
+    Marks m;
+    MarksOf(sc, &m);
+    int pad = m.bodyW + m.w, n = 0;
+    for (int j = 0; j < sc->in.count; j++) {
+        int cx = MarkX(sc, &m, j);
+        RECT c = { cx - pad, r->top, cx + pad + 1, r->bottom }, part;
+        if (IntersectRect(&part, &c, r) && MarksInRect(sc, &part)) n++;
+    }
+    return n;
+}
+
+static int CheckStatsBox(void) {
+    int bad = 0;
+    static const struct { const char* name; int rows; } SB[] = {
+        { "mountain_1h_1280x720", 0x7F }, { "panel_1h_1280x720", 0x7F }, { "line_1h_1280x720", 0x7F },
+        { "ohlc_1h_1280x720", 0x7F }, { "panel_1h_overlays_off", 0x0F }, { "light_1h_hover", 0x7F },
+        { "dpi144_1h_1920x1080", 0x7F }, { "panel_15m_560x300", 0x75 }, { "mountain_light_560x300", 0x75 },
+        { "panel_1h_400x250", 0 }, { "desktop_1m_1920x1080", 0 }, { "line_desktop_1920x1080", 0 },
+        // VWAP is per UTC day and has no value on 1d and 1w: no row, as
+        // Bloomberg lists only the series that exist (no "-").
+        { "range_1y_1d", 0x3F }, { "range_5y_1w", 0x3F }, { "panel_1d_1280x720", 0x3F },
+    };
+    for (int i = 0; i < (int)(sizeof(SB) / sizeof(SB[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(SB[i].name))) { printf("FAIL statistics box %s: no scene\n", SB[i].name); bad++; continue; }
+        int dpi = sc.k->dpi;
+        RECT b = { 0, 0, 0, 0 };
+        BOOL has = !sc.k->desktop && LegendBoxOf(&sc, &b);
+        if (!SB[i].rows) {
+            if (has) { printf("FAIL statistics box %s: a box at %d,%d-%d,%d where none fits\n", SB[i].name, b.left, b.top, b.right, b.bottom); bad++; }
+            else printf("ok   statistics box %s: none, as the size rule says\n", SB[i].name);
+            SceneClose(&sc);
+            continue;
+        }
+        if (!has) { printf("FAIL statistics box %s: no box\n", SB[i].name); bad++; SceneClose(&sc); continue; }
+        int order[7], nr = RowBits(SB[i].rows, order), fails = 0;
+        int wantH = ChartPx(dpi, LGD_PAD_T) + nr * ChartPx(dpi, LGD_ROW_H) + ChartPx(dpi, LGD_PAD_B);
+        if (b.bottom - b.top != wantH) {
+            printf("FAIL statistics box %s: %d px tall, %d rows want %d\n", SB[i].name, b.bottom - b.top, nr, wantH);
+            fails++;
+        }
+        int sw = ChartPx(dpi, LGD_SWATCH);
+        int sx0 = b.left + ChartPx(dpi, LGD_PAD_X), sx1 = sx0 + sw;
+        BOOL series = (sc.k->type == CHART_LINE || sc.k->type == CHART_MOUNTAIN);
+        for (int r = 0; r < nr; r++) {
+            int y0 = b.top + ChartPx(dpi, LGD_PAD_T) + r * ChartPx(dpi, LGD_ROW_H), y1 = y0 + ChartPx(dpi, LGD_ROW_H);
+            int text = CountPx(&sc, sx1, y0, b.right - 1, y1, sc.sty.clr.text, TRUE);
+            int mark = 0, want = sw * sw * 7 / 10;
+            const char* what = "";
+            switch (order[r]) {
+            case 0:
+                mark = series ? CountPx(&sc, sx0, y0, sx1, y1, sc.sty.clr.stamp, TRUE)
+                              : CountPx(&sc, sx0, y0, sx1, y1, sc.sty.clr.up, TRUE) + CountPx(&sc, sx0, y0, sx1, y1, sc.sty.clr.down, TRUE);
+                what = "the series' square";
+                break;
+            case 1: case 3: {
+                // The glyph's bar: the top (High) or the bottom (Low) row of
+                // its axis-colored pixels is the widest.
+                int top = -1, bot = -1;
+                for (int y = y0; y < y1; y++)
+                    if (CountPx(&sc, sx0, y, sx1, y + 1, sc.sty.clr.axis, TRUE)) { if (top < 0) top = y; bot = y; }
+                int wTop = (top >= 0) ? CountPx(&sc, sx0, top, sx1, top + 1, sc.sty.clr.axis, TRUE) : 0;
+                int wBot = (bot >= 0) ? CountPx(&sc, sx0, bot, sx1, bot + 1, sc.sty.clr.axis, TRUE) : 0;
+                mark = (order[r] == 1) ? (wTop > wBot ? wTop : 0) : (wBot > wTop ? wBot : 0);
+                want = sw / 2;
+                what = (order[r] == 1) ? "a T" : "an inverted T";
+                break;
+            }
+            case 2:
+                mark = CountPx(&sc, sx0, y0, sx1, y1, sc.sty.clr.axis, TRUE);
+                want = sw / 2;
+                what = "the average's glyph";
+                break;
+            case 4: mark = CountPx(&sc, sx0, y0, sx1, y1, sc.sty.clr.sma, TRUE); what = "SMA's square"; break;
+            case 5: mark = CountPx(&sc, sx0, y0, sx1, y1, sc.sty.clr.ema, TRUE); what = "EMA's square"; break;
+            case 6: mark = CountPx(&sc, sx0, y0, sx1, y1, sc.sty.clr.vwap, TRUE); what = "VWAP's square"; break;
+            }
+            if (text < 8 || mark < want) {
+                printf("FAIL statistics box %s: row %d (bit %d) has %d text px, %d px of %s (want >= %d)\n",
+                       SB[i].name, r, order[r], text, mark, what, want);
+                fails++;
+            }
+        }
+        if (fails) bad++;
+        else printf("ok   statistics box %s: %d rows, each with its text and its mark\n", SB[i].name, nr);
+        SceneClose(&sc);
+    }
+    // The rules, in every panel case that has a box.
+    int boxes = 0, upper = 0;
+    for (int i = 0; i < NCASES; i++) {
+        const Case* k = &CASES[i];
+        if (k->desktop) continue;
+        Scene sc;
+        if (!SceneOpen(&sc, k)) { bad++; continue; }
+        RECT b;
+        if (LegendBoxOf(&sc, &b)) {
+            boxes++;
+            const ChartRect* g = &sc.g;
+            int dpi = k->dpi, w = b.right - b.left, h = b.bottom - b.top;
+            RECT ll = { g->left + ChartPx(dpi, LGD_INSET_X), g->bottom - ChartPx(dpi, LGD_INSET_Y) - h, 0, g->bottom - ChartPx(dpi, LGD_INSET_Y) };
+            RECT ul = { ll.left, g->top + ChartPx(dpi, LGD_INSET_Y), 0, g->top + ChartPx(dpi, LGD_INSET_Y) + h };
+            ll.right = ul.right = ll.left + w;
+            BOOL atLL = EqualRect(&b, &ll), atUL = EqualRect(&b, &ul);
+            BOOL inLL = MarksInRect(&sc, &ll), inUL = MarksInRect(&sc, &ul);
+            BOOL sizeOk = w * 100 <= g->cw * LGD_MAX_PCT && h * 100 <= g->ch * LGD_MAX_PCT;
+            // Both corners on the price: the one fewer candles enter (a
+            // candle's marks counted in its own columns); within one candle
+            // of each other either is right - this count and the engine's
+            // are two computations of the same pixels.
+            BOOL cornerOk;
+            if (inLL && inUL) {
+                int cLL = MarksCount(&sc, &ll), cUL = MarksCount(&sc, &ul);
+                cornerOk = (abs(cLL - cUL) <= 1) ? (atLL || atUL) : (atUL == (cUL < cLL));
+            } else cornerOk = atLL ? !inLL : (atUL && inLL);
+            if (atUL) upper++;
+            if (!sizeOk || !(atLL || atUL) || !cornerOk) {
+                printf("FAIL statistics box %s: %d,%d-%d,%d (%dx%d in a %dx%d plot), %s; the price's marks %s the lower-left, %s the upper-left\n",
+                       k->name, b.left, b.top, b.right, b.bottom, w, h, g->cw, g->ch,
+                       atLL ? "lower-left" : atUL ? "upper-left" : "in no corner",
+                       inLL ? "enter" : "keep out of", inUL ? "enter" : "keep out of");
+                bad++;
+            }
+        }
+        SceneClose(&sc);
+    }
+    printf("%s statistics box: %d panel cases with a box, %d of them in the upper-left\n", boxes ? "ok  " : "FAIL", boxes, upper);
+    if (!boxes) bad++;
+    return bad;
+}
+
+// The alert line through the statistics box: the box is opaque over it, as
+// the one-line legend was (phase 46, F8). Precondition: the alert's row is
+// inside the box.
+static int CheckLegendAlert(void) {
+    int bad = 0;
+    Scene sc;
+    if (!SceneOpen(&sc, FindCase("legend_alert_row"))) { printf("FAIL legend alert: no scene\n"); return 1; }
+    int ya = AlertY(&sc.st, &sc.g, fabs(sc.in.alerts[0]));
+    RECT b;
+    if (!LegendBoxOf(&sc, &b) || ya <= b.top || ya >= b.bottom - 1) {
+        printf("FAIL legend alert: the alert's row %d is not inside a statistics box\n", ya);
+        SceneClose(&sc);
+        return 1;
+    }
+    int n = CountPx(&sc, b.left, ya, b.right, ya + 1, sc.sty.clr.alertLine, TRUE);
+    int beyond = CountPx(&sc, b.right, ya, sc.g.edge, ya + 1, sc.sty.clr.alertLine, TRUE);
+    if (n || beyond == 0) {
+        printf("FAIL legend alert: %d px of the alert line (row %d) inside the box, %d px beyond it\n", n, ya, beyond);
+        bad++;
+    } else printf("ok   legend alert: the line (row %d) stops at the statistics box, %d px of it beyond\n", ya, beyond);
+    SceneClose(&sc);
+    return bad;
+}
+
+// The volume pane. The line and the mountain: every bar in the steel blue,
+// none in up/down; the candles and the bars keep up/down. In every panel
+// case a white (light: navy) average line across the pane, a framed legend
+// in its top left corner with a swatch of the bars' color and its text, and
+// the tag in the column filled with the series' blue (the candles: the
+// stamp's up or down). The desktop keeps its muted bars, no line.
+static int CheckVolumePane(void) {
+    int bad = 0;
+    static const char* const VP[] = { "mountain_1h_1280x720", "line_1h_1280x720", "mountain_light_1h_hover",
+                                      "panel_1h_1280x720", "ohlc_1h_1280x720", "vol_light_rsi_hover", "dpi144_1h_1920x1080" };
+    for (int i = 0; i < (int)(sizeof(VP) / sizeof(VP[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(VP[i]))) { printf("FAIL volume pane %s: no scene\n", VP[i]); bad++; continue; }
+        const ChartRect* g = &sc.g;
+        int dpi = sc.k->dpi, vt = g->volTop, vb = g->volBottom;
+        BOOL series = (sc.k->type == CHART_LINE || sc.k->type == CHART_MOUNTAIN);
+        RECT hb = { 0, 0, 0, 0 };
+        HoverBoxOf(&sc, &hb);
+        int blue = CountPx(&sc, g->left, vt + 1, g->right, vb + 1, sc.sty.clr.volSeries, TRUE);
+        int ud = CountPx(&sc, g->left, vt + 1, g->right, vb + 1, sc.sty.clr.volPaneUp, TRUE) +
+                 CountPx(&sc, g->left, vt + 1, g->right, vb + 1, sc.sty.clr.volPaneDown, TRUE);
+        BOOL colorsOk = series ? (blue > g->cw && ud == 0) : (ud > g->cw && blue == 0);
+        // The average line: columns of the pane with a pixel of the line's
+        // color (the hover box can hang into the pane: its columns aside).
+        int cols = 0, colsAll = 0;
+        for (int x = g->left + ChartPx(dpi, 60); x < g->right - ChartPx(dpi, 10); x++) {
+            if (x >= hb.left && x < hb.right) continue;
+            colsAll++;
+            if (CountPx(&sc, x, vt + 1, x + 1, vb + 1, sc.sty.clr.line, TRUE)) cols++;
+        }
+        RECT fr[4];
+        int nf = FindFrames(&sc, g->left, vt, g->left + ChartPx(dpi, 12), vt + ChartPx(dpi, 12), sc.sty.clr.boxEdge, fr, 4);
+        int swatch = 0, ltext = 0;
+        if (nf) {
+            int sx0 = fr[0].left + ChartPx(dpi, LGD_PAD_X), sw = ChartPx(dpi, LGD_SWATCH);
+            swatch = series ? CountPx(&sc, sx0, fr[0].top, sx0 + sw, fr[0].bottom, sc.sty.clr.volSeries, TRUE)
+                            : CountPx(&sc, sx0, fr[0].top, sx0 + sw, fr[0].bottom, sc.sty.clr.volPaneUp, TRUE) +
+                              CountPx(&sc, sx0, fr[0].top, sx0 + sw, fr[0].bottom, sc.sty.clr.volPaneDown, TRUE);
+            ltext = CountPx(&sc, sx0 + sw, fr[0].top, fr[0].right, fr[0].bottom, sc.sty.clr.text, TRUE);
+        }
+        int sw2 = ChartPx(dpi, LGD_SWATCH) * ChartPx(dpi, LGD_SWATCH) * 7 / 10;
+        int x0 = g->edge + 1, x1 = sc.axR + ChartPx(dpi, 3);
+        int tag = series ? CountPx(&sc, x0, vt, x1, vb + 1, sc.sty.clr.volSeries, TRUE)
+                         : CountPx(&sc, x0, vt, x1, vb + 1, sc.sty.clr.up, TRUE) + CountPx(&sc, x0, vt, x1, vb + 1, sc.sty.clr.down, TRUE);
+        int tagWant = (x1 - x0) * ChartPx(dpi, 16) / 2;
+        if (!colorsOk || cols * 10 < colsAll * 9 || nf != 1 || swatch < sw2 || ltext < 10 || tag < tagWant) {
+            printf("FAIL volume pane %s: %d px blue and %d up/down in the bars (want %s), average line in %d of %d columns,"
+                   " %d framed legends (swatch %d px, text %d px), tag %d px (want >= %d)\n",
+                   VP[i], blue, ud, series ? "all blue" : "up/down", cols, colsAll, nf, swatch, ltext, tag, tagWant);
+            bad++;
+        } else printf("ok   volume pane %s: %s bars, the average line across, a framed legend, the %s tag\n",
+                      VP[i], series ? "steel blue" : "up/down", series ? "blue" : "up/down");
+        SceneClose(&sc);
+    }
+    Scene sd;
+    if (!SceneOpen(&sd, FindCase("vol_desktop_1920x1080"))) { printf("FAIL volume pane desktop: no scene\n"); return bad + 1; }
+    {
+        int H = sd.s.H;
+        int muted = CountPx(&sd, 0, 0, sd.s.W, H, sd.sty.clr.volUp, TRUE) + CountPx(&sd, 0, 0, sd.s.W, H, sd.sty.clr.volDown, TRUE);
+        int blue = CountPx(&sd, 0, 0, sd.s.W, H, sd.sty.clr.volSeries, TRUE);
+        int line = CountPx(&sd, 0, sd.g.volTop, sd.s.W, sd.g.volBottom + 1, sd.sty.clr.line, TRUE);
+        if (muted < 1000 || blue || line) {
+            printf("FAIL volume pane desktop: %d px of the muted bars, %d of blue, %d of an average line\n", muted, blue, line);
+            bad++;
+        } else printf("ok   volume pane desktop: the muted bars (%d px), no blue, no line\n", muted);
+    }
+    SceneClose(&sd);
+    return bad;
+}
+
+// The time axis in two rows. Per case the coarse unit expected; the test
+// finds the unit's boundaries itself (FileTimeToSystemTime on the candles'
+// open times, local under 1d, UTC from 1d) and wants a separator in the
+// coarse row at each boundary in the plot and nowhere else, every coarse
+// label inside one span and centered in it, fine labels at least the
+// spacing apart, and on 1Y each fine label on the first candle of a month.
+static BOOL UnitKey(long long t, long long ivMs, int unit, long long* key) {
+    long long off = (ivMs >= DAY_MS) ? 0 : UTC_OFFSET_MS;
+    ULONGLONG ft = (ULONGLONG)((t + off) / 1000) * 10000000ULL + 116444736000000000ULL;
+    FILETIME f;
+    f.dwLowDateTime = (DWORD)(ft & 0xFFFFFFFF);
+    f.dwHighDateTime = (DWORD)(ft >> 32);
+    SYSTEMTIME s;
+    if (!FileTimeToSystemTime(&f, &s)) return FALSE;
+    *key = (unit == CHART_TUNIT_DAY) ? (long long)s.wYear * 10000 + s.wMonth * 100 + s.wDay
+         : (unit == CHART_TUNIT_MONTH) ? (long long)s.wYear * 100 + s.wMonth : (long long)s.wYear;
+    return TRUE;
+}
+
+// Columns in [x0, x1) with a pixel that is neither bg nor the axis line in
+// rows [y0, y1), grouped where they lie at most join px apart.
+static int InkGroups(const Scene* sc, int x0, int x1, int y0, int y1, int join, int* gl, int* gr, int max) {
+    int n = 0, last = -1000;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > sc->s.W) x1 = sc->s.W;
+    if (y1 > sc->s.H) y1 = sc->s.H;   // a band too low for its rows (found by a mutation)
+    for (int x = x0; x < x1; x++) {
+        int ink = 0;
+        for (int y = y0; y < y1 && !ink; y++) {
+            COLORREF c = PxAt(sc, x, y);
+            if (c != sc->sty.clr.bg && c != sc->sty.clr.axisLine) ink = 1;
+        }
+        if (!ink) continue;
+        if (n > 0 && x - last <= join) gr[n - 1] = x + 1;
+        else if (n < max) { gl[n] = x; gr[n] = x + 1; n++; }
+        last = x;
+    }
+    return n;
+}
+
+static int CheckTimeRows(void) {
+    int bad = 0;
+    static const struct { const char* name; int unit; } TR[] = {
+        { "panel_15m_1280x720", CHART_TUNIT_DAY }, { "panel_1m_1280x720", CHART_TUNIT_DAY },
+        { "panel_1h_1280x720", CHART_TUNIT_MONTH }, { "panel_1h_400x250", CHART_TUNIT_MONTH },
+        { "range_1y_1d", CHART_TUNIT_YEAR }, { "range_5y_1w", CHART_TUNIT_YEAR },
+        { "panel_1d_1280x720", CHART_TUNIT_YEAR }, { "dpi144_1h_1920x1080", CHART_TUNIT_MONTH },
+        { "dpi192_1m_2560x1440", CHART_TUNIT_DAY }, { "vol_rsi_15m_560x300", CHART_TUNIT_MONTH },
+    };
+    for (int i = 0; i < (int)(sizeof(TR) / sizeof(TR[0])); i++) {
+        Scene sc;
+        if (!SceneOpen(&sc, FindCase(TR[i].name))) { printf("FAIL time rows %s: no scene\n", TR[i].name); bad++; continue; }
+        const ChartRect* g = &sc.g;
+        int dpi = sc.k->dpi, axisB = ChartPanesBottom(g), H = sc.s.H;
+        int r1 = axisB + ChartPx(dpi, TIME_ROW_TOP), r2 = r1 + ChartPx(dpi, TIME_ROW_PITCH);
+        // The ink: the fine row's descenders reach into the coarse row's
+        // cell, whose capitals begin a few rows down it - the rows split
+        // there.
+        int rInk = r2 + ChartPx(dpi, 2) + 1;
+        Marks m;
+        MarksOf(&sc, &m);
+        // The boundaries of the unit in the plot.
+        int sepX[64], nSep = 0;
+        int j0 = (int)floor(m.dStart), j1 = (int)ceil(m.dStart + sc.st.dispCount);
+        if (j0 < 0) j0 = 0;
+        if (j1 > sc.in.count) j1 = sc.in.count;
+        long long prev = 0, key = 0;
+        for (int j = j0; j < j1; j++) {
+            UnitKey(s_candles[j].openTime, sc.k->ivMs, TR[i].unit, &key);
+            if (j > j0 && key != prev && j > 0) {
+                int x = g->left + (int)floor(((double)j - m.dStart) * m.slot);
+                if (x > g->left && x < g->right && nSep < 64) sepX[nSep++] = x;
+            }
+            prev = key;
+        }
+        // The separators drawn: columns of the coarse row with a run of the
+        // axis line's color.
+        int gotX[64], nGot = 0, fails = 0;
+        for (int x = g->left; x <= g->right; x++)
+            if (CountPx(&sc, x, r2, x + 1, H, sc.sty.clr.axisLine, TRUE) >= ChartPx(dpi, 8) && nGot < 64) gotX[nGot++] = x;
+        BOOL sepOk = (nGot == nSep);
+        for (int s = 0; s < nSep && sepOk; s++) if (gotX[s] != sepX[s]) sepOk = FALSE;
+        if (!sepOk) {
+            printf("FAIL time rows %s: %d separators drawn, %d unit boundaries in the plot (first at %d, drawn %d)\n",
+                   TR[i].name, nGot, nSep, nSep ? sepX[0] : -1, nGot ? gotX[0] : -1);
+            fails++;
+        }
+        // The coarse row: every label inside one span, centered in it.
+        int gl[64], gr[64];
+        int ng = InkGroups(&sc, g->left, g->right + 1, rInk, H, ChartPx(dpi, 12), gl, gr, 64);
+        if (ng == 0) { printf("FAIL time rows %s: nothing in the coarse row (rows %d-%d)\n", TR[i].name, r2, H); fails++; }
+        for (int q = 0; q < ng; q++) {
+            int a = g->left, b = g->right;
+            for (int s = 0; s < nSep; s++) { if (sepX[s] <= gl[q]) a = sepX[s]; else if (sepX[s] >= gr[q]) { b = sepX[s]; break; } }
+            int cGot = (gl[q] + gr[q]) / 2, cWant = (a + b) / 2;
+            if (abs(cGot - cWant) > ChartPx(dpi, 4) || gl[q] < a || gr[q] > b + 1) {
+                printf("FAIL time rows %s: coarse label %d-%d not centered in its span %d-%d\n", TR[i].name, gl[q], gr[q], a, b);
+                fails++;
+            }
+        }
+        // The fine row: labels at least the spacing apart.
+        int nf = InkGroups(&sc, g->left, g->right + 1, r1, rInk, ChartPx(dpi, 6), gl, gr, 64);
+        int minDx = ChartPx(dpi, TIME_DX_MIN) - 2;
+        if (nf == 0) { printf("FAIL time rows %s: no fine labels\n", TR[i].name); fails++; }
+        for (int q = 1; q < nf; q++)
+            if ((gl[q] + gr[q]) / 2 - (gl[q - 1] + gr[q - 1]) / 2 < minDx) {
+                printf("FAIL time rows %s: fine labels at %d and %d closer than %d px\n", TR[i].name,
+                       (gl[q - 1] + gr[q - 1]) / 2, (gl[q] + gr[q]) / 2, minDx);
+                fails++;
+                break;
+            }
+        // 1Y: each fine label on a month's first candle.
+        if (strcmp(TR[i].name, "range_1y_1d") == 0) {
+            int on = 0;
+            for (int q = 0; q < nf; q++) {
+                int c = (gl[q] + gr[q]) / 2;
+                for (int j = j0 + 1; j < j1; j++) {
+                    long long k0, k1;
+                    UnitKey(s_candles[j - 1].openTime, sc.k->ivMs, CHART_TUNIT_MONTH, &k0);
+                    UnitKey(s_candles[j].openTime, sc.k->ivMs, CHART_TUNIT_MONTH, &k1);
+                    if (k0 != k1 && abs(MarkX(&sc, &m, j) - c) <= ChartPx(dpi, 3)) { on++; break; }
+                }
+            }
+            if (nf < 6 || on != nf) { printf("FAIL time rows %s: %d of %d fine labels on a month's first candle\n", TR[i].name, on, nf); fails++; }
+        }
+        if (fails) bad++;
+        else printf("ok   time rows %s: %d fine labels, %d coarse, %d separators where the unit changes\n", TR[i].name, nf, ng, nSep);
+        SceneClose(&sc);
+    }
+    return bad;
+}
+
+// The axis font: a narrow proportional face with tabular digits at every
+// dpi, so the numbers still line up; the price column's text room holds a
+// six-digit price with its cents ("888888.88"), which Lucida Console's 9 px
+// cells did not; and the time band holds two rows of its cells.
+static int CheckAxisFont(void) {
+    int bad = 0;
+    static const int DPIS[3] = { 96, 144, 192 };
+    HDC dc = CreateCompatibleDC(NULL);
+    if (!dc) { printf("FAIL axis font: no DC\n"); return 1; }
+    for (int d = 0; d < 3; d++) {
+        ChartStyle sty;
+        if (!ChartStyleCreate(&sty, DPIS[d], NULL)) { printf("FAIL axis font: no style\n"); bad++; continue; }
+        HGDIOBJ oldF = SelectObject(dc, sty.fontAxis);
+        wchar_t face[64];
+        GetTextFaceW(dc, 64, face);
+        TEXTMETRICW tm;
+        GetTextMetricsW(dc, &tm);
+        int dmin = 999, dmax = 0;
+        for (wchar_t c = L'0'; c <= L'9'; c++) {
+            SIZE s = { 0, 0 };
+            GetTextExtentPoint32W(dc, &c, 1, &s);
+            if (s.cx < dmin) dmin = s.cx;
+            if (s.cx > dmax) dmax = s.cx;
+        }
+        SIZE w9 = { 0, 0 };
+        GetTextExtentPoint32W(dc, L"888888.88", 9, &w9);
+        SelectObject(dc, oldF);
+        ChartStyleDestroy(&sty);
+        int room = ChartAxisW(DPIS[d]) - ChartPx(DPIS[d], AXIS_LBL_GAP) - ChartPx(DPIS[d], AXIS_PAD_R);
+        int band = ChartPx(DPIS[d], TIME_ROW_TOP) + ChartPx(DPIS[d], TIME_ROW_PITCH) + tm.tmHeight;
+        BOOL rowsApart = tm.tmHeight - tm.tmInternalLeading <= ChartPx(DPIS[d], TIME_ROW_PITCH);
+        if (wcscmp(face, L"Arial") != 0 || dmin != dmax || w9.cx > room || band > ChartPx(DPIS[d], PAD_B) || !rowsApart) {
+            printf("FAIL axis font at %d dpi: %ls, digits %d-%d px, \"888888.88\" %d px in %d, two rows need %d of PAD_B %d, ink %d in a %d px row\n",
+                   DPIS[d], face, dmin, dmax, w9.cx, room, band, ChartPx(DPIS[d], PAD_B),
+                   (int)(tm.tmHeight - tm.tmInternalLeading), ChartPx(DPIS[d], TIME_ROW_PITCH));
+            bad++;
+        } else printf("ok   axis font at %d dpi: %ls, tabular %d px digits, \"888888.88\" %d px in %d, two rows in %d of %d\n",
+                      DPIS[d], face, dmin, w9.cx, room, band, ChartPx(DPIS[d], PAD_B));
+    }
+    DeleteDC(dc);
+    return bad;
+}
+
+// FormatVolume's billions (Bloomberg's "0.845B"): no fixture has them.
+static int CheckVolumeFormat(void) {
+    static const struct { double v; const wchar_t* want; } VF[] = {
+        { 1.5e9, L"1.5B" }, { 999.0e6, L"999.0M" }, { 12345.0, L"12.3K" }, { 7.9, L"7.90" },
+    };
+    int bad = 0;
+    for (int i = 0; i < 4; i++) {
+        wchar_t s[32];
+        FormatVolume(VF[i].v, s, 32);
+        if (wcscmp(s, VF[i].want) != 0) { printf("FAIL volume format: %.1f gave %ls, want %ls\n", VF[i].v, s, VF[i].want); bad++; }
+    }
+    if (!bad) printf("ok   volume format: B from a billion, M, K and the plain number below\n");
+    return bad;
+}
+
+static int CheckPhase52(void) {
+    return CheckVolumeFormat() + CheckViewStats() + CheckStatsBox() + CheckVolumePane() + CheckTimeRows() + CheckAxisFont();
 }
 
 static int CheckBloomberg(void) {
@@ -1903,7 +2444,8 @@ int main(int argc, char** argv) {
                         CheckPriceFloor() +
                         CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms() +
                         CheckGhostRank() + CheckGhostRow() + CheckLegendAlert() + CheckVolTag() +
-                        CheckLevelLabels() + CheckChartTypes() + CheckDeskLine() + CheckBloomberg();
+                        CheckLevelLabels() + CheckChartTypes() + CheckDeskLine() + CheckBloomberg() +
+                        CheckPhase52();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -1971,6 +2513,7 @@ int main(int argc, char** argv) {
     if (fails) printf("%d of %d cases failed; the pictures are in %s\n", fails, NCASES, outDir);
     else       printf("all %d cases passed\n", NCASES);
     if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis, hover time, time forms,\n"
-                              "ghost rank and row, legend alert, volume tag, level labels, chart types, bloomberg)\n", contrastFails);
+                              "ghost rank and row, legend alert, volume tag, level labels, chart types, bloomberg,\n"
+                              "view stats, statistics box, volume pane, time rows, axis font)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }

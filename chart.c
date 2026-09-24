@@ -647,6 +647,38 @@ double VolumeMax(const Candle* candles, int vs, int vc) {
     return mx;
 }
 
+// Phase 52: the view's statistics (see chart.h). The candles are those whose
+// middle is in the plot - the frame's own x, (i - dStart + 0.5) * slot, in
+// [0, cw) - so the high and low labels (phase 51) and the statistics box
+// read one computation (pitfall 14). The first of equal extremes wins, as
+// the labels' loop did. The average is the mean close whatever the type: it
+// is the "Average" of Bloomberg's legend, the level the series sat at.
+BOOL ChartViewStats(const Candle* candles, int n, double dStart, double dCount, int cw,
+                    int chartType, ChartViewStat* out) {
+    ZeroMemory(out, sizeof(*out));
+    out->iHigh = out->iLow = -1;
+    if (n <= 0 || cw <= 0) return FALSE;
+    if (dCount < 1.0) dCount = 1.0;
+    double slot = (double)cw / dCount, sum = 0.0;
+    BOOL closes = (chartType == CHART_LINE || chartType == CHART_MOUNTAIN);
+    int i0 = (int)floor(dStart), i1 = (int)ceil(dStart + dCount);
+    if (i0 < 0) i0 = 0;
+    if (i1 > n) i1 = n;
+    for (int i = i0; i < i1; ++i) {
+        double fx = ((double)i - dStart + 0.5) * slot;
+        if (fx < 0.0 || fx >= (double)cw) continue;
+        const Candle* c = &candles[i];
+        double hv = closes ? c->close : c->high, lv = closes ? c->close : c->low;
+        if (out->iHigh < 0 || hv > out->high) { out->iHigh = i; out->high = hv; }
+        if (out->iLow < 0 || lv < out->low)   { out->iLow = i;  out->low = lv; }
+        sum += c->close;
+        out->count++;
+    }
+    if (out->count == 0) return FALSE;
+    out->avg = sum / (double)out->count;
+    return TRUE;
+}
+
 // When candles drop out at the front, EVERYTHING that is an absolute index is
 // shifted by the same amount. Without this the chart jumps one candle to the
 // left every minute once the buffer has reached its cap, and hoverIdx points
@@ -708,31 +740,26 @@ long long ChartUtcOffsetMs(void) {
     return ((long long)l - (long long)u) / 10000LL;
 }
 
-// Unix ms -> a candle's time, in one of three forms (phase 45; until then 1h
+// Unix ms -> a candle's time, in one of two forms (phase 45; until then 1h
 // and 4h wrote "MM-DD HH:MM" on every label, so a 1h axis read "09-12 00:00"
 // nine times, and under 1h a view across midnight had no date at all):
 //   TIME_CLOCK  "14:35"         the quote line's At (tickc.c, through
 //                               FormatCandleTime)
-//   TIME_AXIS   "14:35", and "21 Sep" on the candle a local day begins with -
-//               Bloomberg marks the day on the axis
-//   TIME_BOX    "21 Sep 14:35"  the hover box
-// The day begins with the candle whose open lies less than one interval
-// after local midnight: that is the midnight candle itself wherever the
-// offset is whole hours and the interval divides them, and in CEST the 4h
-// candle at 02:00 (the candles open at 00:00 UTC), which "on midnight" alone
-// never finds. Month names are English and fixed, not the locale's: the repo
-// and the app are English, and the axis width is measured on them.
+//   TIME_BOX    "21 Sep 14:35"  the hover box and the statistics box
+// Phase 52: the axis's own forms moved to TimeFine and TimeCoarse below -
+// the day now stands in the time axis's second row, not in place of a clock.
+// Month names are English and fixed, not the locale's: the repo and the app
+// are English, and the axis width is measured on them.
 //
 // From 1 day up every form is "YYYY-MM-DD", the UTC date. Daily and weekly
 // candles open at 00:00 UTC; west of UTC the local conversion put them on
 // the previous day (phase 44 review, F4).
 #define TIME_CLOCK 0
-#define TIME_AXIS  1
 #define TIME_BOX   2
+static const wchar_t* const MON_NAME[12] = { L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun",
+                                             L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec" };
 static void FormatTimeAs(long long unixMs, long long intervalMs, long long utcOffsetMs,
                          int form, wchar_t* out, size_t cch) {
-    static const wchar_t* const MON[12] = { L"Jan", L"Feb", L"Mar", L"Apr", L"May", L"Jun",
-                                            L"Jul", L"Aug", L"Sep", L"Oct", L"Nov", L"Dec" };
     BOOL daily = (intervalMs >= 86400000LL);
     long long off = daily ? 0 : utcOffsetMs;
     ULONGLONG t = (ULONGLONG)(unixMs / 1000 + off / 1000) * 10000000ULL + 116444736000000000ULL;
@@ -748,12 +775,8 @@ static void FormatTimeAs(long long unixMs, long long intervalMs, long long utcOf
         swprintf_s(out, cch, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
         return;
     }
-    long long tod = (long long)st.wHour * 3600000LL + st.wMinute * 60000LL + st.wSecond * 1000LL;
-    BOOL dayStart = (tod < ((intervalMs > 0) ? intervalMs : 60000LL));
     if (form == TIME_BOX)
-        swprintf_s(out, cch, L"%d %s %02d:%02d", st.wDay, MON[st.wMonth - 1], st.wHour, st.wMinute);
-    else if (form == TIME_AXIS && dayStart)
-        swprintf_s(out, cch, L"%d %s", st.wDay, MON[st.wMonth - 1]);
+        swprintf_s(out, cch, L"%d %s %02d:%02d", st.wDay, MON_NAME[st.wMonth - 1], st.wHour, st.wMinute);
     else
         swprintf_s(out, cch, L"%02d:%02d", st.wHour, st.wMinute);
 }
@@ -763,23 +786,82 @@ void FormatCandleTime(long long unixMs, long long intervalMs, long long utcOffse
     FormatTimeAs(unixMs, intervalMs, utcOffsetMs, TIME_CLOCK, out, cch);
 }
 
-// The widest label TIME_AXIS can give for the interval, measured in the font
-// selected into hdc (phase 45). The spacing of the labels must hold for every
-// label, and until now it was measured on the view's first one - with two
-// forms on one axis, "30 Sep" would have been placed at the distance of
-// "00:00". The axis font is monospace (see ChartStyleCreate), so one sample
-// per form is the widest of its kind.
-int ChartTimeLabelW(HDC hdc, long long intervalMs) {
-    static const wchar_t* const INTRA[2] = { L"00:00", L"30 Sep" };
-    SIZE sz = { 0, 0 };
-    if (intervalMs >= 86400000LL) {
-        GetTextExtentPoint32W(hdc, L"2026-09-21", 10, &sz);
-        return sz.cx;
+// The time axis's calendar (phase 52). A candle's day, month and year, in
+// the time the axis writes: local under 1 day, UTC from 1 day up (as
+// FormatTimeAs). The two rows ask it once per visible candle, so it is
+// integer arithmetic - the civil date from a day number (the proleptic
+// Gregorian algorithm from H. Hinnant's date library), not a system call
+// per candle.
+static long long TimeDayNo(long long unixMs, long long intervalMs, long long utcOffsetMs) {
+    long long t = unixMs + ((intervalMs >= DAY_MS) ? 0 : utcOffsetMs);
+    return (t >= 0) ? t / DAY_MS : -((-t + DAY_MS - 1) / DAY_MS);
+}
+
+static void CivilFromDays(long long z, int* y, int* m, int* d) {
+    z += 719468;
+    long long era = (z >= 0 ? z : z - 146096) / 146097;
+    long long doe = z - era * 146097;
+    long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    long long mp = (5 * doy + 2) / 153;
+    *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    *m = (int)((mp < 10) ? mp + 3 : mp - 9);
+    *y = (int)(yoe + era * 400 + ((*m <= 2) ? 1 : 0));
+}
+
+// The key of the unit a candle lies in (CHART_TUNIT_*): equal keys, same
+// day, month or year. Months count from year 0, so a key modulo a step in
+// months picks every step-th month.
+static long long TimeUnitKey(long long unixMs, long long intervalMs, long long utcOffsetMs, int unit) {
+    long long dn = TimeDayNo(unixMs, intervalMs, utcOffsetMs);
+    if (unit == CHART_TUNIT_DAY) return dn;
+    int y, m, d;
+    CivilFromDays(dn, &y, &m, &d);
+    return (unit == CHART_TUNIT_MONTH) ? (long long)y * 12 + (m - 1) : (long long)y;
+}
+
+// The fine row's text (CHART_TROW_*) and the coarse row's (CHART_TUNIT_*).
+static void TimeFine(long long unixMs, long long intervalMs, long long utcOffsetMs, int form,
+                     wchar_t* out, size_t cch) {
+    int y, m, d;
+    long long dn = TimeDayNo(unixMs, intervalMs, utcOffsetMs);
+    CivilFromDays(dn, &y, &m, &d);
+    if (form == CHART_TROW_CLOCK) {
+        long long t = unixMs + ((intervalMs >= DAY_MS) ? 0 : utcOffsetMs);
+        long long tod = (t - dn * DAY_MS) / 60000LL;
+        swprintf_s(out, cch, L"%02d:%02d", (int)(tod / 60), (int)(tod % 60));
+    } else if (form == CHART_TROW_DAY) {
+        swprintf_s(out, cch, L"%d", d);
+    } else if (form == CHART_TROW_MONTH) {
+        wcscpy_s(out, cch, MON_NAME[m - 1]);
+    } else {
+        swprintf_s(out, cch, L"%d", y);
     }
+}
+
+static void TimeCoarse(long long unixMs, long long intervalMs, long long utcOffsetMs, int unit,
+                       wchar_t* out, size_t cch) {
+    int y, m, d;
+    CivilFromDays(TimeDayNo(unixMs, intervalMs, utcOffsetMs), &y, &m, &d);
+    if (unit == CHART_TUNIT_DAY)        swprintf_s(out, cch, L"%d %s", d, MON_NAME[m - 1]);
+    else if (unit == CHART_TUNIT_MONTH) swprintf_s(out, cch, L"%s %d", MON_NAME[m - 1], y);
+    else                                swprintf_s(out, cch, L"%d", y);
+}
+
+// The widest label the fine row can give for the interval, measured in the
+// font selected into hdc (phase 45). The spacing of the labels must hold for
+// every label, and until phase 45 it was measured on the view's first one.
+// Phase 52: the fine row's forms are a clock (under 1 day), a day of the
+// month, a month and a year, and the axis font is proportional (Arial), so
+// every month is measured, not one sample per form. The digits are tabular,
+// so "00:00", "30" and "2026" are the widest of their kinds.
+int ChartTimeLabelW(HDC hdc, long long intervalMs) {
+    static const wchar_t* const FORMS[3] = { L"00:00", L"30", L"2026" };
     int w = 0;
-    for (int i = 0; i < 2; ++i) {
-        sz.cx = 0;
-        GetTextExtentPoint32W(hdc, INTRA[i], (int)wcslen(INTRA[i]), &sz);
+    for (int i = (intervalMs >= DAY_MS) ? 1 : 0; i < 3 + 12; ++i) {
+        const wchar_t* s = (i < 3) ? FORMS[i] : MON_NAME[i - 3];
+        SIZE sz = { 0, 0 };
+        GetTextExtentPoint32W(hdc, s, (int)wcslen(s), &sz);
         if (sz.cx > w) w = sz.cx;
     }
     return w;
@@ -789,8 +871,11 @@ int ChartTimeLabelW(HDC hdc, long long intervalMs) {
 // the same area end up pointing at different places - see bug #7 in the log.
 // Volume for the hover box (phase 21): compact, so DOGE volume in millions
 // fits in 104 px. Below a thousand two decimals, otherwise K/M with one decimal.
+// Phase 52: and B from a billion, as Bloomberg's "0.845B" (DOGE or PEPE
+// volume on a day's candle), where "1234.5M" would not fit the volume tag.
 void FormatVolume(double v, wchar_t* out, size_t cch) {
-    if (v >= 1e6)      swprintf_s(out, cch, L"%.1fM", v / 1e6);
+    if (v >= 1e9)      swprintf_s(out, cch, L"%.1fB", v / 1e9);
+    else if (v >= 1e6) swprintf_s(out, cch, L"%.1fM", v / 1e6);
     else if (v >= 1e3) swprintf_s(out, cch, L"%.1fK", v / 1e3);
     else               swprintf_s(out, cch, L"%.2f", v);
 }
@@ -992,20 +1077,26 @@ static BOOL DrawVwap(HDC hdc, const ChartData* in, const ChartRect* g, COLORREF 
 // pane (phase 45): the bars stand in the volume pane, where nothing is in
 // front of them, and take the stronger volPaneUp/volPaneDown; behind the
 // candles they keep the muted volUp/volDown.
+//
+// series (phase 52): every bar in the theme's volSeries, Bloomberg's one
+// color for a series' volume - the line and the mountain in the panel's
+// pane. One pass, with DC_BRUSH: no GDI object of its own.
 static void DrawVolumeBars(HDC hdc, const ChartState* st, const ChartData* in,
                            const ChartStyle* sty, int left, double dStart, double slot,
-                           int bodyW, int i0, int i1, int base, int hMax, BOOL pane) {
+                           int bodyW, int i0, int i1, int base, int hMax, BOOL pane, BOOL series) {
     if (st->dispVolMax <= 0.0 || st->dispVolF <= 0.0 || hMax <= 0) return;
     int oldFill = SetPolyFillMode(hdc, WINDING);
     HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
+    HGDIOBJ oldBrV = SelectObject(hdc, GetStockObject(DC_BRUSH));
     HBRUSH brUp   = pane ? sty->brVolPaneUp   : sty->brVolUp;
     HBRUSH brDown = pane ? sty->brVolPaneDown : sty->brVolDown;
-    for (int pass = 0; pass < 2; ++pass) {          // 0 = up, 1 = down
-        SelectObject(hdc, pass == 0 ? brUp : brDown);
+    if (series) SetDCBrushColor(hdc, sty->clr.volSeries);
+    for (int pass = 0; pass < (series ? 1 : 2); ++pass) {   // 0 = up, 1 = down; one pass for a series
+        if (!series) SelectObject(hdc, pass == 0 ? brUp : brDown);
         int k = 0;
         for (int i = i0; i < i1; ++i) {
             const Candle* c = &in->candles[i];
-            if ((c->close >= c->open) != (pass == 0)) continue;
+            if (!series && (c->close >= c->open) != (pass == 0)) continue;
             int h = (int)(c->volume / st->dispVolMax * (double)hMax * st->dispVolF + 0.5);
             if (h <= 0) continue;
             if (h > hMax) h = hMax;   // mid-easing a candle can lie above the scale
@@ -1022,8 +1113,49 @@ static void DrawVolumeBars(HDC hdc, const ChartState* st, const ChartData* in,
         }
         if (k > 0) PolyPolygon(hdc, s_volPts, s_volCnt, k);
     }
+    SelectObject(hdc, oldBrV);
     SelectObject(hdc, oldPenV);
     SetPolyFillMode(hdc, oldFill);
+}
+
+// The volume's average line (phase 52), Bloomberg's white line over the
+// bars: the simple average of the last VOL_MA_PERIOD volumes - 20, the
+// period of the price's SMA and a trading month of daily candles, the
+// volume average the terminals open with. On the bars' own scale (the
+// display dispVolMax, grown with dispVolF), so the line and the bars
+// agree; it can pass above the pane's top when louder candles left of the
+// view are in its window, and the pane's clip takes it there. A rolling
+// sum over the view one candle out on each side, fed from period - 1
+// candles before it, as the SMA's (IndFeedStart); the points go to Polyline
+// in batches like DrawIndicator's. With DC_PEN selected by the caller. TRUE
+// when a point was drawn.
+static BOOL DrawVolumeAverage(HDC hdc, const ChartState* st, const ChartData* in, int left,
+                              double dStart, double slot, int i0, int i1, int base, int hMax) {
+    if (st->dispVolMax <= 0.0 || st->dispVolF <= 0.0 || hMax <= 0) return FALSE;
+    int n = in->count;
+    int first = (i0 > 0) ? i0 - 1 : 0;
+    int last  = (i1 < n) ? i1 : n - 1;
+    int from = first - VOL_MA_PERIOD + 1;
+    if (from < 0) from = 0;
+    double sum = 0.0, scale = (double)hMax * st->dispVolF / st->dispVolMax;
+    int k = 0, drawn = 0;
+    for (int i = from; i <= last; ++i) {
+        sum += in->candles[i].volume;
+        if (i - from >= VOL_MA_PERIOD) sum -= in->candles[i - VOL_MA_PERIOD].volume;
+        if (i < first || i + 1 < VOL_MA_PERIOD) continue;
+        double h = sum / (double)VOL_MA_PERIOD * scale;
+        if (h > 16.0 * (double)hMax) h = 16.0 * (double)hMax;
+        s_volPts[k].x = left + (int)floor(((double)i - dStart + 0.5) * slot);
+        s_volPts[k].y = base + 1 - (int)(h + 0.5);
+        drawn++;
+        if (++k == IND_BATCH) {
+            Polyline(hdc, s_volPts, k);
+            s_volPts[0] = s_volPts[k - 1];
+            k = 1;
+        }
+    }
+    if (k >= 2) Polyline(hdc, s_volPts, k);
+    return drawn >= 2;
 }
 
 // The RSI line in the band (phase 39). Fed from candle 0 over the whole
@@ -1111,37 +1243,114 @@ static void DrawDashLineV(HDC hdc, int x, int y0, int y1, int anchor, int dashOn
 // widest label, and a label that would leave [left, right] left out. The
 // axis font is selected for the measuring and put back. Not on the desktop,
 // which has no time axis.
+//
+// Phase 52: two rows, as on Bloomberg's GIP chart ("Jun Sep Dec Mar" over
+// "2021 | 2022"). The fine row is the step's unit: a clock under a day, the
+// day of the month from a day up, the month's name from 28 days up and the
+// year from a year up. From 28 days the steps are CALENDAR months (1, 2, 3,
+// 6 or 12, then 2, 5 and 10 years), each label on the first candle of its
+// month, so a 1Y axis reads "Oct Nov Dec Jan" and not the 30-day steps'
+// arbitrary dates. The step in months is the smallest whose narrowest span
+// (February: 28 days; two months 59, three 89, six 181) keeps the labels
+// minDx apart: the first candle of a month opens less than one interval
+// after the month begins, so two of them are at least floor(days * DAY_MS /
+// interval) candles apart. The coarse row is the next unit up - the day
+// under clocks, the month under days, the year under months, nothing under
+// years - with a separator where it changes and its name centered in each
+// span it has in the plot (Bloomberg's "2021" under Sep, mid-span); a name
+// wider than its span is left out, the separator stays.
 #define TIME_LBL_MAX 128
-typedef struct { int n; int k[TIME_LBL_MAX]; int x[TIME_LBL_MAX]; } TimeLabels;
+typedef struct {
+    int n; int k[TIME_LBL_MAX]; int x[TIME_LBL_MAX];   // the fine row
+    int form, unit;                                     // CHART_TROW_*, CHART_TUNIT_*
+    int nSep; int sepX[TIME_LBL_MAX];                   // the coarse row's separators
+    int nSeg; int segK[TIME_LBL_MAX + 1], segX0[TIME_LBL_MAX + 1], segX1[TIME_LBL_MAX + 1];
+} TimeLabels;
 static TimeLabels s_timeLbl;
 
 static void TimeLabelsOf(HDC hdc, HFONT fontAxis, const ChartData* in, int left, int right, int cw,
                          double dStart, double dCount, double slot, int i0, int i1, int dpi,
                          TimeLabels* out) {
-    out->n = 0;
+    out->n = out->nSep = out->nSeg = 0;
+    out->form = CHART_TROW_CLOCK;
+    out->unit = CHART_TUNIT_NONE;
     if (i0 >= i1 || in->desktop) return;
     HGDIOBJ oldF = SelectObject(hdc, fontAxis);
     wchar_t tl[24];
     int minDx = ChartTimeLabelW(hdc, in->intervalMs) + ChartPx(dpi, TIME_LBL_GAP);
     if (minDx < ChartPx(dpi, TIME_DX_MIN)) minDx = ChartPx(dpi, TIME_DX_MIN);
     long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
+    long long tz = in->utcOffsetMs;
     int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
-    // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
-    // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
-    // whole view, the one the labels are written with.
-    long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
-    long long slotNo = (t0 + tzMs) / iv;
-    int rem = (int)(slotNo % step);
-    int k = i0 + ((rem == 0) ? 0 : (step - rem));
-    for (; k < i1 && out->n < TIME_LBL_MAX; k += step) {
-        int x = left + (int)(((double)k - dStart + 0.5) * slot);
-        FormatTimeAs(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, TIME_AXIS, tl, 24);
-        SIZE tsz = { 0, 0 };
-        GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
-        if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-        out->k[out->n] = k;
-        out->x[out->n] = x;
-        out->n++;
+    long long stepMs = (long long)step * iv;
+    if (stepMs < 28 * DAY_MS) {
+        out->form = (stepMs < DAY_MS) ? CHART_TROW_CLOCK : CHART_TROW_DAY;
+        out->unit = (stepMs < DAY_MS) ? CHART_TUNIT_DAY : CHART_TUNIT_MONTH;
+        // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
+        // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
+        // whole view, the one the labels are written with.
+        long long t0 = in->candles[i0].openTime;
+        long long slotNo = (t0 + tz) / iv;
+        int rem = (int)(slotNo % step);
+        int k = i0 + ((rem == 0) ? 0 : (step - rem));
+        for (; k < i1 && out->n < TIME_LBL_MAX; k += step) {
+            int x = left + (int)(((double)k - dStart + 0.5) * slot);
+            TimeFine(in->candles[k].openTime, iv, tz, out->form, tl, 24);
+            SIZE tsz = { 0, 0 };
+            GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
+            if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
+            out->k[out->n] = k;
+            out->x[out->n] = x;
+            out->n++;
+        }
+    } else {
+        static const int MSTEP[8] = { 1, 2, 3, 6, 12, 24, 60, 120 };
+        static const int MDAYS[8] = { 28, 59, 89, 181, 365, 730, 1826, 3652 };
+        int ms = 0;
+        for (int q = 0; q < 8 && !ms; ++q)
+            if ((double)((long long)MDAYS[q] * DAY_MS / iv) * slot >= (double)(minDx + 1)) ms = MSTEP[q];
+        out->form = (ms >= 12) ? CHART_TROW_YEAR : CHART_TROW_MONTH;
+        out->unit = (ms >= 12) ? CHART_TUNIT_NONE : CHART_TUNIT_YEAR;
+        if (ms > 0) {
+            long long prev = TimeUnitKey(in->candles[(i0 > 0) ? i0 - 1 : 0].openTime, iv, tz, CHART_TUNIT_MONTH);
+            for (int k = i0; k < i1 && out->n < TIME_LBL_MAX; ++k) {
+                long long key = TimeUnitKey(in->candles[k].openTime, iv, tz, CHART_TUNIT_MONTH);
+                BOOL first = (k > 0 && key != prev);
+                prev = key;
+                if (!first || key % ms != 0) continue;
+                int x = left + (int)(((double)k - dStart + 0.5) * slot);
+                TimeFine(in->candles[k].openTime, iv, tz, out->form, tl, 24);
+                SIZE tsz = { 0, 0 };
+                GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
+                if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
+                out->k[out->n] = k;
+                out->x[out->n] = x;
+                out->n++;
+            }
+        }
+    }
+    // The coarse row: the spans of the unit in the plot. A boundary is the
+    // left edge of the first candle's slot in the new unit; one at or left
+    // of the plot's edge only renames the first span.
+    if (out->unit != CHART_TUNIT_NONE) {
+        out->nSeg = 1;
+        out->segK[0] = i0;
+        out->segX0[0] = left;
+        long long prev = TimeUnitKey(in->candles[i0].openTime, iv, tz, out->unit);
+        for (int k = i0 + 1; k < i1; ++k) {
+            long long key = TimeUnitKey(in->candles[k].openTime, iv, tz, out->unit);
+            if (key == prev) continue;
+            prev = key;
+            int x = left + (int)floor(((double)k - dStart) * slot);
+            if (x <= left) { out->segK[out->nSeg - 1] = k; continue; }
+            if (x >= right || out->nSep >= TIME_LBL_MAX) break;
+            out->segX1[out->nSeg - 1] = x;
+            out->sepX[out->nSep++] = x;
+            out->segK[out->nSeg] = k;
+            out->segX0[out->nSeg] = x;
+            out->nSeg++;
+        }
+        out->segX1[out->nSeg - 1] = right;
     }
     SelectObject(hdc, oldF);
 }
@@ -1185,6 +1394,8 @@ const ChartTheme ChartThemeDark = {
     CLR_STAMP,     // stamp: white
     CLR_ON_STAMP,  // onStamp: black, 21:1
     CLR_MOUNTAIN,  // fillCell: the navy itself
+    CLR_VOL_SERIES,    // volSeries (phase 52): GIP's steel blue
+    CLR_ON_VOL_SERIES, // onVolSeries: black on it, 4.97
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -1244,6 +1455,8 @@ const ChartTheme ChartThemeLight = {
     RGB(0x1B, 0x36, 0x5D),   // stamp      the line's navy, inverted:
     RGB(0xFF, 0xFF, 0xFF),   // onStamp    white on it, 12.1
     RGB(0xFA, 0xFA, 0xFB),   // fillCell   bg: the grays are ~3.7 on the fill
+    RGB(0x56, 0x72, 0x9F),   // volSeries  phase 52: the steel blue, a step deeper
+    RGB(0xFF, 0xFF, 0xFF),   // onVolSeries white on it, 4.88 (the light stamp's rule)
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -1265,10 +1478,42 @@ BOOL ChartStyleCreate(ChartStyle* sty, int dpi, const ChartTheme* theme) {
     // tmHeight 15. Consolas jumps from 10 to 12 px (em 16 -> 17), Cascadia Mono
     // em 16 gives 11 px but tmHeight 21, which does not fit in the time axis's
     // 18 px. At other dpi the em scales with it, and ChartAxisW follows.
+    //
+    // Phase 52: Arial, Bloomberg's kind of narrow proportional sans, at the
+    // same em. Measured against the stock fonts (Arial Narrow is Office's,
+    // not Windows'; asked for, GDI gives Arial): the same 11 px digit height,
+    // digits 8 px and TABULAR (13 at 144 dpi, 17 at 192), so numbers of one
+    // format still end on the same column; "75812.34" 60 px against 72;
+    // tmHeight 17. Like Lucida it is not antialiased at 96 dpi (100 % of its
+    // pixels exact, the same one color), and both are at 144 and 192. Segoe
+    // UI was antialiased at 96 and its 20 px cell does not fit the 16 px tags;
+    // Bahnschrift's digits are 5-9 px wide. Should Arial ever be missing or
+    // come back with uneven digits, Lucida Console as before - the column is
+    // still sized in its cells.
     sty->fontAxis = CreateFontW(-ChartPx(dpi, 15), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
-                                L"Lucida Console");
+                                ANTIALIASED_QUALITY, VARIABLE_PITCH | FF_SWISS, L"Arial");
+    if (sty->fontAxis) {
+        HDC mdc = CreateCompatibleDC(NULL);
+        BOOL arial = FALSE;
+        if (mdc) {
+            HGDIOBJ oldF = SelectObject(mdc, sty->fontAxis);
+            wchar_t face[LF_FACESIZE] = L"";
+            GetTextFaceW(mdc, LF_FACESIZE, face);
+            SIZE s0 = { 0, 0 }, s1 = { 0, 0 };
+            GetTextExtentPoint32W(mdc, L"1", 1, &s1);
+            GetTextExtentPoint32W(mdc, L"0", 1, &s0);
+            arial = (lstrcmpW(face, L"Arial") == 0 && s0.cx == s1.cx && s0.cx > 0);
+            SelectObject(mdc, oldF);
+            DeleteDC(mdc);
+        }
+        if (!arial) { DeleteObject(sty->fontAxis); sty->fontAxis = NULL; }
+    }
+    if (!sty->fontAxis)
+        sty->fontAxis = CreateFontW(-ChartPx(dpi, 15), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                    ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN,
+                                    L"Lucida Console");
     sty->penGrid  = CreatePen(PS_SOLID, 1, t->grid);
     sty->penCross = CreatePen(PS_DOT,   1, t->cross);
     // Dashed, not dotted: keeps the last-price line visually distinct from
@@ -1512,6 +1757,27 @@ static BOOL MarksHitRect(const PriceMarks* m, const RECT* rc) {
         if (SegmentHitsRect(p, q, rc, m->lineW)) return TRUE;
     }
     return FALSE;
+}
+
+// Phase 52: how many candles' marks reach into rc - MarksHitRect over each
+// candle's own columns (its slot, grown by the body and the stroke), so two
+// corners the price enters both can be told apart by how much of it they
+// would cover.
+static int MarksHitCount(const PriceMarks* m, const RECT* rc) {
+    if (m->slot <= 0.0) return 0;
+    int pad = m->bodyW + m->lineW;
+    int a = (int)floor(m->dStart + (double)(rc->left - m->left - pad) / m->slot) - 1;
+    int b = (int)ceil(m->dStart + (double)(rc->right - m->left + pad) / m->slot) + 1;
+    if (a < 0) a = 0;
+    if (b > m->n) b = m->n;
+    int hits = 0;
+    for (int i = a; i < b; ++i) {
+        int cx = m->left + (int)(((double)i - m->dStart + 0.5) * m->slot);
+        RECT c = { cx - pad, rc->top, cx + pad + 1, rc->bottom };
+        RECT part;
+        if (IntersectRect(&part, &c, rc) && MarksHitRect(m, &part)) hits++;
+    }
+    return hits;
 }
 
 // Phase 49: does the mountain's fill reach into rc? The fill is every row
@@ -1782,7 +2048,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // pane, inside its clip. With a pane the bars are drawn there, below.
     if (in->vol && !volPane)
         DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1,
-                       bottom, ChartVolBarsH(&g), FALSE);
+                       bottom, ChartVolBarsH(&g), FALSE, FALSE);
 
     // --- Alert lines (phase 23) ---
     // Behind the candles and above the bars, inside the same clip, from left
@@ -2032,6 +2298,18 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // it is turned on, and the tag and legend fade in with them.
     int vt = g.volTop, vb = g.volBottom, vbH = ChartVolBarsH(&g);
     int volT = (int)(st->dispVolF * 255.0 + 0.5);
+    // Phase 52: Bloomberg's volume pane. The line and the mountain draw
+    // their volume in the series' one color (volSeries), as their stamp is
+    // the series' white: they draw no candle's direction, and green and red
+    // bars would be the only up/down marks on the chart. The candles and the
+    // OHLC bars keep up/down bars, as they keep the up/down stamp: each bar
+    // is the color of the candle over it. Over the bars the volume's average
+    // line in the series' line color (white; navy in the light theme). The
+    // panel only - the desktop keeps its muted up/down bars and no line.
+    BOOL volSeries = !in->desktop && (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+#ifdef TICKER_PROBE
+    st->probeVolMask = 0;
+#endif
     if (volPane) {
         HPEN hOldV = (HPEN)SelectObject(hdc, sty->penGrid);
         MoveToEx(hdc, left, vt, NULL);
@@ -2049,7 +2327,21 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         IntersectClipRect(hdc, left, vt, edge, vb + 1);
         // Phase 45: the stronger pane colors in the panel only - the desktop
         // is meant to be quiet, and keeps the muted bars even in a pane.
-        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1, vb, vbH, !in->desktop);
+        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1, vb, vbH, !in->desktop, volSeries);
+        if (!in->desktop && volT > 0) {
+            HGDIOBJ oldPenA = SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, Blend(sty->clr.bg, sty->clr.line, volT));
+            BOOL avgOn = DrawVolumeAverage(hdc, st, in, left, dStart, slot, i0, i1, vb, vbH);
+            SelectObject(hdc, oldPenA);
+#ifdef TICKER_PROBE
+            if (avgOn) st->probeVolMask |= 2;
+#else
+            (void)avgOn;
+#endif
+        }
+#ifdef TICKER_PROBE
+        if (volSeries && st->dispVolMax > 0.0 && st->dispVolF > 0.0) st->probeVolMask |= 1;
+#endif
         SelectClipRgn(hdc, NULL);
     }
     // Which pane the pointer is in. The gap above a pane belongs to it, so
@@ -2434,22 +2726,30 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 
     // --- Volume pane: value tag and legend (phase 43) ---
     // Panel only, like the band's. The tag carries the last candle's volume
-    // in its direction's color on the box surface - the hover box's close
-    // row - and the legend in the top left corner the volume at the
-    // crosshair, else at the last visible candle, whole or not at all. The
-    // legend is in the text color: the bars' colors are not text. Phase 45:
-    // it no longer reads over them - see the rectangle below.
+    // and the legend in the top left corner the volume at the crosshair,
+    // else at the last visible candle, whole or not at all.
+    // Phase 52, Bloomberg's pane: the tag is filled with the bars' color and
+    // carries a dark number, as the stamp does - the series' steel blue with
+    // onVolSeries for the line and the mountain, the candle's up or down with
+    // bg for the candles and the bars (the stamp's pairs). The legend is a
+    // framed box like the statistics box, "Volume 1.2K" in the text color
+    // behind a square of the bars' color (for the candles, the color of the
+    // candle it reads), LGD_VOL_INSET inside the pane's corner.
     if (volPane && volT > 0 && !in->desktop) {
         SelectObject(hdc, sty->fontAxis);
         if (yVolV != INT_MIN) {
             BOOL upV = (lastV->close >= lastV->open);
             RECT rcV = { edge + 1, yVolV - tagHalf, axR + PX(3), yVolV + tagHalf };
-            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.box, volT));
+            COLORREF tagC = volSeries ? sty->clr.volSeries : (upV ? sty->clr.up : sty->clr.down);
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, tagC, volT));
             FillRect(hdc, &rcV, (HBRUSH)GetStockObject(DC_BRUSH));
             FormatVolume(lastV->volume, buf, 64);
-            SetTextColor(hdc, Blend(sty->clr.bg, upV ? sty->clr.up : sty->clr.down, volT));
+            SetTextColor(hdc, Blend(sty->clr.bg, volSeries ? sty->clr.onVolSeries : sty->clr.bg, volT));
             RECT rcVT = { axL, yVolV - tagHalf, axR, yVolV + tagHalf };
             DrawTextW(hdc, buf, -1, &rcVT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+#ifdef TICKER_PROBE
+            st->probeVolMask |= 8;
+#endif
         }
         int volLegendIdx = i1 - 1;
         if (st->hoverIdx >= 0 && st->hoverIdx < n) {
@@ -2459,22 +2759,34 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         wchar_t vtxt[24];
         if (volLegendIdx >= 0) FormatVolume(in->candles[volLegendIdx].volume, vtxt, 24);
         else                   wcscpy_s(vtxt, 24, L"-");
-        swprintf_s(buf, 64, L"Vol  %s", vtxt);
+        swprintf_s(buf, 64, L"Volume %s", vtxt);
         SIZE lszV = { 0, 0 };
         GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &lszV);
-        int lxV = left + PX(6), lyV = vt + PX(3);
-        if (lxV + lszV.cx <= right - PX(6) && lyV + lszV.cy <= vb) {
-            // Phase 45: on a rectangle of the background, 3 px wider and 2 px
-            // taller on each side than the text. The pane's bars are strong
-            // now, and text over a bar cannot reach 4.5:1 in the light theme;
-            // on bg it is the header's pair. The top stays under the pane's
-            // top line, and the bottom inside the pane.
-            RECT rcLV = { lxV - PX(3), lyV - PX(2), lxV + lszV.cx + PX(3), lyV + lszV.cy + PX(2) };
-            if (rcLV.top < vt + 1) rcLV.top = vt + 1;
-            if (rcLV.bottom > vb + 1) rcLV.bottom = vb + 1;
-            FillRect(hdc, &rcLV, sty->brBg);
+        int sw = PX(LGD_SWATCH), rowH = PX(LGD_ROW_H);
+        RECT rcLV;
+        rcLV.left = left + PX(LGD_VOL_INSET);
+        rcLV.top = vt + PX(LGD_VOL_INSET);
+        rcLV.right = rcLV.left + PX(LGD_PAD_X) + sw + PX(LGD_PAD_X) + lszV.cx + PX(LGD_PAD_X + 1);
+        rcLV.bottom = rcLV.top + PX(LGD_PAD_T) + rowH + PX(LGD_PAD_B);
+        if (rcLV.right <= right - PX(6) && rcLV.bottom <= vb + 1) {
+            const Candle* lc = &in->candles[(volLegendIdx >= 0) ? volLegendIdx : n - 1];
+            COLORREF swC = volSeries ? sty->clr.volSeries
+                                     : ((lc->close >= lc->open) ? sty->clr.volPaneUp : sty->clr.volPaneDown);
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.box, volT));
+            FillRect(hdc, &rcLV, (HBRUSH)GetStockObject(DC_BRUSH));
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.boxEdge, volT));
+            FrameRect(hdc, &rcLV, (HBRUSH)GetStockObject(DC_BRUSH));
+            int slotY = rcLV.top + PX(LGD_PAD_T);
+            RECT rcSw = { rcLV.left + PX(LGD_PAD_X), slotY + (rowH - sw) / 2 - PX(1), 0, 0 };
+            rcSw.right = rcSw.left + sw;
+            rcSw.bottom = rcSw.top + sw;
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, swC, volT));
+            FillRect(hdc, &rcSw, (HBRUSH)GetStockObject(DC_BRUSH));
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.text, volT));
-            ExtTextOutW(hdc, lxV, lyV, 0, NULL, buf, (int)wcslen(buf), NULL);
+            ExtTextOutW(hdc, rcSw.right + PX(LGD_PAD_X), slotY - PX(2), 0, NULL, buf, (int)wcslen(buf), NULL);
+#ifdef TICKER_PROBE
+            st->probeVolMask |= 4;
+#endif
         }
         SetTextColor(hdc, sty->clr.axis);
     }
@@ -2516,105 +2828,208 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // not on the first label, and the edge test on each label's own width.
     // Phase 51: which labels and where is TimeLabelsOf's, computed before
     // the grid, whose dotted columns stand on the same x.
-    if (s_timeLbl.n > 0 && !in->desktop) {
+    // Phase 52: two rows (see TimeLabelsOf). The fine row's cell begins
+    // TIME_ROW_TOP under the lowest pane, the coarse row's TIME_ROW_PITCH
+    // under that: with Arial's 17 px cell the ink of the two rows is one
+    // pixel apart and the coarse row's descenders end on the band's last row
+    // but one (PAD_B, checked at 96, 144 and 192 dpi). A separator is a line
+    // in the axis line's color down the coarse row where its unit changes;
+    // each span's name stands centered in it, whole or not at all.
+#ifdef TICKER_PROBE
+    st->probeTimeAxis = 0;
+#endif
+    if (!in->desktop && (s_timeLbl.n > 0 || s_timeLbl.nSeg > 0)) {
         wchar_t tl[24];
+        int yFine = axisB + PX(TIME_ROW_TOP), yCoarse = yFine + PX(TIME_ROW_PITCH);
         SelectObject(hdc, sty->fontAxis);
         UINT oldAlign = SetTextAlign(hdc, TA_CENTER | TA_TOP);
         for (int t = 0; t < s_timeLbl.n; ++t) {
-            FormatTimeAs(in->candles[s_timeLbl.k[t]].openTime, in->intervalMs, in->utcOffsetMs,
-                         TIME_AXIS, tl, 24);
-            ExtTextOutW(hdc, s_timeLbl.x[t], axisB + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
+            TimeFine(in->candles[s_timeLbl.k[t]].openTime, in->intervalMs, in->utcOffsetMs,
+                     s_timeLbl.form, tl, 24);
+            ExtTextOutW(hdc, s_timeLbl.x[t], yFine, 0, NULL, tl, (int)wcslen(tl), NULL);
+        }
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.axisLine);
+        for (int q = 0; q < s_timeLbl.nSep; ++q) {
+            MoveToEx(hdc, s_timeLbl.sepX[q], yCoarse, NULL);
+            LineTo(hdc, s_timeLbl.sepX[q], H);
+        }
+        int coarse = 0;
+        for (int q = 0; q < s_timeLbl.nSeg; ++q) {
+            TimeCoarse(in->candles[s_timeLbl.segK[q]].openTime, in->intervalMs, in->utcOffsetMs,
+                       s_timeLbl.unit, tl, 24);
+            SIZE csz = { 0, 0 };
+            GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &csz);
+            int x0 = s_timeLbl.segX0[q], x1 = s_timeLbl.segX1[q];
+            if (csz.cx + PX(8) > x1 - x0) continue;
+            ExtTextOutW(hdc, (x0 + x1) / 2, yCoarse, 0, NULL, tl, (int)wcslen(tl), NULL);
+            coarse++;
         }
         SetTextAlign(hdc, oldAlign);
+#ifdef TICKER_PROBE
+        st->probeTimeAxis = s_timeLbl.form | (s_timeLbl.unit << 4) |
+                            ((s_timeLbl.nSep > 255 ? 255 : s_timeLbl.nSep) << 8) | ((coarse > 255 ? 255 : coarse) << 16);
+#endif
     }
 
-    // --- Legend for the moving averages (phase 25) ---
-    // Top left of the chart surface, in the lines' own colors: the color
-    // is what says which line is which, and the number is the average at
-    // the candle under the crosshair (no crosshair: the last visible
-    // candle). An average that is not defined there - fewer than period
-    // candles before it - gets a dash. The axis font, which is selected
-    // here; transparent over the candles, like the watermark under them.
-    // Not on the desktop (phase 14: no readings there), and only when the
-    // WHOLE text fits in the surface - same rule as the percentage in the
-    // header: a clipped number is a wrong number.
+    // --- The statistics box (phase 52) ---
+    // Bloomberg's legend: a framed box in the price pane, one row per line
+    // of text - "Last Price", "High on <date>", "Average", "Low on <date>"
+    // for the view, and with the indicators on the overlays' rows, "SMA 20",
+    // "EMA 50", "VWAP", which were a line of text at the top until now (phase
+    // 25-27). Each row has its mark: a square of the series' color for Last
+    // Price (the stamp's white or navy for the line and the mountain, the
+    // candle's up or down for the candles and the bars), a T for the high,
+    // -o- for the average, an inverted T for the low, and the overlays'
+    // squares in their lines' colors, faded with them. The text in the text
+    // color on the box surface (9.3:1 dark, 15.8 light), the marks' glyphs
+    // in the axis color.
+    // The numbers: Last Price, SMA, EMA and VWAP at the legend's candle -
+    // the crosshair's, else the last visible one, as the old legend and the
+    // hover box read them; High, Low and Average over the candles whose
+    // middle is in view (ChartViewStats, the numbers the high and low labels
+    // show), the high and low in the prices the axis scales on, the average
+    // the mean close. Dates as the hover box writes them ("16 Sep 12:00";
+    // 1d and 1w the UTC date).
+    // Where: the lower-left corner, as on the terminal, and the upper-left
+    // when the price's marks enter the lower-left and not the upper-left -
+    // or, entering both, fewer candles enter the upper-left (MarksHitCount:
+    // on a few wide candles the box would otherwise sit on a third of them).
+    // Measured over every 300-candle view of the recorded fixtures and the
+    // goldens' walks, a fixed corner is on the price in 28-74 % of the views
+    // (which corner is free follows the trend), this rule in 2-3 %. The box
+    // is opaque: the level, alert and ghost lines stop at it, as they did at
+    // the old legend (phase 46); the level names and the view's high and low
+    // give way to it (placed[]), and the hover box is drawn over it.
+    // Size: at most LGD_MAX_PCT of the plot's width and of the price pane's
+    // height. Rows give way when it is too tall, first High and Low together
+    // (their numbers stand by their points, phase 51), then Average, VWAP,
+    // EMA and SMA; Last Price stays. Too wide, High and Low lose their dates;
+    // with fewer than two rows, or still too wide, there is no box - at
+    // 400x250 the old one-line legend did not fit either. Panel only.
 #ifdef TICKER_PROBE
+    st->probeLegendMask = 0;
     if (!(indT > 0 && !in->desktop)) st->probeLblMask = 0;
 #endif
     // The text placed in the plot so far, for the level names and (phase 51)
     // the view's high and low after them: each gives way to what is here.
     RECT placed[LVL_COUNT + 3];
     int  nPlaced = 0;
-    if (indT > 0 && !in->desktop) {
-        RECT rcLegend = { 0, 0, 0, 0 };   // empty when the legend did not fit
-        wchar_t lg[96];
-        int len1, lenAll;
-        if (indOk[0]) swprintf_s(lg, 96, L"SMA %d  %.2f    ", IND_SMA_PERIOD, indVal[0]);
-        else          swprintf_s(lg, 96, L"SMA %d  -    ", IND_SMA_PERIOD);
-        len1 = (int)wcslen(lg);
-        if (indOk[1]) swprintf_s(lg + len1, 96 - len1, L"EMA %d  %.2f", IND_EMA_PERIOD, indVal[1]);
-        else          swprintf_s(lg + len1, 96 - len1, L"EMA %d  -", IND_EMA_PERIOD);
-        lenAll = (int)wcslen(lg);
-        // VWAP (phase 27) is the third item. If all three do not fit, the
-        // VWAP item drops out and the two averages stand as before; if those
-        // do not fit either, nothing is shown. Each item whole or not at all.
-        int len2 = lenAll;
-        if (indOk[2]) swprintf_s(lg + len2, 96 - len2, L"    VWAP  %.2f", indVal[2]);
-        else          swprintf_s(lg + len2, 96 - len2, L"    VWAP  -");
-        int len3 = (int)wcslen(lg);
-        SIZE szAll = { 0, 0 }, sz1 = { 0, 0 }, sz3 = { 0, 0 };
-        GetTextExtentPoint32W(hdc, lg, lenAll, &szAll);
-        GetTextExtentPoint32W(hdc, lg, len1, &sz1);
-        GetTextExtentPoint32W(hdc, lg, len3, &sz3);
-        int lx = left + PX(6), ly = top + PX(4);
-        if (lx + szAll.cx <= right - PX(6) && ly + szAll.cy <= bottom) {
-            // Today's high (phase 27) lies 8 % below the surface's top when
-            // today's top is the view's, and on a short panel that is in the
-            // middle of this row: the dashes ran right through the digits
-            // (seen in a capture at 560x300). Then - and only then - the text
-            // gets an opaque background, so the numbers stay whole and the
-            // line continues behind them.
-            // Phase 46: the same for every horizontal drawn before this - the
-            // alert lines, the ghost's and the afterglow. They are drawn
-            // from left to edge, and an alert set near the top ran through
-            // the numbers.
-            BOOL struck = FALSE;
-            for (int q = 0; q < LVL_COUNT; ++q)
-                if (yLine[q] != INT_MIN && yLine[q] >= ly - 1 && yLine[q] <= ly + szAll.cy) struck = TRUE;
-            for (int a = 0; a < in->alertCount && !struck; ++a) {
-                int ya = AlertY(st, &g, fabs(in->alerts[a]));
-                if (ya >= top && ya <= bottom && ya >= ly - 1 && ya <= ly + szAll.cy) struck = TRUE;
-            }
-            if (yGhostLine != INT_MIN && yGhostLine >= ly - 1 && yGhostLine <= ly + szAll.cy) struck = TRUE;
-            if (in->alertFlashF > 0.0) {
-                int yf = AlertY(st, &g, in->alertFlashLevel);
-                if (yf >= top && yf <= bottom && yf >= ly - 1 && yf <= ly + szAll.cy) struck = TRUE;
-            }
-            // Phase 49: and the mountain's fill. Its top is the highest
-            // close, 7 % under the pane's top, which is inside this row on
-            // a price pane under ~275 px (and anywhere in the Y easing).
-            // Phase 51: where the fill covers the whole row, the cell is the
-            // theme's fillCell - the navy itself in the dark theme, which
-            // carries the averages' colors at 4.5:1 - not a black strip.
-            RECT rcLg = { lx, ly, lx + sz3.cx, ly + szAll.cy };
-            if (FillHitRect(&pm, &rcLg)) struck = TRUE;
-            if (struck) {
-                SetBkColor(hdc, FillUnderRect(&pm, &rcLg) ? sty->clr.fillCell : sty->clr.bg);
-                SetBkMode(hdc, OPAQUE);
-            }
-            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.sma, indT));
-            ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
-            SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.ema, indT));
-            ExtTextOutW(hdc, lx + sz1.cx, ly, 0, NULL, lg + len1, lenAll - len1, NULL);
-            if (lx + sz3.cx <= right - PX(6)) {
-                SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.vwap, indT));
-                ExtTextOutW(hdc, lx + szAll.cx, ly, 0, NULL, lg + len2, len3 - len2, NULL);
-            }
-            if (struck) SetBkMode(hdc, TRANSPARENT);
-            rcLegend.left = lx; rcLegend.top = ly;
-            rcLegend.right = lx + sz3.cx; rcLegend.bottom = ly + szAll.cy;
-            placed[nPlaced++] = rcLegend;
+    ChartViewStat vstat;
+    BOOL vstatOk = ChartViewStats(in->candles, n, dStart, dCount, cw, ctype, &vstat);
+    int  statDec = PriceDecimals(range / 4.0);
+    if (statDec < 2) statDec = 2;
+    if (!in->desktop && vstatOk) {
+        int lgIdx = i1 - 1;
+        if (st->hoverIdx >= 0 && st->hoverIdx < n) {
+            double hrG = (double)st->hoverIdx - dStart;
+            if (hrG >= 0.0 && hrG < dCount) lgIdx = st->hoverIdx;
         }
+        BOOL seriesS = (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+        const Candle* lgc = &in->candles[lgIdx];
+        wchar_t lbl[7][48], val[7][32], dHi[24], dLo[24];
+        FormatTimeAs(in->candles[vstat.iHigh].openTime, in->intervalMs, in->utcOffsetMs, TIME_BOX, dHi, 24);
+        FormatTimeAs(in->candles[vstat.iLow].openTime, in->intervalMs, in->utcOffsetMs, TIME_BOX, dLo, 24);
+        wcscpy_s(lbl[0], 48, L"Last Price");
+        swprintf_s(val[0], 32, L"%.*f", statDec, lgc->close);
+        swprintf_s(val[1], 32, L"%.*f", statDec, vstat.high);
+        wcscpy_s(lbl[2], 48, L"Average");
+        swprintf_s(val[2], 32, L"%.*f", statDec, vstat.avg);
+        swprintf_s(val[3], 32, L"%.*f", statDec, vstat.low);
+        swprintf_s(lbl[4], 48, L"SMA %d", IND_SMA_PERIOD);
+        swprintf_s(lbl[5], 48, L"EMA %d", IND_EMA_PERIOD);
+        wcscpy_s(lbl[6], 48, L"VWAP");
+        // An overlay with no value at the legend's candle has no row: VWAP
+        // is per UTC day and undefined on 1d and 1w, and an average is
+        // undefined before its period has candles. Bloomberg lists only the
+        // series that exist; a "-" row took room from High and Low.
+        int mask = 0x0F;
+        for (int q = 0; q < 3; ++q) {
+            if (indT <= 0 || !indOk[q]) continue;
+            swprintf_s(val[4 + q], 32, L"%.2f", indVal[q]);
+            mask |= 0x10 << q;
+        }
+        int sw = PX(LGD_SWATCH), rowH = PX(LGD_ROW_H);
+        int maxW = cw * LGD_MAX_PCT / 100, maxH = ch * LGD_MAX_PCT / 100;
+        static const int DROP[5] = { 0x0A, 0x04, 0x40, 0x20, 0x10 };   // High+Low, Average, VWAP, EMA, SMA
+        int rows = 0;
+        for (int b = 0; b < 7; ++b) if (mask & (1 << b)) rows++;
+        for (int d = 0; d < 5 && PX(LGD_PAD_T) + rows * rowH + PX(LGD_PAD_B) > maxH; ++d) {
+            if (!(mask & DROP[d])) continue;
+            mask &= ~DROP[d];
+            rows = 0;
+            for (int b = 0; b < 7; ++b) if (mask & (1 << b)) rows++;
+        }
+        SelectObject(hdc, sty->fontAxis);
+        int boxW = 0;
+        for (int dated = 1; dated >= 0 && rows >= 2; --dated) {
+            swprintf_s(lbl[1], 48, dated ? L"High on %s" : L"High", dHi);
+            swprintf_s(lbl[3], 48, dated ? L"Low on %s" : L"Low", dLo);
+            int lw = 0, vw = 0;
+            for (int b = 0; b < 7; ++b) {
+                if (!(mask & (1 << b))) continue;
+                SIZE s1 = { 0, 0 }, s2 = { 0, 0 };
+                GetTextExtentPoint32W(hdc, lbl[b], (int)wcslen(lbl[b]), &s1);
+                GetTextExtentPoint32W(hdc, val[b], (int)wcslen(val[b]), &s2);
+                if (s1.cx > lw) lw = s1.cx;
+                if (s2.cx > vw) vw = s2.cx;
+            }
+            int w = PX(LGD_PAD_X) + sw + PX(LGD_PAD_X) + lw + PX(12) + vw + PX(LGD_PAD_X + 1);
+            if (w <= maxW) { boxW = w; break; }
+        }
+        if (rows >= 2 && boxW > 0) {
+            int boxH = PX(LGD_PAD_T) + rows * rowH + PX(LGD_PAD_B);
+            RECT rcLL = { left + PX(LGD_INSET_X), bottom - PX(LGD_INSET_Y) - boxH, 0, bottom - PX(LGD_INSET_Y) };
+            RECT rcUL = { rcLL.left, top + PX(LGD_INSET_Y), 0, top + PX(LGD_INSET_Y) + boxH };
+            rcLL.right = rcUL.right = rcLL.left + boxW;
+            BOOL upper = FALSE;
+            if (MarksHitRect(&pm, &rcLL)) {
+                if (!MarksHitRect(&pm, &rcUL)) upper = TRUE;
+                else upper = MarksHitCount(&pm, &rcUL) < MarksHitCount(&pm, &rcLL);
+            }
+            RECT rcS = upper ? rcUL : rcLL;
+            FillRect(hdc, &rcS, sty->brBox);
+            FrameRect(hdc, &rcS, sty->brBoxEdge);
+            SelectObject(hdc, GetStockObject(DC_BRUSH));
+            int r = 0;
+            for (int b = 0; b < 7; ++b) {
+                if (!(mask & (1 << b))) continue;
+                int slotY = rcS.top + PX(LGD_PAD_T) + r * rowH;
+                int mx = rcS.left + PX(LGD_PAD_X), my = slotY + (rowH - sw) / 2 - PX(1);
+                int lw1 = PX(1), mid = mx + sw / 2 - lw1 / 2;
+                if (b == 1 || b == 3) {            // T and inverted T: a bar and a stem
+                    SetDCBrushColor(hdc, sty->clr.axis);
+                    int yb = (b == 1) ? my : my + sw - lw1;
+                    PatBlt(hdc, mx, yb, sw, lw1, PATCOPY);
+                    PatBlt(hdc, mid, my, lw1, sw, PATCOPY);
+                } else if (b == 2) {               // -o-: a line through a dot
+                    SetDCBrushColor(hdc, sty->clr.axis);
+                    int dot = PX(3);
+                    PatBlt(hdc, mx, my + sw / 2 - lw1 / 2, sw, lw1, PATCOPY);
+                    PatBlt(hdc, mx + (sw - dot) / 2, my + (sw - dot) / 2, dot, dot, PATCOPY);
+                } else {                           // the series' and the overlays' squares
+                    COLORREF sc;
+                    if (b == 0) sc = seriesS ? sty->clr.stamp : ((lgc->close >= lgc->open) ? sty->clr.up : sty->clr.down);
+                    else        sc = Blend(sty->clr.box, (b == 4) ? sty->clr.sma : (b == 5) ? sty->clr.ema : sty->clr.vwap, indT);
+                    SetDCBrushColor(hdc, sc);
+                    PatBlt(hdc, mx, my, sw, sw, PATCOPY);
+                }
+                BOOL ov = (b >= 4);
+                SetTextColor(hdc, ov ? Blend(sty->clr.box, sty->clr.text, indT) : sty->clr.text);
+                ExtTextOutW(hdc, mx + sw + PX(LGD_PAD_X), slotY - PX(2), 0, NULL, lbl[b], (int)wcslen(lbl[b]), NULL);
+                SIZE sv = { 0, 0 };
+                GetTextExtentPoint32W(hdc, val[b], (int)wcslen(val[b]), &sv);
+                ExtTextOutW(hdc, rcS.right - PX(LGD_PAD_X + 1) - sv.cx, slotY - PX(2), 0, NULL, val[b], (int)wcslen(val[b]), NULL);
+                r++;
+            }
+            placed[nPlaced++] = rcS;
+#ifdef TICKER_PROBE
+            st->probeLegendMask = mask | (upper ? 0x80 : 0);
+#endif
+        }
+    }
+    if (indT > 0 && !in->desktop) {
+        SelectObject(hdc, sty->fontAxis);
 
         // --- Labels on the level lines (phase 29) ---
         // Five horizontal lines without names had to be read from the dash
@@ -2782,17 +3197,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     st->probeHiLoMask = 0;
 #endif
     if (!in->desktop && right - left >= PX(200)) {
-        BOOL closes = (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
-        int    iHL[2] = { -1, -1 };
-        double vHL[2] = { 0.0, 0.0 };
-        for (int i = i0; i < i1; ++i) {
-            double fx = ((double)i - dStart + 0.5) * slot;
-            if (fx < 0.0 || (double)left + fx >= (double)right) continue;
-            const Candle* c = &in->candles[i];
-            double hv = closes ? c->close : c->high, lv = closes ? c->close : c->low;
-            if (iHL[0] < 0 || hv > vHL[0]) { iHL[0] = i; vHL[0] = hv; }
-            if (iHL[1] < 0 || lv < vHL[1]) { iHL[1] = i; vHL[1] = lv; }
-        }
+        // Phase 52: the statistics box's numbers (ChartViewStats).
+        int    iHL[2] = { vstatOk ? vstat.iHigh : -1, vstatOk ? vstat.iLow : -1 };
+        double vHL[2] = { vstat.high, vstat.low };
         int rows[LVL_COUNT + ALERT_MAX + 2], rowX0[LVL_COUNT + ALERT_MAX + 2], nRows = 0;
         for (int q = 0; q < LVL_COUNT; ++q)
             if (yLine[q] != INT_MIN) { rows[nRows] = yLine[q]; rowX0[nRows++] = lvlXs; }
@@ -2810,8 +3217,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         if (xLastL < left)  xLastL = left;
         if (xLastL > right) xLastL = right;
         HiLoRoom room = { &pm, left, top, right, bottom, rows, rowX0, nRows, yLastL, xLastL, placed, 0, rcBox };
-        int dec = PriceDecimals(range / 4.0);
-        if (dec < 2) dec = 2;
+        int dec = statDec;
         SelectObject(hdc, sty->fontAxis);
         SetTextColor(hdc, sty->clr.text);
         for (int s = 0; s < 2; ++s) {
