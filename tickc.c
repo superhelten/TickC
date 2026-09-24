@@ -314,8 +314,9 @@ typedef struct {
     double    dayOpen, dayHigh, dayLow, dayVol;
     long long lastUpdMs;
     // Phase 46: the UTC day (days since 1970) the statistics were fetched
-    // on - held from another day they are yesterday's and are neither drawn
-    // nor kept - and a request from the UI to fetch them on the next cycle,
+    // on - held from another day they are yesterday's: not drawn, and the
+    // next cycle fetches today's - and a request from the UI to fetch them on
+    // the next cycle,
     // set when the panel is shown. It was every fifth cycle only, and the
     // cycle count stands still while the panel is hidden: reopened, the quote
     // line showed the day as it was when it was hidden, for up to 15 s.
@@ -5393,12 +5394,14 @@ static void ApplyPanelStyle(AppContext* ctx, int dpi) {
 // minimized window is restored.
 //
 // "In front" is the foreground window OR a panel that lost activation less
-// than TRAY_CLICK_GRACE_MS ago (phase 46). A real click on the icon makes
+// than TRAY_CLICK_GRACE_MS ago (phase 46). A real click on the icon can make
 // the taskbar the foreground window on the button's way DOWN, and the
-// callback comes on the way up: by then the panel is never the foreground,
-// so the test alone showed it again instead of hiding it. The posted clicks
-// in the tests never moved the foreground (pitfall 6), which hid it. The
-// grace is short on purpose: the price of a wrong guess - the user left the
+// callback comes on the way up: then the panel is no longer the foreground,
+// and the test alone showed it again instead of hiding it. That is the
+// review's reading and not measured - the posted clicks of the tests never
+// move the foreground (pitfall 6), which is also why no test saw it. Either
+// way the panel hides: in front, or just left. The grace is short on
+// purpose: the price of a wrong guess - the user left the
 // panel and clicked the icon within half a second to bring it back - is a
 // hidden panel the next click shows, never one that cannot be reached.
 static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
