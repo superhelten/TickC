@@ -1082,6 +1082,70 @@ static void DrawDashLine(HDC hdc, int x0, int x1, int y, int anchor, int dashOn,
     if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
 }
 
+// The same down column x over [y0, y1), the pattern anchored at row anchor
+// (phase 51: the dotted grid's verticals, anchored at the price pane's top so
+// the dots in the panes below keep its rhythm).
+static void DrawDashLineV(HDC hdc, int x, int y0, int y1, int anchor, int dashOn, int period) {
+    if (y0 < anchor) y0 = anchor;
+    int y = anchor + ((y0 - anchor) / period) * period;
+    int k = 0;
+    for (; y < y1; y += period) {
+        int a = (y < y0) ? y0 : y;
+        int b = y + dashOn;
+        if (b > y1) b = y1;
+        if (a >= b) continue;
+        s_volPts[k * 2].x     = x; s_volPts[k * 2].y     = a;
+        s_volPts[k * 2 + 1].x = x; s_volPts[k * 2 + 1].y = b;
+        s_volCnt[k++] = 2;
+        if (k == VOL_BATCH) { PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k); k = 0; }
+    }
+    if (k > 0) PolyPolyline(hdc, s_volPts, (const DWORD*)s_volCnt, (DWORD)k);
+}
+
+// The time axis's labels for the frame (phase 51): which candles get one and
+// at which x. The labels are drawn under the lowest pane, after the clip is
+// gone; the grid's verticals stand on the same x inside the clip, before the
+// candles - one computation for both, so a vertical is where a label is and
+// nowhere else (pitfall 14). The rules are phase 11's, 44's and 45's (see the
+// time axis in ChartDrawBody): anchored in time, the step measured on the
+// widest label, and a label that would leave [left, right] left out. The
+// axis font is selected for the measuring and put back. Not on the desktop,
+// which has no time axis.
+#define TIME_LBL_MAX 128
+typedef struct { int n; int k[TIME_LBL_MAX]; int x[TIME_LBL_MAX]; } TimeLabels;
+static TimeLabels s_timeLbl;
+
+static void TimeLabelsOf(HDC hdc, HFONT fontAxis, const ChartData* in, int left, int right, int cw,
+                         double dStart, double dCount, double slot, int i0, int i1, int dpi,
+                         TimeLabels* out) {
+    out->n = 0;
+    if (i0 >= i1 || in->desktop) return;
+    HGDIOBJ oldF = SelectObject(hdc, fontAxis);
+    wchar_t tl[24];
+    int minDx = ChartTimeLabelW(hdc, in->intervalMs) + ChartPx(dpi, TIME_LBL_GAP);
+    if (minDx < ChartPx(dpi, TIME_DX_MIN)) minDx = ChartPx(dpi, TIME_DX_MIN);
+    long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
+    int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
+    // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
+    // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
+    // whole view, the one the labels are written with.
+    long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
+    long long slotNo = (t0 + tzMs) / iv;
+    int rem = (int)(slotNo % step);
+    int k = i0 + ((rem == 0) ? 0 : (step - rem));
+    for (; k < i1 && out->n < TIME_LBL_MAX; k += step) {
+        int x = left + (int)(((double)k - dStart + 0.5) * slot);
+        FormatTimeAs(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs, TIME_AXIS, tl, 24);
+        SIZE tsz = { 0, 0 };
+        GetTextExtentPoint32W(hdc, tl, (int)wcslen(tl), &tsz);
+        if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
+        out->k[out->n] = k;
+        out->x[out->n] = x;
+        out->n++;
+    }
+    SelectObject(hdc, oldF);
+}
+
 // The themes (phase 38). Dark is the CLR_ macros, field for field, so TickC
 // draws exactly what it drew before the colors became data.
 const ChartTheme ChartThemeDark = {
@@ -1606,13 +1670,35 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // out. The pane's top line stands PANE_GAP (6 px) under it, and the two
     // read as a double rule; the pane's line is the one separator, as in
     // Bloomberg. The price label on row 4 stays - it is the pane's low.
-    HPEN hOldPen = (HPEN)SelectObject(hdc, sty->penGrid);
+    //
+    // Phase 51: dotted, in both directions, as on Bloomberg's GIP chart -
+    // one pixel in GRID_DOT_PERIOD (see chart.h), the rows at the price
+    // labels and the columns at the time labels (TimeLabelsOf), in the
+    // price pane and in the panes under it. Over the mountain's fill, like
+    // the solid grid was. The desktop keeps its three solid rules and gets
+    // no columns (it has no time axis). Looked at side by side at 3840x1600,
+    // the dotted rows were not calmer: a quarter of the pixels in a color
+    // bright enough to be seen gives about the same light as the solid
+    // 1C222B (0.013 against 0.015 in luminance per pixel), and reads as
+    // texture on the wallpaper instead of a hairline.
+    TimeLabelsOf(hdc, sty->fontAxis, in, left, right, cw, dStart, dCount, slot, i0, i1, dpi, &s_timeLbl);
     int gi0 = in->desktop ? 1 : 0;
     int gi1 = (in->desktop || volPane || bandOn) ? 3 : 4;
-    for (int i = gi0; i <= gi1; ++i) {
-        int y = top + (ch * i) / 4;
-        MoveToEx(hdc, left, y, NULL);
-        LineTo(hdc, edge, y);
+    HPEN hOldPen;
+    if (in->desktop) {
+        hOldPen = (HPEN)SelectObject(hdc, sty->penGrid);
+        for (int i = gi0; i <= gi1; ++i) {
+            int y = top + (ch * i) / 4;
+            MoveToEx(hdc, left, y, NULL);
+            LineTo(hdc, edge, y);
+        }
+    } else {
+        hOldPen = (HPEN)SelectObject(hdc, GetStockObject(DC_PEN));
+        SetDCPenColor(hdc, sty->clr.gridDot);
+        for (int i = gi0; i <= gi1; ++i)
+            DrawDashLine(hdc, left, edge, top + (ch * i) / 4, left, 1, GRID_DOT_PERIOD);
+        for (int t = 0; t < s_timeLbl.n; ++t)
+            DrawDashLineV(hdc, s_timeLbl.x[t], top, bottom + 1, top, 1, GRID_DOT_PERIOD);
     }
     SelectObject(hdc, hOldPen);
 
@@ -1877,6 +1963,15 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         MoveToEx(hdc, left, vt, NULL);
         LineTo(hdc, edge, vt);
         SelectObject(hdc, hOldV);
+        // Phase 51: the grid's dotted columns go on down through the pane,
+        // under the bars, in the price pane's rhythm (anchored at top).
+        if (s_timeLbl.n > 0) {
+            HGDIOBJ oldPenD = SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, sty->clr.gridDot);
+            for (int t = 0; t < s_timeLbl.n; ++t)
+                DrawDashLineV(hdc, s_timeLbl.x[t], vt + 1, vb + 1, top, 1, GRID_DOT_PERIOD);
+            SelectObject(hdc, oldPenD);
+        }
         IntersectClipRect(hdc, left, vt, edge, vb + 1);
         // Phase 45: the stronger pane colors in the panel only - the desktop
         // is meant to be quiet, and keeps the muted bars even in a pane.
@@ -1909,6 +2004,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         HPEN hOldB = (HPEN)SelectObject(hdc, sty->penGrid);
         MoveToEx(hdc, left, bt, NULL);
         LineTo(hdc, edge, bt);
+        // Phase 51: and through the band, as through the volume pane.
+        if (s_timeLbl.n > 0) {
+            SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, sty->clr.gridDot);
+            for (int t = 0; t < s_timeLbl.n; ++t)
+                DrawDashLineV(hdc, s_timeLbl.x[t], bt + 1, bb + 1, top, 1, GRID_DOT_PERIOD);
+        }
         SelectObject(hdc, hOldB);
         if (rsiT > 0) {
             IntersectClipRect(hdc, left, bt, edge, bb + 1);
@@ -2308,32 +2410,16 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // Phase 45: two forms on one axis ("14:35", and "21 Sep" where a day
     // begins), so the spacing is measured on the widest (ChartTimeLabelW),
     // not on the first label, and the edge test on each label's own width.
-    if (i0 < i1 && !in->desktop) {
+    // Phase 51: which labels and where is TimeLabelsOf's, computed before
+    // the grid, whose dotted columns stand on the same x.
+    if (s_timeLbl.n > 0 && !in->desktop) {
         wchar_t tl[24];
-        int minDx = ChartTimeLabelW(hdc, in->intervalMs)   // the axis font is selected
-                  + PX(TIME_LBL_GAP);
-        if (minDx < PX(TIME_DX_MIN)) minDx = PX(TIME_DX_MIN);
-        long long iv = (in->intervalMs > 0) ? in->intervalMs : 60000LL;
-        int step = NiceTimeStep(TimeTickStep(dCount, cw, minDx), iv);
-
-        // Anchored in LOCAL time, so 6 h steps land on 00, 06, 12 and 18
-        // here and not on 02, 08 ... (UTC + 2 in summer). One offset for the
-        // whole view, the one the labels are written with.
-        long long t0 = in->candles[i0].openTime, tzMs = in->utcOffsetMs;
-        long long slotNo = (t0 + tzMs) / iv;
-        int rem = (int)(slotNo % step);
-        int k = i0 + ((rem == 0) ? 0 : (step - rem));
-
+        SelectObject(hdc, sty->fontAxis);
         UINT oldAlign = SetTextAlign(hdc, TA_CENTER | TA_TOP);
-        for (; k < i1; k += step) {
-            int x = left + (int)(((double)k - dStart + 0.5) * slot);
-            FormatTimeAs(in->candles[k].openTime, in->intervalMs, in->utcOffsetMs,
+        for (int t = 0; t < s_timeLbl.n; ++t) {
+            FormatTimeAs(in->candles[s_timeLbl.k[t]].openTime, in->intervalMs, in->utcOffsetMs,
                          TIME_AXIS, tl, 24);
-            int tlLen = (int)wcslen(tl);
-            SIZE tsz = { 0, 0 };
-            GetTextExtentPoint32W(hdc, tl, tlLen, &tsz);
-            if (x - tsz.cx / 2 < left || x + (tsz.cx + 1) / 2 > right) continue;
-            ExtTextOutW(hdc, x, axisB + PX(2), 0, NULL, tl, tlLen, NULL);
+            ExtTextOutW(hdc, s_timeLbl.x[t], axisB + PX(2), 0, NULL, tl, (int)wcslen(tl), NULL);
         }
         SetTextAlign(hdc, oldAlign);
     }
