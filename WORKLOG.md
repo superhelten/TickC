@@ -3689,6 +3689,109 @@ y = 44 is the price column's top label on the 560 px panel, which now
 gives way to the PDH tag on the shorter pane. The README picture is the
 same fixture scene, retaken. **Exe 227 840 → 230 400 bytes (+2 560).**
 
+### Phase 44 — fixes from a deep review
+
+Branch `phase-44`, merged with `--no-ff`. After phase 43 the user asked for
+a deep analysis of the whole code for bugs and UI improvements. Five
+reviewers read one area each (tickc.c in four ranges, the chart engine),
+and every finding was checked against the code before it was listed; four
+were found by two reviewers independently. This phase fixes the bugs that
+were confirmed and that a user can meet. The UI improvements from the same
+review (dates on the time axis, stronger bars in the volume pane, the
+symbol picker as a dropdown, one selection color, the keys in the gear
+menu) are the next phase.
+
+**The app.**
+- **The tray icon ignored every click after an Explorer restart.**
+  `UpdateIcon` set `uFlags = NIF_ICON | NIF_TIP` on every price, so
+  `NIF_MESSAGE` was gone after the first one, and the TaskbarCreated
+  handler re-added the icon without a callback message: right price, no
+  panel, no menu, no Quit - in desktop mode the only way out was Task
+  Manager. Phase 9's test checked the icon and its tooltip, never a click.
+  Both places now set all three flags. Probe field 116 (main window) reads
+  `nid.uFlags`.
+- **Drag, double-click and right-click were dead in the volume pane and
+  the RSI band** - a regression from phase 43 (the bars used to stand in
+  the price pane) and old for the band. The three handlers stopped at the
+  price pane's bottom while the crosshair reached the lowest pane: pitfall
+  109 again, this time for input. They read `ChartPanesBottom` now; the
+  price column's alert click stays price-pane only.
+- **Wheel steps under 120 were thrown away.** Touchpads and smooth-scroll
+  mice send small deltas, and `delta / WHEEL_DELTA` made each a zero
+  step. A remainder is carried until it makes a whole notch, and reset
+  when the direction or Ctrl changes.
+- **A double-click on a range cell selected the range and ended it
+  again**: the second click fell through to `WM_LBUTTONDOWN`, and
+  `SelectRange` on the selected range ends it. On the caption buttons,
+  the toolbar and an open menu the second click is now swallowed (the
+  gear and `[ + ]` also acted twice). This reverses pitfall 38's advice for
+  those controls; the chart and the price column keep theirs.
+- **Keys:** auto-repeat is ignored for commands and toggles (Ctrl+N held
+  opened ~30 windows a second; V, I and T flickered and wrote the
+  registry at repeat rate), not for the arrows, PgUp/PgDn, Home/End and
+  zoom, which are meant to repeat (pitfall 110). AltGr, which Windows
+  sends as Ctrl+Alt, no longer acts as Ctrl: on the Norwegian layout
+  AltGr+0 (`}`) reset the window and AltGr+M (`µ`) minimized it. A key
+  pressed with Alt down in `WM_KEYDOWN` is always AltGr - plain Alt comes
+  as `WM_SYSKEYDOWN` - so the handler ignores it; only clearing Ctrl
+  would have let AltGr+7 (`{`) switch the interval. `A` with the pointer
+  in a lower pane no longer sets an alert at the bottom of the price.
+- **A candle went missing for good after a short gap.** Without a seed
+  the worker fetched 3 candles; with the newest candle 4 intervals after
+  the last one held, the response began 2 intervals on, the restart rule
+  (`> last + 2 * iv`) let it through, and the candle between was never
+  fetched - the chart is index-based, so the averages ran across the
+  hole. At 3 intervals the last held candle kept its half-built values.
+  The limit now follows the gap (`gap / iv + 2`, 3 to 360), so a response
+  always overlaps, and a response that starts more than one interval on
+  restarts the buffer. The fixtures are keyed by symbol and interval, not
+  the limit, so the test build is unchanged.
+- **Shutdown tore down under a live worker.** WinMain waited 3 s for a
+  thread whose requests time out after 5 s per phase, ignored the result,
+  and deleted the lock and closed the handles anyway. Now the session is
+  closed first, the wait is 10 s, and the lock, the events and the
+  connection are released only when the thread has ended; `HttpGet`
+  starts no request once stop is set. Quit also destroys the panel or
+  desktop surface at once (`DestroyPanelSurface`, shared with
+  `WM_DESTROY`) instead of leaving it on screen during the wait.
+
+**The engine.**
+- **Pane crosshair tags cut the bottom price label.** A tag clamped to the
+  top of the volume pane or the band stuck 8 px up into the price column,
+  whose labels never saw it. A tag that would leave its pane is not drawn
+  now - the line is - and the price pane's tag gives way the same way at
+  its bottom rows. The stamp rule, applied to panes.
+- **The hover box spilled into the header** on a short price pane (a
+  139 px box with every row on, against 120-138 px of price at 282-313 px
+  panel height): the top clamp now wins, and the box hangs into the pane
+  below.
+- **The time axis was always empty on the smallest panels.** With room
+  for two labels, `TimeTickStep` asked for one step across the whole
+  view, and `NiceTimeStep` rounded it past the view (400x250 at 1h: 14
+  days in 12.5). With two or fewer the step is now `ceil(n * minDx / w)`
+  (7 days, one label); three or more take the phase 11 formula as before.
+- **`--update` wrote goldens for failing cases**; it refuses now.
+
+**Verified.** `chart_golden`: two new cases (the pointer in the gap above
+the volume pane; a 290 px panel with every row in the hover box), a unit
+check that the 400x250 panel gets a label, and an exhaustive sweep of the
+new branch (7 693 920 widths, spacings and counts, never closer than the
+spacing). Of the 34 earlier cases exactly one changed, `panel_1h_400x250`
+(195 px, all in the time band: its new label); looked at before writing.
+36/36 twice. `shot_fix44.ps1` (13 checks, posted messages on the hidden
+desktop): the tray flags before and after a TaskbarCreated, a drag in the
+volume pane moving the view as far as the same drag in the price pane,
+three wheel steps of 40 panning the same notch as one of 120, a
+double-click on 1Y leaving 1Y selected, `A` in the volume pane adding no
+alert and in the price pane one, a repeated V not toggling and a repeated
+Left still panning. **Red run** against phase 43: 11 fail - every fix -
+and the two controls pass. Green twice. The earlier scripts pass, and
+`golden.ps1 -Hidden` is identical to phase 43 except the 400 px capture,
+which gained its time label. Not exercised: AltGr (a posted key cannot
+fake the modifier state, pitfall 63), the shutdown under a black-holed
+network, and the candle gap (the fixtures always seed) - these are
+reviewed, not tested. **Exe 230 400 → 230 912 bytes (+512).**
+
 ---
 
 ## Known limitations
@@ -4554,21 +4657,33 @@ same fixture scene, retaken. **Exe 227 840 → 230 400 bytes (+2 560).**
     its horizontal clamped into the band and the RSI tag drawn. When a
     pane is added, every "below the price" test becomes a question of
     WHICH pane - the crosshair, its tags and the price tag's guard.
+    Phase 44 found the same mistake in input: drag, double-click and
+    right-click still stopped at the price pane's bottom.
+110. **Not every key should ignore auto-repeat.** A held Ctrl+N opened
+    ~30 panels a second, so repeats had to go - but the arrows, PgUp/PgDn,
+    Home/End and zoom are meant to repeat while held. Filter bit 30 of
+    `lParam` per key, for commands and toggles only, and test that a
+    repeated arrow still pans.
+111. **A fall-through from `WM_LBUTTONDBLCLK` repeats the first click.**
+    Pitfall 38 made every control take the double click, so fast clicks
+    are not lost; for a control whose second press undoes the first (a
+    range cell ends its range, the gear closes its menu) that turns a
+    double-click into nothing, or into the opposite. Decide per control.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak37` and `chart.c.bak37` are left** (2026-09-24). From
+**Only `tickc.c.bak38` and `chart.c.bak38` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 43 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 44 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak36` (phases 34–42) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak37` (phases 34–43) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42) and `.bak37` (phase 43). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43) and `.bak38` (phase 44). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
