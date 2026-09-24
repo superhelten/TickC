@@ -7,7 +7,7 @@ The whole thing compiles to a single exe of about 200 KB.
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
 
-![The chart panel: candles, volume, SMA 20, EMA 50, VWAP and the day levels](docs/images/panel.png)
+![The chart panel: the quote line, candles, SMA 20, EMA 50, VWAP, the day levels and the volume pane](docs/images/panel.png)
 
 ## What it does
 
@@ -15,9 +15,10 @@ a browser tab open, and without a 150 MB Electron app. It grew from there.
 - **A header on the Bloomberg model:** a quote line with Last, Chg, %Chg, Op, Hi, Lo, Vol
 and At for the UTC trading day, a range field (1D … Max, and the bar size), and a gear
 that opens the chart settings: volume, averages, RSI and the theme.
-- **Chart panel** (left-click the icon): candlesticks, volume bars, SMA 20, EMA 50,
-and a daily VWAP. You also get today's high and low, and yesterday's high, low and close
-(labelled HOD, LOD, PDH, PDL, PDC).
+- **Chart panel** (left-click the icon): candlesticks, SMA 20, EMA 50 and a daily VWAP,
+with the volume in a pane of its own under the price and an optional RSI 14 pane. You
+also get today's high and low, and yesterday's high, low and close (labelled HOD, LOD,
+PDH, PDL, PDC).
 - **Symbols:** BTC, ETH, SOL and BNB against USDT.
 - **Intervals:** 1m, 5m, 15m, 1h, 4h, 1d, 1w, from a dropdown in the toolbar.
 - **Ranges:** 1D, 3D, 1M, 6M, YTD, 1Y, 5Y, Max. A range picks a fitting interval and shows
@@ -97,7 +98,7 @@ In the chart panel:
 | `Home` / `End`                  | Oldest / newest candle                                            |
 | `1` … `7`                       | Switch interval                                                   |
 | `Shift`+`1` … `8`               | Switch range (1D … Max); the selected one again turns it off      |
-| `V`                             | Volume bars on/off                                                |
+| `V`                             | Volume pane on/off                                                |
 | `M`                             | Indicators on/off (moving averages, VWAP, levels)                 |
 | `I`                             | RSI band on/off (RSI 14 under the chart)                          |
 | `T`                             | Light theme on/off                                                |
