@@ -5193,8 +5193,9 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
 
                 // The afterglow of an alert that has fired (phase 23): 1 -> 0.
-                // Snaps at 0.02: five of 242 color steps above CLR_BG in the
-                // strongest channel (red), so the last jump is not visible.
+                // Snaps at 0.02: five of 255 color steps above CLR_BG in the
+                // strongest channel (red; 242 on the 0D1117 of phases 1-50),
+                // so the last jump is not visible.
                 if (g_Ctx.alertFlashF > 0.0) {
                     g_Ctx.alertFlashF = AnimStep(g_Ctx.alertFlashF, 0.0, dt,
                                                  ALERT_TAU_FLASH, 0.02);
