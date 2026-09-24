@@ -26,7 +26,11 @@ typedef struct {
 // (both = bottom) when there is no band. bottom and ch stay the PRICE pane's,
 // so every price <-> y function reads them as before; the time axis sits
 // under the lowest pane.
-typedef struct { int left, top, right, bottom, cw, ch, edge, dpi, bandTop, bandBottom; } ChartRect;
+// volTop/volBottom (phase 43) are the volume pane, between the price pane and
+// the RSI band; equal (both = bottom) when the volume has no pane of its own.
+// The lowest pane's bottom is ChartPanesBottom - the hit test, the crosshair
+// and the time axis all read it, so they cannot disagree.
+typedef struct { int left, top, right, bottom, cw, ch, edge, dpi, bandTop, bandBottom, volTop, volBottom; } ChartRect;
 
 // The chart's own state. viewStart/viewCount/followLive are the TARGET view
 // (in TickC written by the UI and read by the worker thread, under the lock);
@@ -78,6 +82,11 @@ typedef struct {
     // The RSI band is on (phase 39). The region follows this at once; its
     // content fades with ChartState.dispRsiF. ChartGeometry takes the same flag.
     BOOL          band;
+    // The volume is on (phase 43): the CHOICE, which decides the region -
+    // a pane of its own, or the bars behind the candles when there is no room
+    // for one. The bars rise with ChartState.dispVolF; turned off, the
+    // region goes at once, as the RSI band's does.
+    BOOL          vol;
 } ChartData;
 
 // The chart's colors (phase 38). Every color the engine draws with comes from
@@ -194,7 +203,18 @@ typedef struct {
 // candles. The colors are CLR_UP/CLR_DOWN blended ~28 % towards CLR_BG -
 // muted enough to sit behind the candles, saturated enough to tell direction.
 // Exact values, so a probe can count them.
+// Phase 43: the bars have a pane of their own under the price, on the
+// Bloomberg model - VOL_PANE_FRAC of the chart height, at least VOL_PANE_MIN,
+// the tallest bar VOL_PANE_PAD under the pane's top line. The RSI band is
+// placed first (it is opted into and has nowhere else to go); the volume
+// gets its pane only when the price keeps PRICE_PANE_MIN, and otherwise
+// stands behind the candles as before, in VOL_FRAC of the price pane. Only
+// the smallest panels with RSI on do that: 400x250 keeps 142 px of price
+// with one pane and would get 96 with two.
 #define VOL_FRAC         0.22
+#define VOL_PANE_FRAC    0.20
+#define VOL_PANE_MIN     40
+#define VOL_PANE_PAD     3
 #define CLR_VOL_UP       RGB(0x09, 0x54, 0x2D)
 #define CLR_VOL_DOWN     RGB(0x51, 0x21, 0x2D)
 // Moving averages (phase 25): SMA 20 and EMA 50 on the close, drawn as
@@ -211,16 +231,18 @@ typedef struct {
 // The RSI band (phase 39): RSI 14 with Wilder's smoothing, in a band under the
 // price pane with its own fixed 0..100 scale and the 70/30 levels dashed. The
 // band is RSI_BAND_FRAC of the chart height, at least RSI_BAND_MIN, and it is
-// left out when the price pane would get less than RSI_PANE_MIN - a 400x250
+// left out when the price pane would get less than PRICE_PANE_MIN - a 400x250
 // panel keeps 142 px of price. Teal: not green (up), not a blue or violet of
 // the averages, not a gold or amber of VWAP and the alerts.
+// PANE_GAP is the space above every pane under the price (phase 43: the
+// volume pane's too).
 #define RSI_PERIOD       14
 #define RSI_HI           70
 #define RSI_LO           30
 #define RSI_BAND_FRAC    0.20
 #define RSI_BAND_MIN     40
-#define RSI_PANE_MIN     120
-#define RSI_GAP          6
+#define PRICE_PANE_MIN   120
+#define PANE_GAP         6
 #define CLR_RSI          RGB(0x2E, 0xC4, 0xB6)
 // Today's session (phase 27). VWAP is gold and a CURVE; the alerts are amber
 // and horizontal (CLR_ALERT FFB020, the line 86601B) - yellower and lighter
@@ -297,7 +319,9 @@ typedef struct {
 #define IND_BATCH (VOL_BATCH * 4)
 
 // --- Geometry and hit testing ---
-ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band);
+ChartRect ChartGeometry(int W, int H, BOOL desktop, int dpi, BOOL band, BOOL vol);
+int       ChartPanesBottom(const ChartRect* g);
+int       ChartVolBarsH(const ChartRect* g);
 int       ChartAxisW(int dpi);
 int       DeskPillH(int H);
 int       DeskPillFontH(int H);

@@ -3611,6 +3611,84 @@ Green twice. `shot_range` 20/20, `shot_theme`, `shot_dpi` (minimum 600 at
 -Hidden`: every difference from `main` lies above y = 44. **Exe 221 696 →
 227 840 bytes (+6 144).**
 
+### Phase 43 — volume in a pane of its own
+
+Branch `phase-43`, merged with `--no-ff`. The second half of what the user
+asked for in phase 42: the volume out from behind the candles and into a
+pane of its own, as on the Bloomberg terminal's chart - price, then
+volume, then the studies.
+
+**1. Plumbing, no visible change.** `ChartGeometry` takes the volume
+choice, and `ChartRect` gets `volTop`/`volBottom`, both equal to the price
+pane's bottom until the pane exists. `ChartPanesBottom` is the lowest
+pane's bottom: the hit test, the vertical crosshair and the time axis read
+it, so the three cannot drift apart. The app's nine geometry calls go
+through one `PanelGeometry(W, H)`, which reads both choices for the mode -
+a call site that forgot one would point the crosshair at the wrong candle.
+Probe fields 74 (0 off, 1 a pane, 2 behind the candles), 75/76 (the pane)
+and 77 (the price pane's bottom). `chart_golden` 30/30 and `golden.ps1
+-Hidden` identical to phase 42.
+
+**2. The pane.** A fifth of the chart height, at least 40 px, 6 px under
+the price pane with a grid line on its top edge - the RSI band's shape -
+and over the band when both are on. Both panes are sized from the whole
+chart height, so the volume pane is as tall with the band as without it.
+`bottom` and `ch` stay the price pane's, as in phase 39, so the price
+functions, the alerts and the levels are untouched. The bars are phase
+21's, now `DrawVolumeBars` with a base row and a height: the pane's bottom
+and its height less 3 px of headroom, or, without room for a pane, the old
+place behind the candles. `ChartVolBarsH` gives that height to the app
+too, whose easing of the volume scale still assumed 22 % of the price
+pane. In the pane: the last candle's volume as a tag at the top of its
+bar, in its direction's color on the box (the hover box's close row); a
+legend, "Vol" and the volume at the crosshair or the last visible candle,
+in the text color, which reads over the muted bars (two new pairs in the
+light theme's contrast check); and with the pointer in the pane, a
+crosshair tag with the volume at that height. No scale labels: the pane's
+top is the view's largest volume, and three readings of one number in a
+40 px pane would only collide. The pointer's pane is three-way now - the
+gap above a pane belongs to it, and the band starts under the volume pane
+(pitfall 109). Turning the volume on or off changes the geometry, so it
+rebuilds the watermark and drops the hover, as the RSI band does, and
+the bars no longer sink when it is turned off: the pane goes at once, and
+they rise when it comes back. The volume is still on by default in the
+panel and off on the desktop.
+
+**The one choice Bloomberg does not answer:** a panel under 280 px high
+with RSI on has room for one pane under the price, not two (400x250 keeps
+142 px of price with one, 96 with two, and the floor is 120). The RSI band
+is placed first - it is opted into and has nowhere else to go - and the
+volume falls back to the phase 21 bars behind the candles. It gets its
+pane back when the panel grows or the band is turned off.
+
+**Verified** on the hidden desktop. `chart_golden`: 24 of the 30 cases
+changed, and exactly the six expected did not - the overlays-off case, the
+four desktop cases (volume off there) and `rsi_15m_400x250`, the fallback,
+pixel-identical to the bars behind the candles. All were looked at before
+the goldens were written, and four cases are new: the pointer in the pane,
+both panes at 560x300, the light theme with both panes and the pointer in
+the volume pane, and the desktop with the volume on. The first draft of
+the light case had the pointer 14 px from the value tag, where the
+crosshair's tag correctly gives way; it was moved so the case shows the
+tag. Red run with `VOL_PANE_FRAC` 0.21: 27 of 34 fail - every case whose
+pane is sized by the fifth, not by the 40 px floor (400x250's pane is the
+floor both times, and passes). Green 34/34 twice, 38 contrast pairs,
+lowest 4.60:1. `shot_vol.ps1` (16 checks): the pane at 1280x720 (rows
+571-702, the price to 565), a hover in the pane finds a candle, off and on
+from the tray with the second capture pixel-identical to the first, the
+pane over the band (434-565), both at 560x300, the fallback at 400x250 with
+RSI on and the pane back with RSI off. **Red run** against commit 1: 6
+fail, exactly the pane checks. Green twice. `shot_rsi`, `shot_range`,
+`shot_quote` and `shot_dpi` pass unchanged; `shot_theme` passes with its
+test alert moved from 0.4 % to 0.8 % over the price - on the shorter price
+pane 0.4 % put the amber tag 13 px from the stamp, and within a tag height
+of the stamp the alert's number gives way (phase 29's rule), so the check
+found no text on the amber rows. `golden.ps1 -Hidden`: every
+difference from phase 42 lies in the chart; the only one reaching above
+y = 44 is the price column's top label on the 560 px panel, which now
+gives way to the PDH tag on the shorter pane. The README picture is the
+same fixture scene, retaken. **Exe 227 840 → 230 400 bytes (+2 560).**
+
 ---
 
 ## Known limitations
@@ -3625,6 +3703,9 @@ Green twice. `shot_range` 20/20, `shot_theme`, `shot_dpi` (minimum 600 at
   42). The klines give no trade time; Bloomberg's At is the trade's.
 - **The day's high, low and volume refresh every 15 s** (phase 42), and
   high and low follow the live price in between. Volume does not.
+- **Under 280 px of panel height, RSI and a volume pane do not both fit**
+  (phase 43). The band wins and the bars stand behind the candles, as
+  before phase 43. At 150 % the limit scales with the panel.
 - **YTD in the first week of January** (phase 41) is fewer than
   `MIN_VIEW` (8) daily candles, so the range cannot be shown on 1d and
   ends. It comes back once the year is eight days old.
@@ -4466,21 +4547,28 @@ Green twice. `shot_range` 20/20, `shot_theme`, `shot_dpi` (minimum 600 at
     to grow back. Keep the wish apart from the state it is clamped into
     (`rangeWant` next to `viewCount`) and reapply it wherever the state is
     set, not only where the wish is made.
+109. **Below the price pane is not one place.** Phase 39 decided that the
+    pointer was in the RSI band with `hoverY > bottom`, which was true
+    while the band was the only pane there. With the volume pane between
+    them, the same test sends a pointer in the volume pane to the band:
+    its horizontal clamped into the band and the RSI tag drawn. When a
+    pane is added, every "below the price" test becomes a question of
+    WHICH pane - the crosshair, its tags and the price tag's guard.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak36` and `chart.c.bak36` are left** (2026-09-23). From
+**Only `tickc.c.bak37` and `chart.c.bak37` are left** (2026-09-24). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 42 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 43 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak35` (phases 34–41) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak36` (phases 34–42) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41) and `.bak36` (phase 42). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42) and `.bak37` (phase 43). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
