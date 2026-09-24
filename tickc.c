@@ -422,6 +422,12 @@ typedef struct {
     // the worker thread. Hit detection hangs on THIS, not on any fade
     // level - the buttons have no fade, they change color instantly.
     int    btnHot;
+    // The caption button the left button went down on, -1 for none (phase
+    // 47). It acts on the release, and only if the release is on the same
+    // button - Windows' own caption buttons: a press can be taken back by
+    // sliding off. While it is down, it lights only while the pointer is on
+    // it, and nothing else in the panel takes hover. UI-owned.
+    int    btnDown;
     // The toolbar in the header's row 2 (phase 22). tbHot is the pill the
     // mouse is over, -1 for none - same rule as btnHot: logical state, no
     // fade. showVol is the user's choice and is saved in the registry;
@@ -2191,6 +2197,25 @@ static int ButtonHit(const RECT* btns, int x, int y) {
     return -1;
 }
 
+// The caption button at (x, y) on a panel W wide (phase 47). Maximized, the
+// panel's top and right edges are the screen's, and the buttons reach them
+// as Windows' own do (Fitts's law): a pointer flung into the top right
+// corner is on the close cross. Before, the 6 px above the buttons and the
+// 8 px right of the cross were caption, and the fling moved the window
+// instead. Restored, those margins are the resize border, and the boxes are
+// the drawn ones. Every hit test of the buttons comes here - WM_NCHITTEST,
+// hover, press, release and the double-click - while the drawing keeps
+// ButtonLayout's boxes (pitfall 14: one source for what a click hits).
+static int ButtonHitAt(int W, BOOL zoomed, int x, int y) {
+    RECT b[BTN_COUNT];
+    ButtonLayout(W, b);
+    if (zoomed) {
+        for (int i = 0; i < BTN_COUNT; ++i) b[i].top = 0;
+        b[BTN_CLOSE].right = W;
+    }
+    return ButtonHit(b, x, y);
+}
+
 // The button row's combined rectangle. Derived from ButtonLayout, not computed
 // anew - pitfall 14 applies here too: if we invalidate a different area than
 // the one we paint, a button is left un-updated.
@@ -2871,8 +2896,18 @@ static void DrawButtons(AppContext* ctx, HDC hdc, int W, BOOL zoomed) {
         // hover color can be left underneath, whatever the DC held before.
         // Both paths in PaintPopup come here, so the fast path and the slow
         // one still paint identically.
-        FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->sty.brBox)
-                             : ctx->sty.brBg);
+        // Pressed (phase 47: the button acts on the release) is one step
+        // stronger than hover, as on Windows' caption buttons: the range
+        // cells' surface, and the close cross's red a fifth toward the
+        // background.
+        if (hot && ctx->btnDown == i) {
+            SetDCBrushColor(hdc, (i == BTN_CLOSE) ? Blend(ctx->sty.clr.bg, ctx->sty.clr.hot, 204)
+                                                  : ctx->sty.clr.boxEdge);
+            FillRect(hdc, r, (HBRUSH)GetStockObject(DC_BRUSH));
+        } else {
+            FillRect(hdc, r, hot ? ((i == BTN_CLOSE) ? ctx->brClose : ctx->sty.brBox)
+                                 : ctx->sty.brBg);
+        }
 
         SelectObject(hdc, hot ? ((i == BTN_CLOSE) ? ctx->penBtnWhite : ctx->penBtnHot)
                               : ctx->penBtn);
@@ -3848,6 +3883,7 @@ static void SelectRange(AppContext* ctx, int r) {
 static void HidePanel(HWND hwnd) {
     g_Ctx.ch.hoverIdx = -1;
     g_Ctx.btnHot   = -1;
+    g_Ctx.btnDown  = -1;   // phase 47
     g_Ctx.tbHot    = -1;
     g_Ctx.alertHot = -1;
     g_Ctx.axisHotY = -1;
@@ -3914,6 +3950,7 @@ static void SpawnInstance(HWND hwnd) {
 // (Ctrl+N, Ctrl+M, F11, Ctrl+W) take the same path as the click. Up to phase
 // 43 the second click of a double-click came here too; from phase 44
 // WM_LBUTTONDBLCLK swallows it, so [ + ] no longer starts two instances.
+// From phase 47 the click comes from WM_LBUTTONUP, the keys at once.
 static void OnButtonClick(HWND hwnd, int bh) {
     switch (bh) {
         case BTN_NEW:
@@ -4092,19 +4129,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 // the same rectangle, so x can be used directly against
                 // ButtonLayout and OverlayLayout.
                 //
-                // The symbol dropdown (phase 45) opens inside this band, over
-                // the range field: its box is client area while it is open,
-                // or a click in a gap between two range cells would start a
-                // window move instead of picking a symbol (pitfall 21).
-                // overlayOpen, not the fade level (pitfall 12).
-                if (g_Ctx.overlayOpen) {
-                    OverlayRects ob;
-                    OverlayLayout(w, h, &ob);
-                    if (PtInRect2(&ob.box, x, y)) return HTCLIENT;
-                }
-                RECT btns[BTN_COUNT];
-                ButtonLayout(w, btns);
-                if (ButtonHit(btns, x, y) >= 0) return HTCLIENT;
+                // While a menu is open the whole band is client area (phase
+                // 47; phase 45 made the open box so, for the symbol dropdown
+                // that opens over the range field). Everywhere else the first
+                // click closes the menu and does nothing more, but on free
+                // header area it was caption: a click there moved the window
+                // with the menu open, and a double-click maximized it. Now
+                // WM_LBUTTONDOWN gets it and closes the menu. overlayOpen,
+                // not the fade level (pitfall 12). The resize border above
+                // keeps resizing.
+                if (g_Ctx.overlayOpen) return HTCLIENT;
+                if (ButtonHitAt(w, IsZoomed(hwnd), x, y) >= 0) return HTCLIENT;
                 // The pills in the toolbar (phase 22) are buttons of the
                 // same kind, with the same requirement: HTCLIENT, otherwise
                 // they are painted and dead, and a click on 5m moves the
@@ -4229,11 +4264,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             // that passes over the header would light the close cross red in
             // the middle of the panning, without it being possible to click
             // it.
+            //
+            // A pressed caption button (phase 47) lights only while the
+            // pointer is on it - slid off, the release will not act - and
+            // owns the mouse until the release: the early return below keeps
+            // the pills, the price column and the crosshair dark, as Windows
+            // does while its own caption button is held.
             {
-                RECT btns[BTN_COUNT];
-                ButtonLayout(rc.right, btns);
-                int bh = (g_Ctx.overlayOpen || g_Ctx.panning)
-                         ? -1 : ButtonHit(btns, mx, my);
+                int bh = ButtonHitAt(rc.right, IsZoomed(hwnd), mx, my);
+                if (g_Ctx.btnDown >= 0) {
+                    if (bh != g_Ctx.btnDown) bh = -1;
+                } else if (g_Ctx.overlayOpen || g_Ctx.panning) {
+                    bh = -1;
+                }
                 if (bh != g_Ctx.btnHot) {
                     g_Ctx.btnHot = bh;
                     // Only the button row is dirty. PaintPopup has a fast
@@ -4244,6 +4287,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     ButtonStrip(rc.right, &strip);
                     InvalidateRect(hwnd, &strip, FALSE);
                 }
+                if (g_Ctx.btnDown >= 0) return 0;
             }
 
             // Pill hover (phase 22). Same place and same guards as the
@@ -4957,9 +5001,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 RECT rcD;
                 GetClientRect(hwnd, &rcD);
                 int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
-                RECT btns[BTN_COUNT];
-                ButtonLayout(rcD.right, btns);
-                if (ButtonHit(btns, mx, my) >= 0) return 0;
+                if (ButtonHitAt(rcD.right, IsZoomed(hwnd), mx, my) >= 0) return 0;
                 RECT tb[TBAR_COUNT];
                 ToolbarLayout(rcD.right, tb);
                 if (ToolbarHit(tb, mx, my) >= 0) return 0;
@@ -5015,13 +5057,19 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int dx = GET_X_LPARAM(lParam), dy = GET_Y_LPARAM(lParam);
             // The buttons. After the overlay - the first click closes the
             // overlay, even when it hits a button - and before panning, which
-            // in any case only applies to the chart area.
+            // in any case only applies to the chart area. From phase 47 the
+            // press only arms the button, drawn pressed; WM_LBUTTONUP acts if
+            // it comes on the same button. Capture brings the release here
+            // wherever the pointer has gone.
             {
-                RECT btns[BTN_COUNT];
-                ButtonLayout(rc.right, btns);
-                int bh = ButtonHit(btns, dx, dy);
+                int bh = ButtonHitAt(rc.right, IsZoomed(hwnd), dx, dy);
                 if (bh >= 0) {
-                    OnButtonClick(hwnd, bh);
+                    g_Ctx.btnDown = bh;
+                    g_Ctx.btnHot  = bh;
+                    SetCapture(hwnd);
+                    RECT strip;
+                    ButtonStrip(rc.right, &strip);
+                    InvalidateRect(hwnd, &strip, FALSE);
                     return 0;
                 }
             }
@@ -5093,6 +5141,22 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
 
         case WM_LBUTTONUP:
+            // A caption button acts here (phase 47), on the button it was
+            // pressed on or not at all. btnDown goes first: ReleaseCapture
+            // sends WM_CAPTURECHANGED, which must find nothing to cancel.
+            if (g_Ctx.btnDown >= 0) {
+                int bd = g_Ctx.btnDown;
+                g_Ctx.btnDown = -1;
+                ReleaseCapture();
+                RECT rcU;
+                GetClientRect(hwnd, &rcU);
+                int hit = ButtonHitAt(rcU.right, IsZoomed(hwnd), GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+                RECT strip;
+                ButtonStrip(rcU.right, &strip);
+                InvalidateRect(hwnd, &strip, FALSE);
+                if (hit == bd) OnButtonClick(hwnd, bd);
+                return 0;
+            }
             if (g_Ctx.panning) {
                 g_Ctx.panning = FALSE;
                 ReleaseCapture();
@@ -5117,6 +5181,17 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (g_Ctx.panning && (HWND)lParam != hwnd) {
                 g_Ctx.panning = FALSE;
                 SetCursor(g_Ctx.curArrow);
+            }
+            // A pressed caption button (phase 47) is taken back the same way:
+            // its release will never come here.
+            if (g_Ctx.btnDown >= 0 && (HWND)lParam != hwnd) {
+                g_Ctx.btnDown = -1;
+                g_Ctx.btnHot  = -1;
+                RECT rcC;
+                GetClientRect(hwnd, &rcC);
+                RECT strip;
+                ButtonStrip(rcC.right, &strip);
+                InvalidateRect(hwnd, &strip, FALSE);
             }
             return 0;
 
@@ -5575,6 +5650,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
             ctx->overlayF    = 0.0;
             ctx->overlayHot  = -1;
             ctx->btnHot      = -1;
+            ctx->btnDown     = -1;   // phase 47
             ctx->tbHot       = -1;
             SaveWindowPlacement(ctx->hPopup);
             ShowWindow(ctx->hPopup, SW_HIDE);
@@ -5676,6 +5752,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
     // we do not control, and a red close button lingering on reopening is
     // not worth depending on it.
     ctx->btnHot      = -1;
+    ctx->btnDown     = -1;      // phase 47, same reason
     ctx->alertHot    = -1;      // phase 23, same reason
     ctx->axisHotY    = -1;
     ctx->ch.dispValid   = FALSE;   // the panel opens finished, does not glide into place
@@ -5774,6 +5851,7 @@ static void SetDesktopMode(AppContext* ctx, HWND hWnd, HINSTANCE hInst, BOOL on)
     ctx->animRunning   = FALSE;
     ctx->trackingMouse = FALSE;
     ctx->panning       = FALSE;
+    ctx->btnDown       = -1;   // phase 47: its capture went with the window
     ctx->bbValid       = FALSE;
     // The watermark is keyed on (W, H, symIdx, ivIdx), not on mode, and the
     // cache lives in ctx - it survives the window being created again. Since
@@ -6580,6 +6658,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.curPan      = LoadCursorW(NULL, IDC_SIZEALL);
     g_Ctx.curHand     = LoadCursorW(NULL, IDC_HAND);
     g_Ctx.btnHot      = -1;
+    g_Ctx.btnDown     = -1;     // phase 47: 0 would be a pressed [ + ]
     g_Ctx.tbHot       = -1;
     g_Ctx.alertHot    = -1;     // phase 23: 0 would mean "first alert under the pointer"
     g_Ctx.axisHotY    = -1;
