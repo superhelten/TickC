@@ -1116,11 +1116,10 @@ const ChartTheme ChartThemeDark = {
     CLR_BTNHOT,    // onAccent: white
     CLR_LINE,      // line (phase 49)
     CLR_MOUNTAIN,  // mountain
-    // Phase 51, not drawn yet: the grid, the axis and the stamp as they are.
-    CLR_GRID,      // gridDot
-    CLR_GRID,      // axisLine
-    CLR_UP,        // stamp
-    CLR_BG,        // onStamp
+    CLR_GRID_DOT,  // gridDot (phase 51)
+    CLR_AXIS_LINE, // axisLine
+    CLR_STAMP,     // stamp: white
+    CLR_ON_STAMP,  // onStamp: black, 21:1
 };
 
 // Light: the same roles on a near-white background. The candles are the
@@ -1174,11 +1173,11 @@ const ChartTheme ChartThemeLight = {
     RGB(0x2F, 0x5D, 0xA8),   // accent
     RGB(0xFF, 0xFF, 0xFF),   // onAccent   6.5 on the accent
     RGB(0x1B, 0x36, 0x5D),   // line       phase 49: deep navy, 11.6 on bg
-    RGB(0xDA, 0xDE, 0xE4),   // mountain   Blend(bg, line, 36)
-    RGB(0xE8, 0xEA, 0xEE),   // gridDot    phase 51, not drawn yet
-    RGB(0xE8, 0xEA, 0xEE),   // axisLine
-    RGB(0x08, 0x80, 0x5A),   // stamp
-    RGB(0xFA, 0xFA, 0xFB),   // onStamp
+    RGB(0xD6, 0xE4, 0xF4),   // mountain   phase 51: the navy's hue, light
+    RGB(0xB4, 0xBC, 0xC8),   // gridDot    phase 51, lighter than cross
+    RGB(0x7D, 0x87, 0x95),   // axisLine
+    RGB(0x1B, 0x36, 0x5D),   // stamp      the line's navy, inverted:
+    RGB(0xFF, 0xFF, 0xFF),   // onStamp    white on it, 12.1
 };
 
 // The chart's fixed GDI objects (phase 35; created in wWinMain until phase
@@ -2490,7 +2489,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 placed[nPlaced++] = rcN;
                 // Phase 49: a label on the mountain's fill stands on the
                 // background, as the legend over a level line does: its
-                // gray is not 4.5:1 on the fill in the light theme.
+                // gray is not 4.5:1 on the fill in the light theme (phase
+                // 51: nor yesterday's on the dark navy, 4.14:1; a black
+                // patch on the navy is 1.2:1, hardly a box).
                 BOOL onFill = FillHitRect(&pm, &rcN);
                 if (onFill) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
                 SetTextColor(hdc, Blend(sty->clr.bg, (q < 2) ? sty->clr.session : sty->clr.prev, indT));
