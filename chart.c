@@ -577,13 +577,9 @@ int PriceDecimals(double step) {
 }
 
 // Min/max over the visible candles, with 8% headroom above and below.
-void PriceRange(const Candle* candles, int vs, int vc, double* outMin, double* outMax) {
-    double mn = candles[vs].low, mx = candles[vs].high;
-    for (int i = 1; i < vc; ++i) {
-        const Candle* c = &candles[vs + i];
-        if (c->low  < mn) mn = c->low;
-        if (c->high > mx) mx = c->high;
-    }
+// Phase 49: the headroom and the floor are PadRange, shared with the closes'
+// range of PriceRangeFor.
+static void PadRange(double mn, double mx, double* outMin, double* outMax) {
     double range = mx - mn;
     if (range < 1e-9) range = 1.0;
     double pad = range * 0.08;
@@ -595,11 +591,37 @@ void PriceRange(const Candle* candles, int vs, int vc, double* outMin, double* o
     if (mn >= 0.0 && *outMin < 0.0) *outMin = 0.0;
 }
 
-// Phase 49: the price axis per chart type. Commit 1 of the phase: the API
-// only - every type scales as the candles do.
+void PriceRange(const Candle* candles, int vs, int vc, double* outMin, double* outMax) {
+    double mn = candles[vs].low, mx = candles[vs].high;
+    for (int i = 1; i < vc; ++i) {
+        const Candle* c = &candles[vs + i];
+        if (c->low  < mn) mn = c->low;
+        if (c->high > mx) mx = c->high;
+    }
+    PadRange(mn, mx, outMin, outMax);
+}
+
+// Phase 49: the price axis per chart type. The line and the mountain plot
+// the close and nothing else, so they scale on the closes, as a line chart
+// does in the usual terminals (TradingView among them): the axis follows
+// what is drawn, and the extremes of wicks that are not drawn would only
+// leave empty surface above and below the line - most where it matters, on
+// a few candles zoomed in with one long wick. The candles and the OHLC bars
+// draw high and low, and keep PriceRange. A level or an alert outside the
+// closes' range is left out, the rule every line already has. A type switch
+// moves the target, and the app's easing glides the axis to it.
 void PriceRangeFor(const Candle* candles, int vs, int vc, int chartType, double* outMin, double* outMax) {
-    (void)chartType;
-    PriceRange(candles, vs, vc, outMin, outMax);
+    if (chartType != CHART_LINE && chartType != CHART_MOUNTAIN) {
+        PriceRange(candles, vs, vc, outMin, outMax);
+        return;
+    }
+    double mn = candles[vs].close, mx = mn;
+    for (int i = 1; i < vc; ++i) {
+        double x = candles[vs + i].close;
+        if (x < mn) mn = x;
+        if (x > mx) mx = x;
+    }
+    PadRange(mn, mx, outMin, outMax);
 }
 
 // Largest volume in the view (phase 21): the scale of the bars. 0 when no
@@ -658,7 +680,7 @@ void SyncDisp(ChartState* ctx, const Candle* candles, int n) {
         return;
     }
 
-    PriceRange(candles, vs, vc, &ctx->dispMin, &ctx->dispMax);
+    PriceRangeFor(candles, vs, vc, ctx->chartType, &ctx->dispMin, &ctx->dispMax);   // phase 49
     ctx->dispVolMax = VolumeMax(candles, vs, vc);   // phase 21
     ctx->dispValid = TRUE;
 }
@@ -1214,6 +1236,126 @@ void ChartDrawBackground(HDC hdc, int W, int H, HDC wmDC, HBRUSH brBg) {
     SetBkMode(hdc, TRANSPARENT);
 }
 
+// Phase 49: the chart types. The type the frame is drawn as; a value the
+// engine does not know draws the candles.
+static int ChartTypeOf(const ChartState* st) {
+    int t = st->chartType;
+    return (t >= 0 && t < CHART_TYPE_COUNT) ? t : CHART_CANDLES;
+}
+
+// The close line's point for candle i: the x of the averages (the column's
+// middle, floor so the candle beyond the left edge lands left of it) and the
+// y of the candles' close, (int) on the price. Clamped to 16 surface heights
+// like the averages - during the Y easing or panned against a jump a close
+// can lie far outside the axis, and GDI computes in 27 bits. The drawing, the
+// fill and the hit tests all take their points from here (pitfall 14).
+static POINT LinePoint(const Candle* candles, int i, int left, int top, int ch,
+                       double dStart, double slot, double maxP, double range) {
+    POINT p;
+    double yy = ((maxP - candles[i].close) / range) * (double)ch;
+    if (yy < -16.0 * (double)ch) yy = -16.0 * (double)ch;
+    if (yy >  17.0 * (double)ch) yy =  17.0 * (double)ch;
+    p.x = left + (int)floor(((double)i - dStart + 0.5) * slot);
+    p.y = top + (int)yy;
+    return p;
+}
+
+// The close line over the view [i0, i1), and for the mountain the fill under
+// it. Like the averages the line runs ONE candle out on each side, so it
+// leaves through the clip instead of stopping in the outermost column. With
+// more candles than pixels many points share a column, and Polyline draws
+// them as the vertical stroke they are.
+//
+// fill: the mountain's fill, drawn in its own pass BEFORE the grid (see
+// ChartDrawBody), to the price pane's bottom row: a polygon of the points and
+// the two corners on row bottom + 1 - polygon fill leaves out the bottom and
+// right edges, so the bottom row is the last one filled, as for the grid's
+// line 4 (pitfall 33). In strips of IND_BATCH - 2 points: the next strip
+// begins at the last point of the one before, and the shared column is
+// filled once (the right edge is left out, the next strip's left edge is
+// in). Solid, not a gradient: GradientFill is msimg32's, a DLL TickC does
+// not load, and bands of PatBlt through a polygon region cost a region of up
+// to one span per row per crossing every frame.
+//
+// line: the stroke, with penLine selected by the caller, in batches like
+// DrawIndicator's - the last point of a batch is the first of the next.
+static void DrawPriceLine(HDC hdc, const Candle* candles, int n, const ChartRect* g,
+                          double dStart, double slot, int i0, int i1,
+                          double maxP, double range, BOOL fill) {
+    int first = (i0 > 0) ? i0 - 1 : 0;
+    int last  = (i1 < n) ? i1 : n - 1;
+    if (last < first) return;
+    int batch = fill ? IND_BATCH - 2 : IND_BATCH;
+    int k = 0;
+    for (int i = first; i <= last; ++i) {
+        s_volPts[k++] = LinePoint(candles, i, g->left, g->top, g->ch, dStart, slot, maxP, range);
+        if (k == batch || i == last) {
+            if (fill) {
+                if (k >= 2) {
+                    POINT a = s_volPts[0], b = s_volPts[k - 1];
+                    s_volPts[k].x     = b.x; s_volPts[k].y     = g->bottom + 1;
+                    s_volPts[k + 1].x = a.x; s_volPts[k + 1].y = g->bottom + 1;
+                    Polygon(hdc, s_volPts, k + 2);
+                    s_volPts[0] = b;
+                    k = 1;
+                }
+            } else {
+                if (k >= 2) Polyline(hdc, s_volPts, k);
+                s_volPts[0] = s_volPts[k - 1];
+                k = 1;
+            }
+        }
+    }
+}
+
+// An OHLC bar's three rectangles (phase 49), on the candle's geometry: the
+// high-low line in the column's middle, the open's tick to the left of it and
+// the close's to the right, over the body's span [x0, x0 + bodyW). w is the
+// stroke, ChartPx(dpi, 1) and no wider than the body. The line includes the
+// low's row (a candle's wick leaves it out, and its body covers the end), so
+// a tick on the low's row meets the line. The drawing and the hit test both
+// take the rectangles from here. A tick narrower than a pixel is empty: with
+// more candles than pixels the bar is its high-low line.
+static void OhlcRects(int cx, int bodyW, int w, int yHigh, int yLow, int yOpen, int yClose, RECT r[3]) {
+    int x0 = cx - bodyW / 2, xv = cx - w / 2;
+    SetRect(&r[0], xv, yHigh, xv + w, yLow + 1);
+    SetRect(&r[1], x0, yOpen - w / 2, xv, yOpen - w / 2 + w);
+    SetRect(&r[2], xv + w, yClose - w / 2, x0 + bodyW, yClose - w / 2 + w);
+}
+
+// Does the segment p-q come within pad pixels of rc? Liang-Barsky against
+// rc grown by pad on every side; pad covers the pen's width and the pixel
+// the rasterizer can put on either side of the ideal line. Conservative: a
+// label that gives way to a line one pixel off is better than one that is cut.
+static BOOL SegmentHitsRect(POINT p, POINT q, const RECT* rc, int pad) {
+    double x0 = (double)(rc->left - pad), x1 = (double)(rc->right - 1 + pad);
+    double y0 = (double)(rc->top - pad),  y1 = (double)(rc->bottom - 1 + pad);
+    double dx = (double)(q.x - p.x), dy = (double)(q.y - p.y);
+    double t0 = 0.0, t1 = 1.0;
+    double pp[4] = { -dx, dx, -dy, dy };
+    double qq[4] = { (double)p.x - x0, x1 - (double)p.x, (double)p.y - y0, y1 - (double)p.y };
+    for (int e = 0; e < 4; ++e) {
+        if (pp[e] == 0.0) {
+            if (qq[e] < 0.0) return FALSE;
+            continue;
+        }
+        double r = qq[e] / pp[e];
+        if (pp[e] < 0.0) { if (r > t1) return FALSE; if (r > t0) t0 = r; }
+        else             { if (r < t0) return FALSE; if (r < t1) t1 = r; }
+    }
+    return TRUE;
+}
+
+// Everything a chart type's marks need to be tested against a rectangle, in
+// the frame's own terms. w is the OHLC stroke (no wider than the body),
+// lineW the line pen's width.
+typedef struct {
+    int type;
+    const Candle* candles;
+    int n, i0, i1, left, top, bottom, ch, bodyW, w, lineW;
+    double dStart, slot, maxP, range;
+} PriceMarks;
+
 // Phase 46: does a candle drawn in [i0, i1) put a pixel inside rc? The same
 // x and y as the candle loop in ChartDrawBody (pitfall 14): the wick is the
 // column cx, rows [yHigh, yLow) - LineTo leaves out its end point - and the
@@ -1241,6 +1383,80 @@ static BOOL CandlesHitRect(const Candle* candles, int i0, int i1, int left, int 
         if (yBot - yTop < 1) yBot = yTop + 1;
         if (cx >= rc->left && cx < rc->right && yHigh < rc->bottom && yLow > rc->top) return TRUE;
         if (yTop < rc->bottom && yBot > rc->top) return TRUE;
+    }
+    return FALSE;
+}
+
+// Phase 49: does the chart type's price mark put a pixel inside rc? The
+// candles are CandlesHitRect; the OHLC bars test their three rectangles; the
+// line (and the mountain's line) its segments, from one candle out on each
+// side as it is drawn. The mountain's fill is not a collider - text may
+// stand on it, on a patch of the background (FillHitRect).
+static BOOL MarksHitRect(const PriceMarks* m, const RECT* rc) {
+    if (m->slot <= 0.0) return FALSE;
+    if (m->type == CHART_CANDLES)
+        return CandlesHitRect(m->candles, m->i0, m->i1, m->left, m->top, m->ch, m->dStart, m->slot,
+                              m->bodyW, m->maxP, m->range, rc);
+    int pad = (m->type == CHART_OHLC) ? m->bodyW : m->lineW;
+    int a = (int)floor(m->dStart + (double)(rc->left - m->left - pad) / m->slot) - 1;
+    int b = (int)ceil(m->dStart + (double)(rc->right - m->left + pad) / m->slot) + 1;
+    if (m->type == CHART_OHLC) {
+        if (a < m->i0) a = m->i0;
+        if (b > m->i1) b = m->i1;
+        for (int i = a; i < b; ++i) {
+            const Candle* c = &m->candles[i];
+            int cx = m->left + (int)(((double)i - m->dStart + 0.5) * m->slot);
+            RECT r[3], tmp;
+            OhlcRects(cx, m->bodyW, m->w,
+                      m->top + (int)(((m->maxP - c->high)  / m->range) * m->ch),
+                      m->top + (int)(((m->maxP - c->low)   / m->range) * m->ch),
+                      m->top + (int)(((m->maxP - c->open)  / m->range) * m->ch),
+                      m->top + (int)(((m->maxP - c->close) / m->range) * m->ch), r);
+            for (int q = 0; q < 3; ++q)
+                if (r[q].right > r[q].left && IntersectRect(&tmp, &r[q], rc)) return TRUE;
+        }
+        return FALSE;
+    }
+    int first = (m->i0 > 0) ? m->i0 - 1 : 0;
+    int last  = (m->i1 < m->n) ? m->i1 : m->n - 1;
+    if (a < first) a = first;
+    if (b > last) b = last;
+    for (int i = a; i < b; ++i) {
+        POINT p = LinePoint(m->candles, i,     m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        POINT q = LinePoint(m->candles, i + 1, m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        if (SegmentHitsRect(p, q, rc, m->lineW)) return TRUE;
+    }
+    return FALSE;
+}
+
+// Phase 49: does the mountain's fill reach into rc? The fill is every row
+// from the line down to the price pane's bottom, so it does when the line's
+// highest point over rc's columns is above rc's bottom. The line is straight
+// between two candles, so that point is a candle's or the segment's y at one
+// of rc's edges. A pixel on the conservative side, as SegmentHitsRect.
+static BOOL FillHitRect(const PriceMarks* m, const RECT* rc) {
+    if (m->type != CHART_MOUNTAIN || m->slot <= 0.0 || rc->top > m->bottom) return FALSE;
+    int first = (m->i0 > 0) ? m->i0 - 1 : 0;
+    int last  = (m->i1 < m->n) ? m->i1 : m->n - 1;
+    int a = (int)floor(m->dStart + (double)(rc->left - m->left) / m->slot) - 1;
+    int b = (int)ceil(m->dStart + (double)(rc->right - m->left) / m->slot) + 1;
+    if (a < first) a = first;
+    if (b > last) b = last;
+    for (int i = a; i < b; ++i) {
+        POINT p = LinePoint(m->candles, i,     m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        POINT q = LinePoint(m->candles, i + 1, m->left, m->top, m->ch, m->dStart, m->slot, m->maxP, m->range);
+        int xa = (p.x > rc->left) ? p.x : rc->left;
+        int xb = (q.x < rc->right - 1) ? q.x : rc->right - 1;
+        if (xa > xb) continue;
+        double yMin;
+        if (q.x == p.x) {
+            yMin = (p.y < q.y) ? p.y : q.y;
+        } else {
+            double ya = p.y + (double)(q.y - p.y) * (double)(xa - p.x) / (double)(q.x - p.x);
+            double yb = p.y + (double)(q.y - p.y) * (double)(xb - p.x) / (double)(q.x - p.x);
+            yMin = (ya < yb) ? ya : yb;
+        }
+        if (yMin <= (double)rc->bottom) return TRUE;
     }
     return FALSE;
 }
@@ -1316,6 +1532,45 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     RECT rcChart = { left, top, edge, bottom + 1 };
     IntersectClipRect(hdc, rcChart.left, rcChart.top, rcChart.right, rcChart.bottom);
 
+    // --- The candles' columns ---
+    // Computed before the grid from phase 49, where the mountain's fill
+    // needs them; the candles are drawn further down, as before.
+    double slot = (double)cw / dCount;
+    int bodyW = (int)(slot * 0.62);
+    if (bodyW < 1)  bodyW = 1;
+    if (bodyW > PX(18)) bodyW = PX(18);   // prevents chunky candles at full zoom-in
+
+    // The loop still runs over VISIBLE candles, not over the whole history:
+    // i1 - i0 is dCount + 1 rounded. The performance characteristics from
+    // phase 1 stand.
+    int i0 = (int)floor(dStart);
+    int i1 = (int)ceil(dStart + dCount);
+    if (i0 < 0) i0 = 0;
+    if (i1 > n) i1 = n;
+
+    // Phase 49: the chart type, and its marks as the label and legend tests
+    // below see them (MarksHitRect, FillHitRect). The OHLC stroke is
+    // ChartPx(dpi, 1), no wider than the body; the line's is the pen's.
+    int ctype = ChartTypeOf(st);
+    int markW = PX(1);
+    if (markW > bodyW) markW = bodyW;
+    PriceMarks pm = { ctype, in->candles, n, i0, i1, left, top, bottom, ch, bodyW, markW, PX(1),
+                      dStart, slot, maxP, range };
+
+    // --- The mountain's fill (phase 49) ---
+    // Under everything else in the pane: the grid, the bars behind the
+    // price, the alert and level lines stand on it, as they would on a
+    // translucent fill, and the line itself is drawn where the candles are.
+    // Opaque, so it hides the watermark where it lies.
+    if (ctype == CHART_MOUNTAIN) {
+        HGDIOBJ oldPenM = SelectObject(hdc, GetStockObject(NULL_PEN));
+        HGDIOBJ oldBrM  = SelectObject(hdc, GetStockObject(DC_BRUSH));
+        SetDCBrushColor(hdc, sty->clr.mountain);
+        DrawPriceLine(hdc, in->candles, n, &g, dStart, slot, i0, i1, maxP, range, TRUE);
+        SelectObject(hdc, oldBrM);
+        SelectObject(hdc, oldPenM);
+    }
+
     // --- Grid ---
     // Edge to edge puts line i = 0 at y = 0 and i = 4 at y = H - 1. That is a
     // 1 px frame around the whole screen - the very interference desktop mode
@@ -1335,20 +1590,6 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         LineTo(hdc, edge, y);
     }
     SelectObject(hdc, hOldPen);
-
-    // --- Candlesticks ---
-    double slot = (double)cw / dCount;
-    int bodyW = (int)(slot * 0.62);
-    if (bodyW < 1)  bodyW = 1;
-    if (bodyW > PX(18)) bodyW = PX(18);   // prevents chunky candles at full zoom-in
-
-    // The loop still runs over VISIBLE candles, not over the whole history:
-    // i1 - i0 is dCount + 1 rounded. The performance characteristics from
-    // phase 1 stand.
-    int i0 = (int)floor(dStart);
-    int i1 = (int)ceil(dStart + dCount);
-    if (i0 < 0) i0 = 0;
-    if (i1 > n) i1 = n;
 
     // --- Volume bars behind the candles (phase 21) ---
     // Only when the volume is on and has no pane of its own (phase 43: the
@@ -1466,34 +1707,70 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // objects fewer; the persistent buffer takes two, so the count at rest
     // goes down by two. Solid 1 px in both cases, so the pixels are the same.
     // The color is set only when it changes.
-    SelectObject(hdc, GetStockObject(DC_PEN));
-    SelectObject(hdc, GetStockObject(DC_BRUSH));
-    int curUp = -1;
-    for (int i = i0; i < i1; ++i) {
-        const Candle* c = &in->candles[i];
-        int up = (c->close >= c->open);
+    //
+    // Phase 49: the other chart types branch here, in the candles' place -
+    // over the levels and alert lines, under the averages. The candles'
+    // loop is untouched.
+    if (ctype == CHART_CANDLES) {
+        SelectObject(hdc, GetStockObject(DC_PEN));
+        SelectObject(hdc, GetStockObject(DC_BRUSH));
+        int curUp = -1;
+        for (int i = i0; i < i1; ++i) {
+            const Candle* c = &in->candles[i];
+            int up = (c->close >= c->open);
 
-        int cx     = left + (int)(((double)i - dStart + 0.5) * slot);
-        int yHigh  = top + (int)(((maxP - c->high)  / range) * ch);
-        int yLow   = top + (int)(((maxP - c->low)   / range) * ch);
-        int yOpen  = top + (int)(((maxP - c->open)  / range) * ch);
-        int yClose = top + (int)(((maxP - c->close) / range) * ch);
+            int cx     = left + (int)(((double)i - dStart + 0.5) * slot);
+            int yHigh  = top + (int)(((maxP - c->high)  / range) * ch);
+            int yLow   = top + (int)(((maxP - c->low)   / range) * ch);
+            int yOpen  = top + (int)(((maxP - c->open)  / range) * ch);
+            int yClose = top + (int)(((maxP - c->close) / range) * ch);
 
-        if (up != curUp) {
-            SetDCPenColor(hdc,   up ? sty->clr.up : sty->clr.down);
-            SetDCBrushColor(hdc, up ? sty->clr.up : sty->clr.down);
-            curUp = up;
+            if (up != curUp) {
+                SetDCPenColor(hdc,   up ? sty->clr.up : sty->clr.down);
+                SetDCBrushColor(hdc, up ? sty->clr.up : sty->clr.down);
+                curUp = up;
+            }
+
+            // Wick
+            MoveToEx(hdc, cx, yHigh, NULL);
+            LineTo(hdc, cx, yLow);
+
+            // Body
+            int yTop = (yOpen < yClose) ? yOpen : yClose;
+            int yBot = (yOpen < yClose) ? yClose : yOpen;
+            if (yBot - yTop < 1) yBot = yTop + 1; // doji -> at least 1px
+            Rectangle(hdc, cx - bodyW / 2, yTop, cx - bodyW / 2 + bodyW, yBot);
         }
-
-        // Wick
-        MoveToEx(hdc, cx, yHigh, NULL);
-        LineTo(hdc, cx, yLow);
-
-        // Body
-        int yTop = (yOpen < yClose) ? yOpen : yClose;
-        int yBot = (yOpen < yClose) ? yClose : yOpen;
-        if (yBot - yTop < 1) yBot = yTop + 1; // doji -> at least 1px
-        Rectangle(hdc, cx - bodyW / 2, yTop, cx - bodyW / 2 + bodyW, yBot);
+    } else if (ctype == CHART_OHLC) {
+        // The bars (phase 49): the candle's columns, rows and colors, and
+        // three rectangles instead of a wick and a body (OhlcRects). PatBlt
+        // with DC_BRUSH: exact rectangles at any stroke width, and no GDI
+        // object of their own.
+        SelectObject(hdc, GetStockObject(DC_BRUSH));
+        int curUp = -1;
+        for (int i = i0; i < i1; ++i) {
+            const Candle* c = &in->candles[i];
+            int up = (c->close >= c->open);
+            int cx = left + (int)(((double)i - dStart + 0.5) * slot);
+            if (up != curUp) {
+                SetDCBrushColor(hdc, up ? sty->clr.up : sty->clr.down);
+                curUp = up;
+            }
+            RECT r[3];
+            OhlcRects(cx, bodyW, markW,
+                      top + (int)(((maxP - c->high)  / range) * ch),
+                      top + (int)(((maxP - c->low)   / range) * ch),
+                      top + (int)(((maxP - c->open)  / range) * ch),
+                      top + (int)(((maxP - c->close) / range) * ch), r);
+            for (int q = 0; q < 3; ++q)
+                if (r[q].right > r[q].left)
+                    PatBlt(hdc, r[q].left, r[q].top, r[q].right - r[q].left, r[q].bottom - r[q].top, PATCOPY);
+        }
+    } else {
+        // The line, and the mountain's line over its fill (phase 49).
+        HGDIOBJ oldPenL = SelectObject(hdc, sty->penLine);
+        DrawPriceLine(hdc, in->candles, n, &g, dStart, slot, i0, i1, maxP, range, FALSE);
+        SelectObject(hdc, oldPenL);
     }
 
     // --- Moving averages (phase 25) ---
@@ -2087,6 +2364,13 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int yf = AlertY(st, &g, in->alertFlashLevel);
                 if (yf >= top && yf <= bottom && yf >= ly - 1 && yf <= ly + szAll.cy) struck = TRUE;
             }
+            // Phase 49: and the mountain's fill. Its top is the highest
+            // close, 7 % under the pane's top, which is inside this row on
+            // a price pane under ~275 px (and anywhere in the Y easing).
+            {
+                RECT rcLg = { lx, ly, lx + sz3.cx, ly + szAll.cy };
+                if (FillHitRect(&pm, &rcLg)) struck = TRUE;
+            }
             if (struck) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.sma, indT));
             ExtTextOutW(hdc, lx, ly, 0, NULL, lg, len1, NULL);
@@ -2157,8 +2441,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                         if (p != q && yLine[p] != INT_MIN && yLine[p] >= rc.top - 1 && yLine[p] <= rc.bottom)
                             lined = TRUE;
                     if (lined) continue;
-                    if (CandlesHitRect(in->candles, i0, i1, left, top, ch, dStart, slot, bodyW,
-                                       maxP, range, &rc)) continue;
+                    // Phase 49: the marks of the chart type drawn - the
+                    // bars' ticks, or the line - not always the candles'.
+                    if (MarksHitRect(&pm, &rc)) continue;
                     rcN = rc;
                     sideOk = TRUE;
                 }
@@ -2170,8 +2455,14 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 }
                 if (hit) continue;
                 placed[nPlaced++] = rcN;
+                // Phase 49: a label on the mountain's fill stands on the
+                // background, as the legend over a level line does: its
+                // gray is not 4.5:1 on the fill in the light theme.
+                BOOL onFill = FillHitRect(&pm, &rcN);
+                if (onFill) { SetBkColor(hdc, sty->clr.bg); SetBkMode(hdc, OPAQUE); }
                 SetTextColor(hdc, Blend(sty->clr.bg, (q < 2) ? sty->clr.session : sty->clr.prev, indT));
                 ExtTextOutW(hdc, rcN.left, rcN.top, 0, NULL, LVL_NAME[q], 3, NULL);
+                if (onFill) SetBkMode(hdc, TRANSPARENT);
 #ifdef TICKER_PROBE
                 st->probeLblMask |= (1 << q);
 #endif

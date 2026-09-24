@@ -169,8 +169,8 @@ static const Case CASES[] = {
     { "mountain_dpi144_rsi",    1920,1080, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144, FALSE, TRUE,  0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_rsi_400x250",    400, 250, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, TRUE,  0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     // A 185 px price pane: the fill's top (the highest close, 7 % under the
-    // pane's top) reaches the averages' legend rows.
-    { "mountain_light_560x300",  560, 300, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    // pane's top, on 15 Sep) lies under the averages' legend.
+    { "mountain_light_560x300",  560, 300, FALSE, HOUR_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_desktop_3840x1600",3840,1600,TRUE, MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_light_desktop", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
 };
@@ -920,7 +920,7 @@ static int CheckLevelLabels(void) {
         }
         SceneClose(&sc);
     }
-    if (!bad) printf("ok   level labels: %d labels in %d cases, none struck by a candle\n", labels, cases);
+    if (!bad) printf("ok   level labels: %d labels in %d cases, none struck by the price's marks\n", labels, cases);
     return bad;
 }
 
@@ -1122,6 +1122,9 @@ static int CheckChartTypes(void) {
                 COLORREF col = (c->close >= c->open) ? sc.sty.clr.up : sc.sty.clr.down;
                 int cx = MarkX(&sc, &m, j), x0 = cx - m.bodyW / 2, x1 = x0 + m.bodyW - 1;
                 if (x0 < g->left || x1 >= g->right) continue;
+                // The hover box stands 12 px beside the crosshair, on either side.
+                int boxR = ChartPx(k->dpi, 12 + HOVER_BOX_W + 2);
+                if (k->hoverX >= 0 && x1 >= k->hoverX - boxR && x0 <= k->hoverX + boxR) continue;
                 int yO = MarkY(&sc, &m, c->open), yC = MarkY(&sc, &m, c->close);
                 samples++;
                 if (PxAt(&sc, x0, yO) == col && PxAt(&sc, x1, yC) == col) tickOk++;
@@ -1141,14 +1144,14 @@ static int CheckChartTypes(void) {
         SceneClose(&sc);
     }
     // The averages' legend over the mountain stands on the background: in
-    // the legend's box, no fill. Precondition: the fill reaches the legend's
-    // rows at all in this case (pitfall 127).
+    // the legend's box, no fill. Precondition (pitfall 127): the line rises
+    // into the legend's rows under the legend's columns - closes drawn above
+    // the legend's bottom, so without the rule the fill would be in the box.
     {
         Scene sc;
         if (!SceneOpen(&sc, FindCase("mountain_light_560x300"))) { printf("FAIL chart types: no scene\n"); return bad + 1; }
         const ChartRect* g = &sc.g;
         int dpi = sc.k->dpi, ly = g->top + ChartPx(dpi, 4), lh = ChartPx(dpi, 15);
-        int reach = CountPx(&sc, g->left, ly, g->right, ly + lh, sc.sty.clr.mountain, TRUE);
         int lx0 = INT_MAX, lx1 = -1;
         for (int y = ly; y < ly + lh; y++)
             for (int x = g->left; x < g->right; x++) {
@@ -1159,11 +1162,18 @@ static int CheckChartTypes(void) {
                 }
             }
         int inLegend = (lx1 >= lx0) ? CountPx(&sc, lx0, ly, lx1 + 1, ly + lh, sc.sty.clr.mountain, TRUE) : -1;
+        Marks m;
+        MarksOf(&sc, &m);
+        int reach = 0;   // closes under the legend's columns drawn above its bottom
+        for (int j = m.vs; j < m.vs + m.vc; j++) {
+            int x = MarkX(&sc, &m, j);
+            if (x >= lx0 && x <= lx1 && MarkY(&sc, &m, s_candles[j].close) < ly + lh) reach++;
+        }
         if (reach == 0 || inLegend != 0) {
-            printf("FAIL chart types: the fill has %d px in the legend's rows, %d inside the legend (%d..%d)\n",
-                   reach, inLegend, lx0, lx1);
+            printf("FAIL chart types: %d closes rise into the legend (%d..%d), %d px of fill inside it\n",
+                   reach, lx0, lx1, inLegend);
             bad++;
-        } else printf("ok   chart types: the fill reaches the legend's rows (%d px) and stays out of the legend\n", reach);
+        } else printf("ok   chart types: %d closes rise into the legend's box, and no fill shows in it\n", reach);
         SceneClose(&sc);
     }
     if (!bad) printf("ok   chart types: %d typed cases - own marks, own scale, none drawn as candles\n", typed);
