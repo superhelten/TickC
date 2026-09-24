@@ -3649,8 +3649,10 @@ top is the view's largest volume, and three readings of one number in a
 40 px pane would only collide. The pointer's pane is three-way now - the
 gap above a pane belongs to it, and the band starts under the volume pane
 (pitfall 109). Turning the volume on or off changes the geometry, so it
-rebuilds the watermark and drops the hover, as the RSI band does. The
-volume is still on by default in the panel and off on the desktop.
+rebuilds the watermark and drops the hover, as the RSI band does, and
+the bars no longer sink when it is turned off: the pane goes at once, and
+they rise when it comes back. The volume is still on by default in the
+panel and off on the desktop.
 
 **The one choice Bloomberg does not answer:** a panel under 280 px high
 with RSI on has room for one pane under the price, not two (400x250 keeps
@@ -3679,8 +3681,9 @@ RSI on and the pane back with RSI off. **Red run** against commit 1: 6
 fail, exactly the pane checks. Green twice. `shot_rsi`, `shot_range`,
 `shot_quote` and `shot_dpi` pass unchanged; `shot_theme` passes with its
 test alert moved from 0.4 % to 0.8 % over the price - on the shorter price
-pane 0.4 % put the amber tag 13 px over the stamp, which is drawn on top
-and covered the number the check reads. `golden.ps1 -Hidden`: every
+pane 0.4 % put the amber tag 13 px from the stamp, and within a tag height
+of the stamp the alert's number gives way (phase 29's rule), so the check
+found no text on the amber rows. `golden.ps1 -Hidden`: every
 difference from phase 42 lies in the chart; the only one reaching above
 y = 44 is the price column's top label on the 560 px panel, which now
 gives way to the PDH tag on the shorter pane. The README picture is the

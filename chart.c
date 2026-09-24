@@ -879,8 +879,10 @@ static BOOL DrawVwap(HDC hdc, const ChartData* in, const ChartRect* g, COLORREF 
 // the probe: two identical rectangles give 0 pixels under ALTERNATE and
 // w x h under WINDING.
 //
-// dispVolF (phase 22) is the toggle's display, 0..1: the bars sink when the
-// volume is switched off, and rise again. At 1.0 the factor is exact.
+// dispVolF (phase 22) is the toggle's display, 0..1, and the bars grow with
+// it. Phase 43: they only rise - turned off, the region goes at once (it is
+// geometry, like the RSI band's), and nothing is left to sink. At 1.0 the
+// factor is exact.
 static void DrawVolumeBars(HDC hdc, const ChartState* st, const ChartData* in,
                            const ChartStyle* sty, int left, double dStart, double slot,
                            int bodyW, int i0, int i1, int base, int hMax) {
@@ -1415,8 +1417,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // --- Volume pane (phase 43) ---
     // Under the price pane and over the RSI band, the Bloomberg order, with
     // its own clip and a grid line on its top edge - the band's shape. The
-    // region follows the choice at once; the bars rise and sink with
-    // dispVolF, and the tag and legend fade with it.
+    // region follows the choice at once; the bars rise with dispVolF when
+    // it is turned on, and the tag and legend fade in with them.
     int vt = g.volTop, vb = g.volBottom, vbH = ChartVolBarsH(&g);
     int volT = (int)(st->dispVolF * 255.0 + 0.5);
     if (volPane) {

@@ -84,7 +84,8 @@ typedef struct {
     BOOL          band;
     // The volume is on (phase 43): the CHOICE, which decides the region -
     // a pane of its own, or the bars behind the candles when there is no room
-    // for one. The bars grow and sink with ChartState.dispVolF.
+    // for one. The bars rise with ChartState.dispVolF; turned off, the
+    // region goes at once, as the RSI band's does.
     BOOL          vol;
 } ChartData;
 
