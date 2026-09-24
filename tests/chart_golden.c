@@ -873,19 +873,21 @@ static int CheckGhostRow(void) {
 // value tag would be pinned to the pane's top, where no bar is; the stamp's
 // rule says not drawn. Control: the same candle in view, where its bar
 // reaches the top and the tag belongs there.
+// Phase 52: the tag is filled with the bars' color, not the box: anything
+// but the background in its rows is the tag.
 static int CheckVolTag(void) {
     int bad = 0;
     Scene sc;
     if (!SceneOpen(&sc, FindCase("vol_loud_last_panned"))) { printf("FAIL volume tag: no scene\n"); return 1; }
     int x0 = sc.g.edge + 1, x1 = sc.axR + ChartPx(sc.k->dpi, 3);
-    int n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.box, TRUE);
+    int n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.bg, FALSE);
     if (n) { printf("FAIL volume tag: %d px of a tag at the pane's top for a candle out of view\n", n); bad++; }
     else printf("ok   volume tag: none for a louder last candle out of view\n");
     SceneClose(&sc);
     Case live = *FindCase("vol_loud_last_panned");
     live.view = 300; live.back = 0;
     if (!SceneOpen(&sc, &live)) { printf("FAIL volume tag: no scene\n"); return bad + 1; }
-    n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.box, TRUE);
+    n = CountPx(&sc, x0, sc.g.volTop, x1, sc.g.volTop + 2 * sc.tagHalf + 1, sc.sty.clr.bg, FALSE);
     if (!n) { printf("FAIL volume tag (control): no tag for the loud last candle in view\n"); bad++; }
     else printf("ok   volume tag (control): the loud last candle in view keeps its tag (%d px)\n", n);
     SceneClose(&sc);

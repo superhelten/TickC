@@ -871,8 +871,11 @@ int ChartTimeLabelW(HDC hdc, long long intervalMs) {
 // the same area end up pointing at different places - see bug #7 in the log.
 // Volume for the hover box (phase 21): compact, so DOGE volume in millions
 // fits in 104 px. Below a thousand two decimals, otherwise K/M with one decimal.
+// Phase 52: and B from a billion, as Bloomberg's "0.845B" (DOGE or PEPE
+// volume on a day's candle), where "1234.5M" would not fit the volume tag.
 void FormatVolume(double v, wchar_t* out, size_t cch) {
-    if (v >= 1e6)      swprintf_s(out, cch, L"%.1fM", v / 1e6);
+    if (v >= 1e9)      swprintf_s(out, cch, L"%.1fB", v / 1e9);
+    else if (v >= 1e6) swprintf_s(out, cch, L"%.1fM", v / 1e6);
     else if (v >= 1e3) swprintf_s(out, cch, L"%.1fK", v / 1e3);
     else               swprintf_s(out, cch, L"%.2f", v);
 }
@@ -1074,20 +1077,26 @@ static BOOL DrawVwap(HDC hdc, const ChartData* in, const ChartRect* g, COLORREF 
 // pane (phase 45): the bars stand in the volume pane, where nothing is in
 // front of them, and take the stronger volPaneUp/volPaneDown; behind the
 // candles they keep the muted volUp/volDown.
+//
+// series (phase 52): every bar in the theme's volSeries, Bloomberg's one
+// color for a series' volume - the line and the mountain in the panel's
+// pane. One pass, with DC_BRUSH: no GDI object of its own.
 static void DrawVolumeBars(HDC hdc, const ChartState* st, const ChartData* in,
                            const ChartStyle* sty, int left, double dStart, double slot,
-                           int bodyW, int i0, int i1, int base, int hMax, BOOL pane) {
+                           int bodyW, int i0, int i1, int base, int hMax, BOOL pane, BOOL series) {
     if (st->dispVolMax <= 0.0 || st->dispVolF <= 0.0 || hMax <= 0) return;
     int oldFill = SetPolyFillMode(hdc, WINDING);
     HGDIOBJ oldPenV = SelectObject(hdc, GetStockObject(NULL_PEN));
+    HGDIOBJ oldBrV = SelectObject(hdc, GetStockObject(DC_BRUSH));
     HBRUSH brUp   = pane ? sty->brVolPaneUp   : sty->brVolUp;
     HBRUSH brDown = pane ? sty->brVolPaneDown : sty->brVolDown;
-    for (int pass = 0; pass < 2; ++pass) {          // 0 = up, 1 = down
-        SelectObject(hdc, pass == 0 ? brUp : brDown);
+    if (series) SetDCBrushColor(hdc, sty->clr.volSeries);
+    for (int pass = 0; pass < (series ? 1 : 2); ++pass) {   // 0 = up, 1 = down; one pass for a series
+        if (!series) SelectObject(hdc, pass == 0 ? brUp : brDown);
         int k = 0;
         for (int i = i0; i < i1; ++i) {
             const Candle* c = &in->candles[i];
-            if ((c->close >= c->open) != (pass == 0)) continue;
+            if (!series && (c->close >= c->open) != (pass == 0)) continue;
             int h = (int)(c->volume / st->dispVolMax * (double)hMax * st->dispVolF + 0.5);
             if (h <= 0) continue;
             if (h > hMax) h = hMax;   // mid-easing a candle can lie above the scale
@@ -1104,8 +1113,49 @@ static void DrawVolumeBars(HDC hdc, const ChartState* st, const ChartData* in,
         }
         if (k > 0) PolyPolygon(hdc, s_volPts, s_volCnt, k);
     }
+    SelectObject(hdc, oldBrV);
     SelectObject(hdc, oldPenV);
     SetPolyFillMode(hdc, oldFill);
+}
+
+// The volume's average line (phase 52), Bloomberg's white line over the
+// bars: the simple average of the last VOL_MA_PERIOD volumes - 20, the
+// period of the price's SMA and a trading month of daily candles, the
+// volume average the terminals open with. On the bars' own scale (the
+// display dispVolMax, grown with dispVolF), so the line and the bars
+// agree; it can pass above the pane's top when louder candles left of the
+// view are in its window, and the pane's clip takes it there. A rolling
+// sum over the view one candle out on each side, fed from period - 1
+// candles before it, as the SMA's (IndFeedStart); the points go to Polyline
+// in batches like DrawIndicator's. With DC_PEN selected by the caller. TRUE
+// when a point was drawn.
+static BOOL DrawVolumeAverage(HDC hdc, const ChartState* st, const ChartData* in, int left,
+                              double dStart, double slot, int i0, int i1, int base, int hMax) {
+    if (st->dispVolMax <= 0.0 || st->dispVolF <= 0.0 || hMax <= 0) return FALSE;
+    int n = in->count;
+    int first = (i0 > 0) ? i0 - 1 : 0;
+    int last  = (i1 < n) ? i1 : n - 1;
+    int from = first - VOL_MA_PERIOD + 1;
+    if (from < 0) from = 0;
+    double sum = 0.0, scale = (double)hMax * st->dispVolF / st->dispVolMax;
+    int k = 0, drawn = 0;
+    for (int i = from; i <= last; ++i) {
+        sum += in->candles[i].volume;
+        if (i - from >= VOL_MA_PERIOD) sum -= in->candles[i - VOL_MA_PERIOD].volume;
+        if (i < first || i + 1 < VOL_MA_PERIOD) continue;
+        double h = sum / (double)VOL_MA_PERIOD * scale;
+        if (h > 16.0 * (double)hMax) h = 16.0 * (double)hMax;
+        s_volPts[k].x = left + (int)floor(((double)i - dStart + 0.5) * slot);
+        s_volPts[k].y = base + 1 - (int)(h + 0.5);
+        drawn++;
+        if (++k == IND_BATCH) {
+            Polyline(hdc, s_volPts, k);
+            s_volPts[0] = s_volPts[k - 1];
+            k = 1;
+        }
+    }
+    if (k >= 2) Polyline(hdc, s_volPts, k);
+    return drawn >= 2;
 }
 
 // The RSI line in the band (phase 39). Fed from candle 0 over the whole
@@ -1977,7 +2027,7 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // pane, inside its clip. With a pane the bars are drawn there, below.
     if (in->vol && !volPane)
         DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1,
-                       bottom, ChartVolBarsH(&g), FALSE);
+                       bottom, ChartVolBarsH(&g), FALSE, FALSE);
 
     // --- Alert lines (phase 23) ---
     // Behind the candles and above the bars, inside the same clip, from left
@@ -2227,6 +2277,18 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // it is turned on, and the tag and legend fade in with them.
     int vt = g.volTop, vb = g.volBottom, vbH = ChartVolBarsH(&g);
     int volT = (int)(st->dispVolF * 255.0 + 0.5);
+    // Phase 52: Bloomberg's volume pane. The line and the mountain draw
+    // their volume in the series' one color (volSeries), as their stamp is
+    // the series' white: they draw no candle's direction, and green and red
+    // bars would be the only up/down marks on the chart. The candles and the
+    // OHLC bars keep up/down bars, as they keep the up/down stamp: each bar
+    // is the color of the candle over it. Over the bars the volume's average
+    // line in the series' line color (white; navy in the light theme). The
+    // panel only - the desktop keeps its muted up/down bars and no line.
+    BOOL volSeries = !in->desktop && (ctype == CHART_LINE || ctype == CHART_MOUNTAIN);
+#ifdef TICKER_PROBE
+    st->probeVolMask = 0;
+#endif
     if (volPane) {
         HPEN hOldV = (HPEN)SelectObject(hdc, sty->penGrid);
         MoveToEx(hdc, left, vt, NULL);
@@ -2244,7 +2306,21 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         IntersectClipRect(hdc, left, vt, edge, vb + 1);
         // Phase 45: the stronger pane colors in the panel only - the desktop
         // is meant to be quiet, and keeps the muted bars even in a pane.
-        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1, vb, vbH, !in->desktop);
+        DrawVolumeBars(hdc, st, in, sty, left, dStart, slot, bodyW, i0, i1, vb, vbH, !in->desktop, volSeries);
+        if (!in->desktop && volT > 0) {
+            HGDIOBJ oldPenA = SelectObject(hdc, GetStockObject(DC_PEN));
+            SetDCPenColor(hdc, Blend(sty->clr.bg, sty->clr.line, volT));
+            BOOL avgOn = DrawVolumeAverage(hdc, st, in, left, dStart, slot, i0, i1, vb, vbH);
+            SelectObject(hdc, oldPenA);
+#ifdef TICKER_PROBE
+            if (avgOn) st->probeVolMask |= 2;
+#else
+            (void)avgOn;
+#endif
+        }
+#ifdef TICKER_PROBE
+        if (volSeries && st->dispVolMax > 0.0 && st->dispVolF > 0.0) st->probeVolMask |= 1;
+#endif
         SelectClipRgn(hdc, NULL);
     }
     // Which pane the pointer is in. The gap above a pane belongs to it, so
@@ -2629,22 +2705,30 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
 
     // --- Volume pane: value tag and legend (phase 43) ---
     // Panel only, like the band's. The tag carries the last candle's volume
-    // in its direction's color on the box surface - the hover box's close
-    // row - and the legend in the top left corner the volume at the
-    // crosshair, else at the last visible candle, whole or not at all. The
-    // legend is in the text color: the bars' colors are not text. Phase 45:
-    // it no longer reads over them - see the rectangle below.
+    // and the legend in the top left corner the volume at the crosshair,
+    // else at the last visible candle, whole or not at all.
+    // Phase 52, Bloomberg's pane: the tag is filled with the bars' color and
+    // carries a dark number, as the stamp does - the series' steel blue with
+    // onVolSeries for the line and the mountain, the candle's up or down with
+    // bg for the candles and the bars (the stamp's pairs). The legend is a
+    // framed box like the statistics box, "Volume 1.2K" in the text color
+    // behind a square of the bars' color (for the candles, the color of the
+    // candle it reads), LGD_VOL_INSET inside the pane's corner.
     if (volPane && volT > 0 && !in->desktop) {
         SelectObject(hdc, sty->fontAxis);
         if (yVolV != INT_MIN) {
             BOOL upV = (lastV->close >= lastV->open);
             RECT rcV = { edge + 1, yVolV - tagHalf, axR + PX(3), yVolV + tagHalf };
-            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.box, volT));
+            COLORREF tagC = volSeries ? sty->clr.volSeries : (upV ? sty->clr.up : sty->clr.down);
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, tagC, volT));
             FillRect(hdc, &rcV, (HBRUSH)GetStockObject(DC_BRUSH));
             FormatVolume(lastV->volume, buf, 64);
-            SetTextColor(hdc, Blend(sty->clr.bg, upV ? sty->clr.up : sty->clr.down, volT));
+            SetTextColor(hdc, Blend(sty->clr.bg, volSeries ? sty->clr.onVolSeries : sty->clr.bg, volT));
             RECT rcVT = { axL, yVolV - tagHalf, axR, yVolV + tagHalf };
             DrawTextW(hdc, buf, -1, &rcVT, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+#ifdef TICKER_PROBE
+            st->probeVolMask |= 8;
+#endif
         }
         int volLegendIdx = i1 - 1;
         if (st->hoverIdx >= 0 && st->hoverIdx < n) {
@@ -2654,22 +2738,34 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         wchar_t vtxt[24];
         if (volLegendIdx >= 0) FormatVolume(in->candles[volLegendIdx].volume, vtxt, 24);
         else                   wcscpy_s(vtxt, 24, L"-");
-        swprintf_s(buf, 64, L"Vol  %s", vtxt);
+        swprintf_s(buf, 64, L"Volume %s", vtxt);
         SIZE lszV = { 0, 0 };
         GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &lszV);
-        int lxV = left + PX(6), lyV = vt + PX(3);
-        if (lxV + lszV.cx <= right - PX(6) && lyV + lszV.cy <= vb) {
-            // Phase 45: on a rectangle of the background, 3 px wider and 2 px
-            // taller on each side than the text. The pane's bars are strong
-            // now, and text over a bar cannot reach 4.5:1 in the light theme;
-            // on bg it is the header's pair. The top stays under the pane's
-            // top line, and the bottom inside the pane.
-            RECT rcLV = { lxV - PX(3), lyV - PX(2), lxV + lszV.cx + PX(3), lyV + lszV.cy + PX(2) };
-            if (rcLV.top < vt + 1) rcLV.top = vt + 1;
-            if (rcLV.bottom > vb + 1) rcLV.bottom = vb + 1;
-            FillRect(hdc, &rcLV, sty->brBg);
+        int sw = PX(LGD_SWATCH), rowH = PX(LGD_ROW_H);
+        RECT rcLV;
+        rcLV.left = left + PX(LGD_VOL_INSET);
+        rcLV.top = vt + PX(LGD_VOL_INSET);
+        rcLV.right = rcLV.left + PX(LGD_PAD_X) + sw + PX(LGD_PAD_X) + lszV.cx + PX(LGD_PAD_X + 1);
+        rcLV.bottom = rcLV.top + PX(LGD_PAD_T) + rowH + PX(LGD_PAD_B);
+        if (rcLV.right <= right - PX(6) && rcLV.bottom <= vb + 1) {
+            const Candle* lc = &in->candles[(volLegendIdx >= 0) ? volLegendIdx : n - 1];
+            COLORREF swC = volSeries ? sty->clr.volSeries
+                                     : ((lc->close >= lc->open) ? sty->clr.volPaneUp : sty->clr.volPaneDown);
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.box, volT));
+            FillRect(hdc, &rcLV, (HBRUSH)GetStockObject(DC_BRUSH));
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, sty->clr.boxEdge, volT));
+            FrameRect(hdc, &rcLV, (HBRUSH)GetStockObject(DC_BRUSH));
+            int slotY = rcLV.top + PX(LGD_PAD_T);
+            RECT rcSw = { rcLV.left + PX(LGD_PAD_X), slotY + (rowH - sw) / 2 - PX(1), 0, 0 };
+            rcSw.right = rcSw.left + sw;
+            rcSw.bottom = rcSw.top + sw;
+            SetDCBrushColor(hdc, Blend(sty->clr.bg, swC, volT));
+            FillRect(hdc, &rcSw, (HBRUSH)GetStockObject(DC_BRUSH));
             SetTextColor(hdc, Blend(sty->clr.bg, sty->clr.text, volT));
-            ExtTextOutW(hdc, lxV, lyV, 0, NULL, buf, (int)wcslen(buf), NULL);
+            ExtTextOutW(hdc, rcSw.right + PX(LGD_PAD_X), slotY - PX(2), 0, NULL, buf, (int)wcslen(buf), NULL);
+#ifdef TICKER_PROBE
+            st->probeVolMask |= 4;
+#endif
         }
         SetTextColor(hdc, sty->clr.axis);
     }
