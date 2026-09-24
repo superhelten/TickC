@@ -902,13 +902,15 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     ctx->showRsiDesk = FALSE;
     ctx->lightTheme     = FALSE;   // phase 40: dark in both modes
     ctx->lightThemeDesk = FALSE;
-    // Phase 49: the panel keeps the candles it has always drawn; the desktop
-    // surface draws the close as a line. The surface is the wallpaper and
-    // must stay calm (phase 14, pitfall 85): a line is one quiet stroke where
-    // the candles are hundreds of green and red bodies, it hides nothing -
-    // the mountain's opaque fill would cover the watermark - and at
-    // 3840x1600 it draws in 1.0 ms against 6.3 for the candles.
-    ctx->chartType     = CHART_CANDLES;
+    // Phase 49: the desktop surface draws the close as a line. The surface
+    // is the wallpaper and must stay calm (phase 14, pitfall 85): a line is
+    // one quiet stroke where the candles are hundreds of green and red
+    // bodies, it hides nothing - the mountain's opaque fill would cover the
+    // watermark - and at 3840x1600 it draws in 1.0 ms against 6.3 for the
+    // candles. Phase 51: the panel opens as the mountain, the default of
+    // Bloomberg's GIP chart (it drew candles until then). Only the default
+    // for a missing value changed: a ChartType saved by a choice is kept.
+    ctx->chartType     = CHART_MOUNTAIN;
     ctx->chartTypeDesk = CHART_LINE;
     *outX = GEOM_UNSET; *outY = GEOM_UNSET;
     *outW = 0; *outH = 0; *outDpi = 0;
@@ -938,7 +940,7 @@ static void LoadConfig(AppContext* ctx, int* outX, int* outY, int* outW, int* ou
     // Phase 49: the type itself, not + 1 - RangeIndex adds 1 only because
     // "no range" (-1) is a value; every type is a value, and a missing entry
     // falls back to the mode's default, as ShowVolume's does.
-    DWORD ct  = RegReadDword(k, L"ChartType", CHART_CANDLES);
+    DWORD ct  = RegReadDword(k, L"ChartType", CHART_MOUNTAIN);   // phase 51
     DWORD ctd = RegReadDword(k, L"ChartTypeDesktop", CHART_LINE);
     RegCloseKey(k);
     ctx->showVol = (sv != 0);
