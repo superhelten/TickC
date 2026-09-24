@@ -59,6 +59,7 @@
 #define POPUP_MIN_W      400
 #define POPUP_MIN_H      250
 #define RESIZE_BORDER    6     // width of the zone that starts a resize
+#define PANEL_GRAB_W     120   // header width that must be on a work area when shown (phase 48)
 // 6000 candles at 48 bytes = 288 KB. Four days on 1m, sixteen years on 1d.
 // Filled backwards on request (phase 18) and forwards while the panel is open.
 // A full buffer stops the backfill (histDone) - live candles are never
@@ -5730,6 +5731,52 @@ static void PlacePopupInitially(HWND hwnd) {
     ResetToDefaultView(hwnd);
 }
 
+// Checked on every show (phase 48). Windows moves the VISIBLE windows off a
+// monitor that goes away, not the hidden ones: a panel hidden on a laptop's
+// external monitor came back after undocking where no monitor is, and up to
+// phase 47 only the creation looked (review E9). The header must lie on a
+// work area, PANEL_GRAB_W wide and half its height tall, or there is nothing
+// to take the panel by - a panel 200 px past the left edge is fine, one with
+// its header above the screen is not. Otherwise the panel is moved onto the
+// work area of the monitor nearest it, keeping its size unless it is larger.
+// A maximized one is moved to fill that work area, where WM_GETMINMAXINFO
+// would have maximized it; its restored rectangle is checked on the restore
+// (BTN_MAX). A minimized panel is checked when it is restored.
+static void EnsurePanelOnScreen(HWND hwnd) {
+    if (!hwnd || g_desktopMode || IsIconic(hwnd)) return;
+    RECT rw, band, vis;
+    GetWindowRect(hwnd, &rw);
+    int w = rw.right - rw.left, h = rw.bottom - rw.top;
+    SetRect(&band, rw.left, rw.top, rw.right, rw.top + Dp(HEADER_H));
+    MONITORINFO mi = { sizeof(MONITORINFO) };
+    if (!GetMonitorInfoW(MonitorFromRect(&band, MONITOR_DEFAULTTONEAREST), &mi)) return;
+    RECT wa = mi.rcWork;
+    int grab = (w < Dp(PANEL_GRAB_W)) ? w : Dp(PANEL_GRAB_W);
+    if (IntersectRect(&vis, &band, &wa) && vis.right - vis.left >= grab &&
+        vis.bottom - vis.top >= Dp(HEADER_H) / 2) {
+#ifdef TICKER_PROBE
+        g_probeOnScreen = 1;
+#endif
+        return;
+    }
+    int aw = wa.right - wa.left, ah = wa.bottom - wa.top;
+    if (IsZoomed(hwnd)) {
+        SetWindowPos(hwnd, NULL, wa.left, wa.top, aw, ah, SWP_NOZORDER | SWP_NOACTIVATE);
+    } else {
+        if (w > aw) w = aw;
+        if (h > ah) h = ah;
+        int x = rw.left, y = rw.top;
+        if (x > wa.right - w)  x = wa.right - w;
+        if (x < wa.left)       x = wa.left;
+        if (y > wa.bottom - h) y = wa.bottom - h;
+        if (y < wa.top)        y = wa.top;
+        SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+#ifdef TICKER_PROBE
+    g_probeOnScreen = 2;
+#endif
+}
+
 // Windows refuses SetForegroundWindow from a process that does not own
 // the foreground. Without this the window is shown but never activated - and
 // keyboard focus ends up nowhere, so Ctrl+0 and ESC never get through.
@@ -5980,7 +6027,10 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 #endif
             return;
         }
-        if (IsIconic(ctx->hPopup)) ShowWindow(ctx->hPopup, SW_RESTORE);
+        if (IsIconic(ctx->hPopup)) {
+            ShowWindow(ctx->hPopup, SW_RESTORE);
+            EnsurePanelOnScreen(ctx->hPopup);   // phase 48
+        }
         ForceForeground(ctx->hPopup);
 #ifdef TICKER_PROBE
         g_probeTrayDecision = 3;
@@ -6098,6 +6148,7 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
         ShowWindow(ctx->hPopup, SW_SHOWNA);
     } else {
         if (created) PlacePopupInitially(ctx->hPopup);
+        EnsurePanelOnScreen(ctx->hPopup);   // phase 48: new, or hidden since
         ShowWindow(ctx->hPopup, SW_SHOW);
         ForceForeground(ctx->hPopup);
     }
@@ -6130,7 +6181,10 @@ static void TogglePopup(AppContext* ctx, HINSTANCE hInst) {
 // lost activation to the Explorer window the start came from.
 static void ShowPanel(AppContext* ctx, HINSTANCE hInst) {
     if (ctx->hPopup && IsWindowVisible(ctx->hPopup)) {
-        if (IsIconic(ctx->hPopup)) ShowWindow(ctx->hPopup, SW_RESTORE);
+        if (IsIconic(ctx->hPopup)) {
+            ShowWindow(ctx->hPopup, SW_RESTORE);
+            EnsurePanelOnScreen(ctx->hPopup);   // phase 48
+        }
         ForceForeground(ctx->hPopup);
         return;
     }
