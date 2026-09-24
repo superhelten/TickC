@@ -765,7 +765,8 @@ static int CheckVolTag(void) {
 // candles. In every panel case with the levels at full strength: the label
 // pixels are the exact line colors off the lines' rows; they are grouped
 // into labels, and no candle pixel (exact up or down) may lie inside a
-// label's box. The level rows come from the engine's session functions.
+// label's box, nor another level's line. The level rows come from the
+// engine's session functions.
 static int CheckLevelLabels(void) {
     int bad = 0, labels = 0, cases = 0;
     for (int i = 0; i < NCASES; i++) {
@@ -796,7 +797,10 @@ static int CheckLevelLabels(void) {
                 yl[nl++] = g->top + (int)(((sc.st.dispMax - p[q]) / range) * (double)g->ch);
         }
         // Label pixels, grouped: a pixel within 12 px across and 16 px down
-        // of a group's box joins it.
+        // of a group's box joins it, as long as the box stays one label tall
+        // (the axis font's 15 px cell) - two labels on either side of a line
+        // are two groups, a line through one label is inside one.
+        int maxH = ChartPx(k->dpi, 16);
         RECT box[16];
         int nb = 0;
         for (int y = g->top; y <= g->bottom; y++) {
@@ -809,7 +813,8 @@ static int CheckLevelLabels(void) {
                 int b = 0;
                 for (; b < nb; b++)
                     if (x >= box[b].left - 12 && x < box[b].right + 12 &&
-                        y >= box[b].top - 16 && y < box[b].bottom + 16) break;
+                        y >= box[b].top - 16 && y < box[b].bottom + 16 &&
+                        y + 1 - box[b].top <= maxH) break;
                 if (b == nb) {
                     if (nb == 16) continue;
                     box[nb].left = x; box[nb].right = x + 1; box[nb].top = y; box[nb].bottom = y + 1;
@@ -829,6 +834,16 @@ static int CheckLevelLabels(void) {
                 printf("FAIL level labels %s: %d candle px inside the label at %d,%d-%d,%d\n", k->name, hit,
                        box[b].left, box[b].top, box[b].right, box[b].bottom);
                 bad++;
+            }
+            // And no other level's line through it: the label's own line
+            // lies 2 rows under it or 3 over it, outside the box.
+            for (int q = 0; q < nl; q++) {
+                if (yl[q] >= box[b].top - 1 && yl[q] <= box[b].bottom) {
+                    printf("FAIL level labels %s: a level line (row %d) through the label at %d,%d-%d,%d\n",
+                           k->name, yl[q], box[b].left, box[b].top, box[b].right, box[b].bottom);
+                    bad++;
+                    break;
+                }
             }
         }
         SceneClose(&sc);
