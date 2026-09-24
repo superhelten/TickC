@@ -485,18 +485,25 @@ static const ContrastPair CONTRAST_PAIRS[] = {
     CP("price stamp, line/mountain", onStamp, stamp),
     CP("high/low labels",         text,      bg),
     CP("high/low labels on fill", text,      mountain),
+    // Where the fill covers a level name or the averages' legend, they stand
+    // on the theme's fillCell (the navy in the dark theme, bg in the light).
+    CP("today's level names on fill", session, fillCell),
+    CP("yesterday's names on fill",   prev,    fillCell),
+    CP("SMA legend on fill",      sma,       fillCell),
+    CP("EMA legend on fill",      ema,       fillCell),
+    CP("VWAP legend on fill",     vwap,      fillCell),
 };
 
 // Phase 51: the dark theme is checked too. Its pairs on the box surface are
 // older, deliberate choices (phase 40 left the dark table alone) and stay
-// under 4.5:1 on any background: dim and yesterday's gray on the box. They
-// are named here with the ratio they have, and must not drop below it;
-// every other dark pair must reach 4.5:1. The black background of phase 51
-// lifted the pairs on bg (dim 4.12 -> 4.57, yesterday's labels 4.45 -> 4.94).
+// under 4.5:1 on any background: dim on the box. They are named here with
+// the ratio they have, and must not drop below it; every other dark pair
+// must reach 4.5:1. The black background of phase 51 lifted the pairs on bg
+// (dim 4.12 -> 4.57), and yesterday's gray, a step lighter for the navy,
+// left the list (on the box 3.99 -> 4.58).
 typedef struct { const char* where; double floor; } ContrastAllow;
 static const ContrastAllow DARK_ALLOW[] = {
     { "ghost tag, slots full",  3.69 },
-    { "yesterday's level tags", 3.99 },
     { "hover box labels",       3.69 },
     { "overlay headings",       3.69 },
 };
@@ -853,7 +860,7 @@ static int CheckVolTag(void) {
 // label's box, nor another level's line. The level rows come from the
 // engine's session functions.
 static int CheckLevelLabels(void) {
-    int bad = 0, labels = 0, cases = 0;
+    int bad = 0, labels = 0, cases = 0, navyCells = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
         if (k->desktop || k->indF < 1.0) continue;
@@ -917,7 +924,7 @@ static int CheckLevelLabels(void) {
             // the OHLC bars are up and down; the line and the mountain are
             // the line - and the mountain's fill must not show inside a
             // label either: over the fill the text stands on the background
-            // (its gray is not 4.5:1 on the fill in the light theme).
+            // (its gray is not 4.5:1 on the fill in the light theme) -
             int hit;
             if (k->type == CHART_LINE || k->type == CHART_MOUNTAIN)
                 hit = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.line, TRUE);
@@ -929,12 +936,35 @@ static int CheckLevelLabels(void) {
                        box[b].left, box[b].top, box[b].right, box[b].bottom);
                 bad++;
             }
+            // Phase 51: unless the theme's fillCell is the fill (the dark
+            // navy carries the grays at 4.5:1) and the label stands wholly
+            // on it - fill, and no background, inside its box.
             if (k->type == CHART_MOUNTAIN) {
                 int fill = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.mountain, TRUE);
-                if (fill) {
-                    printf("FAIL level labels %s: %d px of the mountain's fill inside the label at %d,%d-%d,%d\n",
-                           k->name, fill, box[b].left, box[b].top, box[b].right, box[b].bottom);
+                int bgIn = CountPx(&sc, box[b].left, box[b].top, box[b].right, box[b].bottom, sc.sty.clr.bg, TRUE);
+                if (fill && (sc.sty.clr.fillCell != sc.sty.clr.mountain || bgIn)) {
+                    printf("FAIL level labels %s: %d px of the mountain's fill (and %d of bg) inside the label at %d,%d-%d,%d\n",
+                           k->name, fill, bgIn, box[b].left, box[b].top, box[b].right, box[b].bottom);
                     bad++;
+                }
+                // And the other way: a label wholly on the navy (a ring 4 px
+                // outside its ink, past its cell, is mostly fill) stands on
+                // the navy, not on a black patch - the phase 49 box that
+                // was plain to see on the default chart.
+                if (sc.sty.clr.fillCell == sc.sty.clr.mountain) {
+                    int rx0 = box[b].left - 4, rx1 = box[b].right + 4, ry0 = box[b].top - 4, ry1 = box[b].bottom + 4;
+                    int ring = 2 * (rx1 - rx0) + 2 * (ry1 - ry0);
+                    int ringFill = CountPx(&sc, rx0, ry0, rx1, ry0 + 1, sc.sty.clr.mountain, TRUE) +
+                                   CountPx(&sc, rx0, ry1 - 1, rx1, ry1, sc.sty.clr.mountain, TRUE) +
+                                   CountPx(&sc, rx0, ry0, rx0 + 1, ry1, sc.sty.clr.mountain, TRUE) +
+                                   CountPx(&sc, rx1 - 1, ry0, rx1, ry1, sc.sty.clr.mountain, TRUE);
+                    if (ringFill * 10 >= ring * 8 && bgIn) {
+                        printf("FAIL level labels %s: the label at %d,%d-%d,%d is on the navy but stands on %d px of bg\n",
+                               k->name, box[b].left, box[b].top, box[b].right, box[b].bottom, bgIn);
+                        bad++;
+                    } else if (ringFill * 10 >= ring * 8) {
+                        navyCells++;
+                    }
                 }
             }
             // And no other level's line through it: the label's own line
@@ -950,7 +980,11 @@ static int CheckLevelLabels(void) {
         }
         SceneClose(&sc);
     }
-    if (!bad) printf("ok   level labels: %d labels in %d cases, none struck by the price's marks\n", labels, cases);
+    if (!bad) printf("ok   level labels: %d labels in %d cases, none struck by the price's marks, %d on a navy cell\n",
+                     labels, cases, navyCells);
+    // The navy-cell rule must have been exercised: the dark mountain cases
+    // put LOD and PDL on the fill.
+    if (navyCells == 0) { printf("FAIL level labels: no label stood wholly on the navy\n"); bad++; }
     return bad;
 }
 
@@ -1406,7 +1440,9 @@ static int GridColumns(const Scene* sc, int* labeled, int* adjacent, int* inVol)
             for (int i = 0; i <= 4; i++) if (y == g->top + (g->ch * i) / 4) gridRow = TRUE;
             if (gridRow || PxAt(sc, x, y) != sc->sty.clr.gridDot) continue;
             c++;
-            if (PxAt(sc, x, y + 1) == sc->sty.clr.gridDot) adj++;
+            BOOL nextRow = FALSE;   // a dot of the row below is no neighbor
+            for (int i = 0; i <= 4; i++) if (y + 1 == g->top + (g->ch * i) / 4) nextRow = TRUE;
+            if (!nextRow && PxAt(sc, x, y + 1) == sc->sty.clr.gridDot) adj++;
         }
         if (c < g->ch / 12) continue;
         cols++;
@@ -1437,7 +1473,9 @@ static int CheckBloombergGrid(void) {
         int labeled, adjacent, inVol;
         int cols = GridColumns(&sc, &labeled, &adjacent, &inVol);
         BOOL volWant = sc.g.volBottom > sc.g.bottom;
-        if (cols < 3 || labeled != cols || adjacent || (volWant && inVol != cols)) {
+        // Through the volume pane: most columns show dots there - the pane's
+        // legend box and a bar as tall as the pane can hide a column's few.
+        if (cols < 3 || labeled != cols || adjacent || (volWant && inVol * 10 < cols * 8)) {
             printf("FAIL bloomberg grid %s: %d dotted verticals (want >= 3), %d over a time label, %d not dotted, %d through the volume pane\n",
                    ROWS[i], cols, labeled, adjacent, inVol);
             bad++;
@@ -1565,6 +1603,110 @@ static int HiLoWindow(const Scene* sc, BOOL high) {
     return CountPx(sc, cx - ChartPx(dpi, 100), y0, cx + ChartPx(dpi, 100), y1, sc->sty.clr.text, TRUE);
 }
 
+// A label's cell is opaque: a line or a mark it would stand on is cut, not
+// in its pixels (a mutation that let the labels onto them changed 15 and 5
+// goldens and no pixel check). So the collisions are computed from the
+// frame's own state, with the engine's functions. The rows drawn across the
+// plot, each from the x it starts at: the levels from today's first candle,
+// the alerts, the ghost's and the afterglow's from the left, and the last
+// price's from its candle.
+static int PlotRows(const Scene* sc, int* rows, int* x0s, int max) {
+    const ChartRect* g = &sc->g;
+    const Case* k = sc->k;
+    Marks m;
+    MarksOf(sc, &m);
+    int n = 0;
+    if (sc->st.dispIndF > 0.0) {
+        BOOL full = FALSE;
+        int s0 = SessionStart(s_candles, k->n, k->ivMs, k->histDone, &full);
+        int xs = (s0 >= 0) ? g->left + (int)floor(((double)s0 - m.dStart) * m.slot) : g->edge;
+        if (s0 >= 0 && full && xs < g->edge) {
+            double p[LVL_COUNT];
+            int np = 2;
+            SessionHiLo(s_candles, s0, k->n, &p[0], &p[1]);
+            int pe = -1;
+            BOOL pf = FALSE;
+            int ps = PrevSession(s_candles, k->n, k->ivMs, k->histDone, &pe, &pf);
+            if (ps >= 0 && pf) {
+                p[2] = s_candles[pe - 1].close;
+                SessionHiLo(s_candles, ps, pe, &p[3], &p[4]);
+                np = 5;
+            }
+            for (int q = 0; q < np && n < max; q++) {
+                double yy = ((m.maxP - p[q]) / m.range) * (double)g->ch;
+                if (yy < 0.0 || yy > (double)g->ch) continue;
+                rows[n] = g->top + (int)yy; x0s[n++] = (xs > g->left) ? xs : g->left;
+            }
+        }
+    }
+    for (int a = 0; a < sc->in.alertCount && n < max; a++) {
+        int y = AlertY(&sc->st, g, fabs(sc->in.alerts[a]));
+        if (y >= g->top && y <= g->bottom) { rows[n] = y; x0s[n++] = g->left; }
+    }
+    if (sc->in.axisHotY >= g->top && sc->in.axisHotY <= g->bottom && n < max &&
+        (sc->in.alertHot < 0 || sc->in.alertHot >= sc->in.alertCount)) {
+        int y = AlertY(&sc->st, g, AlertPriceAtY(&sc->st, g, sc->in.axisHotY));
+        if (y >= g->top && y <= g->bottom) { rows[n] = y; x0s[n++] = g->left; }
+    }
+    if (sc->in.alertFlashF > 0.0 && n < max) {
+        int y = AlertY(&sc->st, g, sc->in.alertFlashLevel);
+        if (y >= g->top && y <= g->bottom) { rows[n] = y; x0s[n++] = g->left; }
+    }
+    if (n < max) {
+        int xl = MarkX(sc, &m, sc->in.count - 1);
+        if (xl < g->left) xl = g->left;
+        if (xl > g->right) xl = g->right;
+        rows[n] = MarkY(sc, &m, s_candles[sc->in.count - 1].close); x0s[n++] = xl;
+    }
+    return n;
+}
+
+// Does the chart type's mark of any candle in view reach into r? The candles'
+// wick column and body, the bars' stroke and ticks, the close line's
+// segments (sampled every half pixel).
+static BOOL MarksInRect(const Scene* sc, const RECT* r) {
+    Marks m;
+    MarksOf(sc, &m);
+    const ChartRect* g = &sc->g;
+    int n = sc->in.count, t = sc->k->type;
+    int j0 = (int)floor(m.dStart) - 1, j1 = (int)ceil(m.dStart + sc->st.dispCount) + 1;
+    if (j0 < 0) j0 = 0;
+    if (j1 > n - 1) j1 = n - 1;
+    RECT tmp;
+    for (int j = j0; j <= j1; j++) {
+        const Candle* c = &s_candles[j];
+        if (t == CHART_LINE || t == CHART_MOUNTAIN) {
+            if (j == j1) break;
+            double x0 = g->left + floor(((double)j - m.dStart + 0.5) * m.slot);
+            double x1 = g->left + floor(((double)j + 1 - m.dStart + 0.5) * m.slot);
+            double y0 = MarkY(sc, &m, c->close), y1 = MarkY(sc, &m, s_candles[j + 1].close);
+            double len = fabs(x1 - x0) + fabs(y1 - y0);
+            int steps = (int)(len * 2.0) + 1;
+            for (int s = 0; s <= steps; s++) {
+                double f = (double)s / steps;
+                int x = (int)floor(x0 + (x1 - x0) * f), y = (int)floor(y0 + (y1 - y0) * f);
+                if (x >= r->left && x < r->right && y >= r->top && y < r->bottom) return TRUE;
+            }
+            continue;
+        }
+        int cx = MarkX(sc, &m, j), xb = cx - m.bodyW / 2;
+        int yH = MarkY(sc, &m, c->high), yL = MarkY(sc, &m, c->low);
+        int yO = MarkY(sc, &m, c->open), yC = MarkY(sc, &m, c->close);
+        RECT stroke, body;
+        SetRect(&stroke, cx - m.w / 2, yH, cx - m.w / 2 + ((t == CHART_OHLC) ? m.w : 1), yL + 1);
+        if (IntersectRect(&tmp, &stroke, r)) return TRUE;
+        if (t == CHART_OHLC) {
+            SetRect(&body, xb, yO - m.w / 2, xb + m.bodyW, yO - m.w / 2 + m.w);
+            if (IntersectRect(&tmp, &body, r)) return TRUE;
+            SetRect(&body, xb, yC - m.w / 2, xb + m.bodyW, yC - m.w / 2 + m.w);
+        } else {
+            SetRect(&body, xb, min(yO, yC), xb + m.bodyW, max(max(yO, yC), min(yO, yC) + 1));
+        }
+        if (IntersectRect(&tmp, &body, r)) return TRUE;
+    }
+    return FALSE;
+}
+
 static int CheckBloombergHiLo(void) {
     int bad = 0;
     static const char* const PRESENT[] = { "panel_1h_1280x720", "ohlc_1h_1280x720", "line_1h_1280x720",
@@ -1590,15 +1732,17 @@ static int CheckBloombergHiLo(void) {
         RECT hb = { 0, 0, 0, 0 };
         BOOL hasBox = HoverBoxOf(&sc, &hb);
         RECT box[8];
-        int nb = 0, maxH = ChartPx(k->dpi, 16);
+        int nb = 0, maxH = ChartPx(k->dpi, 16), joinX = ChartPx(k->dpi, 24), joinY = ChartPx(k->dpi, 16);
         for (int y = g->top; y <= g->bottom; y++) {
             for (int x = g->left; x < g->edge; x++) {
                 if (hasBox && x >= hb.left && x < hb.right && y >= hb.top && y < hb.bottom) continue;
                 if (PxAt(&sc, x, y) != sc.sty.clr.text) continue;
+                // One label is one group: "H 63030.12" has a space, so the
+                // pixels join across 24 px at 96 dpi (the level names' check uses 12).
                 int b = 0;
                 for (; b < nb; b++)
-                    if (x >= box[b].left - 12 && x < box[b].right + 12 &&
-                        y >= box[b].top - 16 && y < box[b].bottom + 16 && y + 1 - box[b].top <= maxH) break;
+                    if (x >= box[b].left - joinX && x < box[b].right + joinX &&
+                        y >= box[b].top - joinY && y < box[b].bottom + joinY && y + 1 - box[b].top <= maxH) break;
                 if (b == nb) {
                     if (nb == 8) continue;
                     SetRect(&box[nb], x, y, x + 1, y + 1);
@@ -1609,6 +1753,22 @@ static int CheckBloombergHiLo(void) {
                     if (y + 1 > box[b].bottom) box[b].bottom = y + 1;
                 }
             }
+        }
+        // The scan is row by row, so the top row of a label's far digits can
+        // open a group of its own before the rows below join the near ones:
+        // merge groups that the same rule would have joined.
+        for (BOOL merged = TRUE; merged; ) {
+            merged = FALSE;
+            for (int a = 0; a < nb && !merged; a++)
+                for (int b = a + 1; b < nb && !merged; b++) {
+                    int t0 = min(box[a].top, box[b].top), b1 = max(box[a].bottom, box[b].bottom);
+                    if (box[b].left < box[a].right + joinX && box[a].left < box[b].right + joinX &&
+                        box[b].top < box[a].bottom + joinY && box[a].top < box[b].bottom + joinY && b1 - t0 <= maxH) {
+                        UnionRect(&box[a], &box[a], &box[b]);
+                        box[b] = box[--nb];
+                        merged = TRUE;
+                    }
+                }
         }
         if (nb > 2) { printf("FAIL bloomberg high/low %s: %d text groups in the price pane (want <= 2)\n", k->name, nb); bad++; }
         for (int b = 0; b < nb; b++) {
@@ -1628,11 +1788,21 @@ static int CheckBloombergHiLo(void) {
             RECT grown = hb, tmp;
             InflateRect(&grown, 1, 1);
             BOOL onBox = hasBox && IntersectRect(&tmp, r, &grown);
-            if (marks || others || onBox || r->right > g->right) {
+            // The geometry: the ink grown by two rows each way lies inside
+            // the label's cell and the row above it, which the engine keeps
+            // free of lines (HiLoFree); marks in the ink itself.
+            int rows[LVL_COUNT + 8], x0s[LVL_COUNT + 8];
+            int nr = PlotRows(&sc, rows, x0s, LVL_COUNT + 8), lined = -1;
+            int d2 = ChartPx(k->dpi, 2);
+            for (int q = 0; q < nr; q++)
+                if (rows[q] >= r->top - d2 && rows[q] < r->bottom + d2 && r->right > x0s[q]) lined = rows[q];
+            BOOL onMarks = MarksInRect(&sc, r);
+            if (marks || others || onBox || r->right > g->right || lined >= 0 || onMarks) {
                 printf("FAIL bloomberg high/low %s: label at %d,%d-%d,%d has %d px of the price's marks, %d of the legend,"
-                       " levels, alert lines or stamp, %s the hover box, right edge %d (plot ends at %d)\n",
+                       " levels, alert lines or stamp, %s the hover box, right edge %d (plot ends at %d),"
+                       " line row %d through its cell, marks under it %d\n",
                        k->name, r->left, r->top, r->right, r->bottom, marks, others, onBox ? "touches" : "clear of",
-                       r->right, g->right);
+                       r->right, g->right, lined, onMarks);
                 bad++;
             }
         }
