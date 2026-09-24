@@ -40,13 +40,25 @@ void GetView(const ChartState* ctx, int n, int* vs, int* vc) {
 // CEIL, not floor: with floor, M = 9, chartW = 320, minDx = 80 gives S = 2 and
 // 71 px between the labels - collision. With ceil the spacing S * chartW /
 // dispCount >= minDx for all M and N >= 2 (M >= N: (M-1)N >= (N-1)M; M < N:
-// S = 1 and one candle is already wider than minDx). N < 2 gives one label.
+// S = 1 and one candle is already wider than minDx).
+//
+// Phase 44: N <= 2 takes the spacing rule itself, S = ceil(M * minDx /
+// chartW), so S * chartW / dispCount >= M * minDx / M = minDx. With N = 2 the
+// formula above gave S = M - 1, the whole view, and NiceTimeStep rounded it
+// up past the view: 300 1h candles in a 400 px panel (chartW 296, minDx 111)
+// got S = 299 -> 336 (14 days in a 12.5-day view), and the time axis stood
+// empty on the smallest panels. Now S = 113 -> 168 (7 days), 166 px apart.
+// N < 2 gives S >= M: one label at most, as before. N >= 3 is unchanged -
+// that formula is the one the phase 11 test proved exhaustively.
 int TimeTickStep(double dispCount, int chartW, int minDx) {
     if (dispCount < 1.0) dispCount = 1.0;
     if (chartW <= 0 || minDx <= 0) return 1;
     int m = (int)ceil(dispCount);
     int nx = chartW / minDx;
-    if (nx < 2) return (m > 1) ? m : 1;
+    if (nx <= 2) {
+        int s2 = (int)(((long long)m * minDx + chartW - 1) / chartW);
+        return (s2 < 1) ? 1 : s2;
+    }
     int s = (m - 1 + (nx - 1) - 1) / (nx - 1);
     return (s < 1) ? 1 : s;
 }
@@ -1475,6 +1487,15 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // RSI first (like the stamp), then the crosshair's tag - not drawn within
     // tagH of the value tag, where only a strip of its number would show -
     // then the 70 and 30 labels, which give way to both.
+    // Phase 44: a crosshair tag is also not drawn where its box would leave
+    // its pane's rows in the column. The rows are split at each lower pane's
+    // top: the price column's labels at bottom reach tagHalf under it, into
+    // the gap, and a pane's own tags begin at its top (the value tags are
+    // clamped to top + tagHalf). The pointer in the gap puts the horizontal
+    // on the pane's top row, and a tag there reached 8 px up over the price
+    // column's bottom label; the other way, the price tag at bottom covered
+    // the top glyph row of a value tag clamped under the pane's top. The line
+    // is drawn in both cases, as it is within tagH of the stamp.
     int yRsiV = INT_MIN, yBandCross = INT_MIN;
     if (bandOn && rsiT > 0 && rsiLastOk) {
         yRsiV = bt + (int)(((100.0 - rsiLast) / 100.0) * (double)bh);
@@ -1487,7 +1508,9 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             int hyB = st->hoverY;
             if (hyB < bt) hyB = bt;
             if (hyB > bb) hyB = bb;
-            if (yRsiV == INT_MIN || abs(hyB - yRsiV) >= tagH) yBandCross = hyB;
+            // Nothing is under the band in the column, so only its top counts.
+            if (hyB >= bt + tagHalf && (yRsiV == INT_MIN || abs(hyB - yRsiV) >= tagH))
+                yBandCross = hyB;
         }
     }
     // The volume pane's column (phase 43) has the band's rank: the tag with
@@ -1509,7 +1532,10 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
             int hyV = st->hoverY;
             if (hyV < vt) hyV = vt;
             if (hyV > vb) hyV = vb;
-            if (yVolV == INT_MIN || abs(hyV - yVolV) >= tagH) yVolCross = hyV;
+            // Within its rows: under the pane's top, and above the band's
+            // top when the band follows (its value tag can sit right there).
+            BOOL fitsV = (hyV >= vt + tagHalf) && (!bandOn || hyV + tagHalf <= bt);
+            if (fitsV && (yVolV == INT_MIN || abs(hyV - yVolV) >= tagH)) yVolCross = hyV;
         }
     }
 
@@ -1558,7 +1584,12 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
                 int hyT = st->hoverY;
                 if (hyT < top) hyT = top;
                 if (hyT > bottom) hyT = bottom;
-                if (yPill == INT_MIN || abs(hyT - yPill) >= tagH) yCross = hyT;
+                // Phase 44: with a pane below, the tag stays above that pane's
+                // top row (see yBandCross): drawn after the pane's value tag,
+                // it would cover the top glyph row of that tag's number.
+                int nextTop = volPane ? vt : bt;   // bt == bottom without a band
+                BOOL fitsT = !(volPane || bandOn) || hyT + tagHalf <= nextTop;
+                if (fitsT && (yPill == INT_MIN || abs(hyT - yPill) >= tagH)) yCross = hyT;
             }
         }
         if (yCross != INT_MIN) yTag[nTag++] = yCross;
@@ -2080,8 +2111,8 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     }
 
     // Price label on the right axis where the pointer is. Not when it would
-    // partly cover the stamp (phase 29, see yCross above): the line is
-    // drawn, the tag is not.
+    // partly cover the stamp (phase 29, see yCross above) or reach into the
+    // pane below (phase 44): the line is drawn, the tag is not.
     if (yCross != INT_MIN) {
         double hp = maxP - ((double)(hy - top) / (double)ch) * range;
         swprintf_s(buf, 64, L"%.*f", PriceDecimals(range / 4.0), hp);
@@ -2116,9 +2147,14 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     int bx = hx + PX(12);
     if (bx + BOX_W > right) bx = hx - PX(12) - BOX_W;   // flip to the left at the edge
     if (bx < left) bx = left;
+    // Phase 44: the top clamp comes last, so it wins. On a short panel with
+    // both panes and the averages (290 px: 126 px of price, a 139 px box) the
+    // bottom clamp put the box over the header's quote line and under the
+    // toolbar the app draws after the chart; now it hangs into the pane
+    // below, which is the chart's own.
     int by = hy - BOX_H / 2;
-    if (by < top) by = top;
     if (by + BOX_H > bottom) by = bottom - BOX_H;
+    if (by < top) by = top;
 
     RECT rcBox = { bx, by, bx + BOX_W, by + BOX_H };
     FillRect(hdc, &rcBox, sty->brBox);
