@@ -36,3 +36,8 @@ vol_light_rsi_hover 1280x720 c79c875b7384f076
 vol_desktop_1920x1080 1920x1080 f3bbc667174fedcb
 vol_1h_gap_hover 1280x720 ab38a06c03fc1200
 vol_rsi_15m_290_hover 560x290 adad071b6d0626a8
+ghost_near_alert 1280x720 7121d76bcfc01990
+ghost_near_stamp 1280x720 fbc27ba06e7ccdab
+ghost_row_zoomed 560x300 51de38c1dad94d68
+legend_alert_row 1280x720 253cc3f982ec3ece
+vol_loud_last_panned 1280x720 18b350c80d72e1e6
