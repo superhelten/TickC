@@ -5785,6 +5785,17 @@ static int PanelDpi(HWND hwnd) {
 static void ApplyPanelStyle(AppContext* ctx, int dpi) {
     const AppTheme* th = ThemeNow(ctx);
     if (ctx->sty.fontSmall && ctx->sty.dpi == dpi && ctx->theme == th) return;
+    // The back buffer goes FIRST (phase 47). The header, the overlay and the
+    // empty chart leave fontSmall - and the header hFontQuote - selected in
+    // it between frames, and DeleteObject on a font that is selected in a DC
+    // fails by contract. Up to phase 46 only bbValid was cleared, though the
+    // comments said the buffer was dropped. Measured, the GDI count did not
+    // grow over 50 theme switches or 20 dpi changes, with or without this -
+    // GDI seems to reclaim the font when the DC lets it go - but the contract
+    // is what is written here, not what one build of Windows does. The
+    // buffer is built again on the next frame: one allocation per theme or
+    // dpi change.
+    FreeBackBuffer(ctx);
     ChartStyleDestroy(&ctx->sty);
     ChartStyleCreate(&ctx->sty, dpi, th->chart);
     ctx->theme = th;
