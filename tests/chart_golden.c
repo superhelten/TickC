@@ -2350,8 +2350,23 @@ static int CheckAxisFont(void) {
     return bad;
 }
 
+// FormatVolume's billions (Bloomberg's "0.845B"): no fixture has them.
+static int CheckVolumeFormat(void) {
+    static const struct { double v; const wchar_t* want; } VF[] = {
+        { 1.5e9, L"1.5B" }, { 999.0e6, L"999.0M" }, { 12345.0, L"12.3K" }, { 7.9, L"7.90" },
+    };
+    int bad = 0;
+    for (int i = 0; i < 4; i++) {
+        wchar_t s[32];
+        FormatVolume(VF[i].v, s, 32);
+        if (wcscmp(s, VF[i].want) != 0) { printf("FAIL volume format: %.1f gave %ls, want %ls\n", VF[i].v, s, VF[i].want); bad++; }
+    }
+    if (!bad) printf("ok   volume format: B from a billion, M, K and the plain number below\n");
+    return bad;
+}
+
 static int CheckPhase52(void) {
-    return CheckViewStats() + CheckStatsBox() + CheckVolumePane() + CheckTimeRows() + CheckAxisFont();
+    return CheckVolumeFormat() + CheckViewStats() + CheckStatsBox() + CheckVolumePane() + CheckTimeRows() + CheckAxisFont();
 }
 
 static int CheckBloomberg(void) {
