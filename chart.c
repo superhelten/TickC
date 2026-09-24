@@ -2939,11 +2939,16 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
         swprintf_s(lbl[4], 48, L"SMA %d", IND_SMA_PERIOD);
         swprintf_s(lbl[5], 48, L"EMA %d", IND_EMA_PERIOD);
         wcscpy_s(lbl[6], 48, L"VWAP");
+        // An overlay with no value at the legend's candle has no row: VWAP
+        // is per UTC day and undefined on 1d and 1w, and an average is
+        // undefined before its period has candles. Bloomberg lists only the
+        // series that exist; a "-" row took room from High and Low.
+        int mask = 0x0F;
         for (int q = 0; q < 3; ++q) {
-            if (indOk[q]) swprintf_s(val[4 + q], 32, L"%.2f", indVal[q]);
-            else          wcscpy_s(val[4 + q], 32, L"-");
+            if (indT <= 0 || !indOk[q]) continue;
+            swprintf_s(val[4 + q], 32, L"%.2f", indVal[q]);
+            mask |= 0x10 << q;
         }
-        int mask = 0x0F | ((indT > 0) ? 0x70 : 0);
         int sw = PX(LGD_SWATCH), rowH = PX(LGD_ROW_H);
         int maxW = cw * LGD_MAX_PCT / 100, maxH = ch * LGD_MAX_PCT / 100;
         static const int DROP[5] = { 0x0A, 0x04, 0x40, 0x20, 0x10 };   // High+Low, Average, VWAP, EMA, SMA

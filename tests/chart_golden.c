@@ -1941,6 +1941,7 @@ static int CheckViewStats(void) {
 // for the line and the mountain, up or down for the candles and the bars),
 // a T for the high (the bar on top), a -o- for the average, an inverted T
 // for the low (the bar at the bottom), and the overlays' color squares.
+// An overlay with no value at the box's candle has no row.
 // In every panel case with a box: a left corner of the price pane, no more
 // than LGD_MAX_PCT of the plot's width and of the pane's height, lower-left
 // unless the price's marks enter there and not the upper-left, or, in both,
@@ -1971,6 +1972,9 @@ static int CheckStatsBox(void) {
         { "ohlc_1h_1280x720", 0x7F }, { "panel_1h_overlays_off", 0x0F }, { "light_1h_hover", 0x7F },
         { "dpi144_1h_1920x1080", 0x7F }, { "panel_15m_560x300", 0x75 }, { "mountain_light_560x300", 0x75 },
         { "panel_1h_400x250", 0 }, { "desktop_1m_1920x1080", 0 }, { "line_desktop_1920x1080", 0 },
+        // VWAP is per UTC day and has no value on 1d and 1w: no row, as
+        // Bloomberg lists only the series that exist (no "-").
+        { "range_1y_1d", 0x3F }, { "range_5y_1w", 0x3F }, { "panel_1d_1280x720", 0x3F },
     };
     for (int i = 0; i < (int)(sizeof(SB) / sizeof(SB[0])); i++) {
         Scene sc;
