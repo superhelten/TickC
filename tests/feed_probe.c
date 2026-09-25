@@ -41,7 +41,7 @@ static uint64_t Fnv(uint64_t h, const uint8_t* p, size_t n) {
 
 static int Check(const wchar_t* name, const wchar_t* golden, BOOL update) {
     FeedReader r; FeedEvent ev; int64_t lost, last = -1;
-    long long events = 0, trades = 0, klines = 0, status = 0, lapped = 0;
+    long long events = 0, trades = 0, klines = 0, tickers = 0, status = 0, lapped = 0;
     uint64_t h = 14695981039346656037ULL;
     char line[160], want[160] = "";
     FILE* f;
@@ -60,13 +60,13 @@ static int Check(const wchar_t* name, const wchar_t* golden, BOOL update) {
         if (rc == FEED_LAPPED) { lapped++; continue; }
         if (rc != FEED_OK) break;
         events++;
-        if (ev.type == FEED_TRADE) trades++; else if (ev.type == FEED_KLINE) klines++; else status++;
+        if (ev.type == FEED_TRADE) trades++; else if (ev.type == FEED_KLINE) klines++; else if (ev.type == FEED_TICKER24) tickers++; else status++;
         h = Fnv(h, (const uint8_t*)&ev + 8, 8);      // tsExchangeUs
         h = Fnv(h, (const uint8_t*)&ev + 24, 104);   // type .. payload
     }
     FeedClose(&r);
-    sprintf_s(line, sizeof(line), "events %lld trades %lld klines %lld status %lld hash 0x%016llX",
-              events, trades, klines, status, (unsigned long long)h);
+    sprintf_s(line, sizeof(line), "events %lld trades %lld klines %lld tickers24 %lld status %lld hash 0x%016llX",
+              events, trades, klines, tickers, status, (unsigned long long)h);
     printf("%s\n", line);
     if (lapped) { printf("FAIL lapped %lld times\n", lapped); return 1; }
     if (update) {
