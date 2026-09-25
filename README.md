@@ -45,8 +45,9 @@ balloon and a sound, even with the panel closed.
 - **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
 It stays quiet on purpose: by default the price is a single line, with no volume or moving
 averages unless you turn them on.
-- **A feed for other programs.** While it runs, TickC streams Binance's trades and
-1-minute candles for its four symbols into shared memory (`Local\TickC.Feed.1`), as
+- **A feed for other programs.** While it runs, TickC streams Binance's trades,
+1-minute candles and each symbol's rolling 24-hour statistics (change, high, low,
+volume) for its four symbols into shared memory (`Local\TickC.Feed.1`), as
 fixed 128-byte events in a lock-free ring. Any program can read it with `feed.h`
 alone: see `tests/feed_probe.c` for a reader in about 150 lines. `TickC.exe --daemon` runs
 the feed without the tray icon or the panel; starting TickC normally afterwards
