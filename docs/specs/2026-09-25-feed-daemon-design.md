@@ -107,7 +107,11 @@ Binance WebSocket  wss://stream.binance.com:443/stream?streams=
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdio.h>
 #include <windows.h>
+#if defined(_M_IX86) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
 
 #define FEED_MAPPING_NAME      L"Local\\TickC.Feed.1"   // major version in the name
 #define FEED_MAGIC             0x46434B54u              // "TKCF"
@@ -121,6 +125,8 @@ Binance WebSocket  wss://stream.binance.com:443/stream?streams=
 #define FEED_MAX_INSTRUMENTS   16
 #define FEED_SEQ_BUSY          (-1LL)     // FeedEvent.seq while the slot is written
 #define FEED_NO_INSTRUMENT     0xFFFFu
+#define FEED_HEARTBEAT_STALE_US 3000000LL // a heartbeat older than this: the writer hangs
+#define FEED_REWIND_MARGIN     1024       // FeedRewind's margin below the ring's oldest slot
 
 enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3 };       // FeedEvent.type
 enum { FEED_SRC_BINANCE_SPOT = 1 };                             // FeedEvent.source
@@ -232,8 +238,11 @@ C_ASSERT(offsetof(FeedHeader, readers) == 128);
 C_ASSERT(offsetof(FeedHeader, instruments) == 256);
 C_ASSERT(offsetof(FeedHeader, snapshots) == 1024);
 C_ASSERT((FEED_SLOT_COUNT & (FEED_SLOT_COUNT - 1)) == 0);
+C_ASSERT(offsetof(FeedHeader, sessionUs) == 32);
+C_ASSERT(offsetof(FeedHeader, heartbeatUs) == 72);
 
-// Slot s lives at FEED_HEADER_SIZE + (s & (FEED_SLOT_COUNT - 1)) * FEED_SLOT_SIZE.
+// Slot s lives at FEED_HEADER_SIZE + FEED_SLOT_INDEX(s) * FEED_SLOT_SIZE.
+#define FEED_SLOT_INDEX(s) ((size_t)((uint64_t)(s) & (FEED_SLOT_COUNT - 1)))
 
 // The fences around a copy that a sequence number guards: LOAD between the
 // reader's copy and its re-check, STORE between the writer's slot copy and
@@ -422,22 +431,32 @@ A reader sees the new `sessionUs`, returns
 
 ```c
 typedef struct {
-    HANDLE            hMap;
-    const FeedHeader* hdr;
-    const uint8_t*    ring;
-    int64_t           next;
-    int64_t           session;
-    int               slot;       // -1 = not registered
-    HANDLE            hWake;      // the slot's event, or NULL
-    HANDLE            hWriter;    // the writer process, for the wait
-    uint32_t          writerPid;
+    HANDLE      hMap;
+    FeedHeader* hdr;        // written to only through a claimed slot (phase 54)
+    const uint8_t* ring;
+    int64_t     next;
+    int64_t     session;
+    int         slot;       // -1 = not registered
+    HANDLE      hWake;      // the slot's event, or NULL
+    HANDLE      hWriter;    // the writer process, for the wait
+    uint32_t    writerPid;
 } FeedReader;
+```
 
+`hdr` is not `const`: registering a wake-up slot (`FeedOpen` with `wakeups`) and
+releasing it (`FeedClose`) write through it, to the reader's own
+`FeedReaderSlot`. A reader opened without `wakeups` never claims a slot, so it
+never writes, and `FeedClose` on it never touches the mapping - the read-only
+guarantee holds; it is enforced by what the code does, not by the type.
+
+```c
 enum { FEED_OK = 0, FEED_EMPTY, FEED_LAPPED, FEED_NEW_SESSION,
        FEED_NO_WRITER, FEED_BAD_VERSION, FEED_NO_SLOT };
 
 int   FeedOpen(FeedReader* r, const wchar_t* name, BOOL wakeups);
-void  FeedRewind(FeedReader* r);           // start at the oldest event still in the ring
+void  FeedRewind(FeedReader* r);           // the oldest event still in the ring, less a
+                                            // margin of FEED_REWIND_MARGIN (1024) so a
+                                            // live writer does not lap the reader at once
 int   FeedNext(FeedReader* r, FeedEvent* ev, int64_t* lost);
 BOOL  FeedReadSnapshot(const FeedReader* r, unsigned instrument, FeedSnapshot* out);
 DWORD FeedWait(FeedReader* r, DWORD ms);   // WAIT_OBJECT_0 = data, +1 = writer gone, WAIT_TIMEOUT
@@ -491,7 +510,8 @@ that session can still read and write it. For a local tool this is accepted.
   that writes the heartbeat also checks, once a second, how long it has been
   since the last message; past 10 s it closes the WebSocket handle from
   outside `FeedThread`. Task 1 measured that closing a WinHTTP handle from
-  another thread ends a pending call in about 1 s. The pending receive then
+  another thread ends a pending call at once (the spike's 1000 ms was its
+  own scheduled close). The pending receive then
   returns a cancellation, not a timeout; because the watchdog closed the
   handle, not a `FeedStop`, `FeedThread` reports the dead line as
   `ERROR_WINHTTP_TIMEOUT` instead, which is what a dead line means to a
@@ -573,10 +593,15 @@ Kline (`data`):
   WebSocket, the request and the connect handle is open, under the feed's
   lock, in that order (child before parent), to cancel a pending call; waits
   for `FeedThread`; stops the heartbeat timer; publishes `DISCONNECTED`; and
-  unmaps. Closing a handle from another thread cancels a pending call
-  within milliseconds: Task 1 measured about 1 s for a receive, and Task 6
-  measured about 47 ms during a connect. It never waits longer than the
-  network thread's existing bound (10 s).
+  unmaps. Closing a handle from another thread cancels a pending call at
+  once (the spike's 1000 ms was its own scheduled close, not the cancel's
+  own duration): Task 6 measured about 47 ms during a connect. It never
+  waits longer than the network thread's existing bound (10 s). `FeedStop`
+  returns `BOOL`: `TRUE` once `FeedThread` has ended (or at once if the feed
+  was never started), `FALSE` if the 10 s join timed out - in which case the
+  caller must not delete or close anything `FeedThread` can still reach
+  (`WinMain`'s `g_Ctx.lock`, and whatever `sessionLock`/`pSession` point at),
+  the same rule it already follows for `NetworkThread`.
 - `FeedThread` reads `hSession` under the same lock as `HttpGet`, because
   `WinMain` closes the session under that lock at exit.
 
