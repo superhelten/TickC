@@ -481,28 +481,40 @@ that session can still read and write it. For a local tool this is accepted.
 
 - Binance sends a kline update about every 2 s per symbol, so 10 s without any
   message means the line is dead.
-- The receive timeout is 10 s, set with `WinHttpSetTimeouts` on the
-  WebSocket's own request handle before the upgrade. The session keeps its
-  5 s for the REST fetches. A dead line ends in `ERROR_WINHTTP_TIMEOUT`, and
-  `FeedThread` reconnects.
+- Task 1's spike measured that the receive timeout, set with
+  `WinHttpSetTimeouts` on the WebSocket's own request handle before the
+  upgrade, does not bound an ongoing `WinHttpWebSocketReceive`: a receive on
+  a silent socket did not return within 45 s. That 10 s value stays on the
+  request handle, where it still bounds the upgrade request itself; the
+  session keeps its own 5 s for the REST fetches.
+- The watchdog is what actually bounds silence. The same thread-pool timer
+  that writes the heartbeat also checks, once a second, how long it has been
+  since the last message; past 10 s it closes the WebSocket handle from
+  outside `FeedThread`. Task 1 measured that closing a WinHTTP handle from
+  another thread ends a pending call in about 1 s. The pending receive then
+  returns a cancellation, not a timeout; because the watchdog closed the
+  handle, not a `FeedStop`, `FeedThread` reports the dead line as
+  `ERROR_WINHTTP_TIMEOUT` instead, which is what a dead line means to a
+  consumer, and reconnects.
+- `FeedStop` closes whichever of the WebSocket, the request and the connect
+  handle is open the same way, so a stop asked while still inside
+  `FeedConnect` also ends in about a second, instead of waiting out WinHTTP's
+  own resolve, connect and send timeouts.
 - The wait before the next attempt follows `NetBackoffMs` (the jittered curve
-  the rest of TickC uses). A connection that lasted at least 60 s, such as
-  Binance's 24 h cut, resets the failure count, so the next attempt goes at
-  once.
+  the rest of TickC uses). A connection that held `CONNECTED` for at least
+  60 s, such as Binance's 24 h cut, resets the failure count, so the next
+  attempt goes at once; the 60 s is counted from `CONNECTED`, not from
+  before the connect attempt.
 - Every change is published as `FEED_STATUS` and stored in `connState`:
   `CONNECTING` before an attempt, `CONNECTED` after the upgrade,
   `DISCONNECTED` with the error and `retryAtUs` after a failure.
-- **To verify first:** that the request's receive timeout also bounds
-  `WinHttpWebSocketReceive`. This is the plan's first step, a throwaway probe.
-  If it does not hold, a watchdog closes the WebSocket handle from outside when
-  no message has arrived for 10 s; closing a WinHTTP handle cancels a pending
-  call.
 
 ### Heartbeat
 
-A thread-pool timer writes `heartbeatUs` every second, and does nothing else.
-The heartbeat therefore means "the writer process lives and does not hang",
-independent of the line. The line's health is `connState`.
+A thread-pool timer writes `heartbeatUs` every second, which means "the
+writer process lives and does not hang", independent of the line; the
+line's own health is `connState`. The same timer also runs the watchdog
+described above, which closes a silent WebSocket.
 
 ### Parsing
 
@@ -585,7 +597,7 @@ Kline (`data`):
 | 10 s of silence | Reconnect. |
 | Mapping already exists | Take over the session (Writer restarts). |
 | Mapping cannot be created | GUI: run without a feed. Daemon: exit code 2. |
-| A reader process dies | Its slot is freed within about 1 s. |
+| A reader process dies | Its slot is freed within about a second while messages flow or during a backoff wait, and at the next message after a connect attempt or a silence. |
 | The writer process dies or hangs | Readers see it through the process wait, or a heartbeat older than 3 s. |
 
 ## Testing
