@@ -342,11 +342,12 @@ int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, uns
 // FeedThread
 // ---------------------------------------------------------------------------
 // One per process. It owns the WebSocket, and while FeedConnect runs, the
-// connect and request handles too; FeedStop or the watchdog may close
-// whichever is open from outside, under g_feed.lock, which cancels a
-// pending call at once (measured in task 1). The heartbeat is a thread-pool
-// timer that writes heartbeatUs every tick; it also runs the watchdog that
-// closes a silent hWs, so it is no longer "nothing else" (phase 54).
+// connect and request handles too; FeedStop may close whichever of the
+// three is open from outside, under g_feed.lock, which cancels a pending
+// call at once (measured in task 1). The watchdog, unlike FeedStop, only
+// ever closes hWs, the same way, when the line has gone silent. The
+// heartbeat is a thread-pool timer that writes heartbeatUs every tick; it
+// also runs that watchdog, so it is no longer "nothing else" (phase 54).
 
 #define FEED_MSG_MAX       65536
 // The watchdog's silence bound; also the upgrade request's own timeout,
@@ -367,8 +368,13 @@ static struct {
     PTP_TIMER        timer;
     ULONGLONG        lastSweep;
     volatile LONG    published, dropped, connects;
-    volatile LONG64  lastMsgTick;    // GetTickCount64() of the last message read
+    // GetTickCount64() of the last message read; also stamped once at
+    // connect, before any message has arrived, so the watchdog has a
+    // baseline from the start of a connection, not only after its first
+    // message (phase 54).
+    volatile LONG64  lastMsgTick;
     volatile LONG    silent;         // 1: the watchdog closed hWs, not FeedStop (phase 54)
+    FeedInstrument   ins[FEED_MAX_INSTRUMENTS];   // FeedStart's private copy of the caller's table (phase 54)
 } g_feed;
 
 static char g_feedBuf[FEED_MSG_MAX];
@@ -452,8 +458,10 @@ static void FeedStreamPath(wchar_t* out, size_t cch) {
 }
 
 // Publishes a handle in g_feed under the lock so FeedStop can find and
-// cancel it at once (about 1 s, task 1), unless stop was already asked, in
-// which case it is closed here and the caller must not touch it again. The
+// cancel it at once (task 1: the spike's own 1000 ms was its Closer
+// thread's scheduled sleep before it closed the handle, not the time the
+// cancel itself took), unless stop was already asked, in which case it is
+// closed here and the caller must not touch it again. The
 // same publish-or-bail race protects hWs, hConnect and hRequest (phase 54:
 // FeedStop during FeedConnect).
 static BOOL FeedPublishHandle(HINTERNET* slot, HINTERNET h) {
@@ -511,9 +519,13 @@ static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
     if (!hr) {
         *err = GetLastError();
     } else if (FeedPublishHandle(&g_feed.hRequest, hr)) {
-        WinHttpSetOption(hr, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
         WinHttpSetTimeouts(hr, 5000, 5000, 5000, FEED_RECV_MS);
-        if (WinHttpSendRequest(hr, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        // WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET's return is checked like every
+        // other failure here (phase 54): unchecked, a failure here would
+        // still fall through to WinHttpSendRequest and be reported as
+        // whatever that call's own failure was, not the real cause.
+        if (WinHttpSetOption(hr, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0) &&
+            WinHttpSendRequest(hr, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
             WinHttpReceiveResponse(hr, NULL) &&
             WinHttpQueryHeaders(hr, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                 WINHTTP_HEADER_NAME_BY_INDEX, &status, &cb, WINHTTP_NO_HEADER_INDEX) &&
@@ -646,7 +658,12 @@ BOOL FeedStart(const FeedConfig* cfg) {
     if (cfg->replayFile) wcscpy_s(g_feed.replay, MAX_PATH, cfg->replayFile);
     g_feed.cfg.replayFile = NULL;
     if (!FeedWriterOpen(&g_feed.w, cfg->mappingName, cfg->instruments, cfg->instrumentCount)) return FALSE;
-    g_feed.cfg.instruments = g_feed.w.hdr->instruments;   // the copy in the header outlives the caller's
+    // A private copy, not h->instruments (phase 54): the header's table is
+    // shared memory any process in the session can write, and the parser
+    // and FeedStreamPath must not trust it. FeedWriterOpen has already
+    // bounded instrumentCount to FEED_MAX_INSTRUMENTS.
+    memcpy(g_feed.ins, cfg->instruments, cfg->instrumentCount * sizeof(FeedInstrument));
+    g_feed.cfg.instruments = g_feed.ins;
     InitializeCriticalSection(&g_feed.lock);
     g_feed.hStop = CreateEventW(NULL, TRUE, FALSE, NULL);
     g_feed.timer = g_feed.hStop ? CreateThreadpoolTimer(FeedTick, NULL, NULL) : NULL;
@@ -673,14 +690,19 @@ BOOL FeedStart(const FeedConfig* cfg) {
 }
 
 // Stop, close whichever of hWs, hRequest and hConnect is open (which cancels
-// a pending receive or a pending connect/upgrade call at once, about 1 s,
-// task 1), wait up to 10 s, stop the heartbeat, say DISCONNECTED and unmap.
-// The request handle closes before its parent connect handle. A thread that
-// did not end keeps its resources; the process exit is moments away (as
-// NetworkThread) (phase 54: FeedStop during FeedConnect).
-void FeedStop(void) {
+// a pending receive or a pending connect/upgrade call at once - task 1's
+// spike measured about 47 ms during a connect; its 1000 ms "cancel" figure
+// was its own Closer thread's scheduled sleep before the close, not the
+// cancel's own duration), wait up to 10 s, stop the heartbeat, say
+// DISCONNECTED and unmap. The request handle closes before its parent
+// connect handle. A thread that did not end keeps its resources; the
+// process exit is moments away (as NetworkThread) (phase 54: FeedStop
+// during FeedConnect). Returns FALSE only if the 10 s join timed out, in
+// which case nothing FeedThread can still reach is torn down (see FeedStop
+// in feed.h).
+BOOL FeedStop(void) {
     BOOL done;
-    if (!g_feed.running) return;
+    if (!g_feed.running) return TRUE;
     SetEvent(g_feed.hStop);
     EnterCriticalSection(&g_feed.lock);
     if (g_feed.hWs)      { WinHttpCloseHandle(g_feed.hWs);      g_feed.hWs = NULL; }
@@ -695,13 +717,14 @@ void FeedStop(void) {
         g_feed.timer = NULL;
     }
     g_feed.running = FALSE;
-    if (!done) return;
+    if (!done) return FALSE;
     CloseHandle(g_feed.hThread);
     CloseHandle(g_feed.hStop);
     DeleteCriticalSection(&g_feed.lock);
     FeedSetConn(&g_feed.w, FEED_ST_DISCONNECTED, 0, 0);
     FeedWriterClose(&g_feed.w);
     memset(&g_feed, 0, sizeof(g_feed));
+    return TRUE;
 }
 
 void FeedGetStats(FeedStats* out) {

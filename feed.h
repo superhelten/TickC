@@ -16,6 +16,11 @@
 #endif
 
 #define FEED_MAPPING_NAME      L"Local\\TickC.Feed.1"   // major version in the name
+// Keep any mapping name under 60 characters (phase 54). The writer stores it
+// in 64 wchar_t (FeedWriter.name) and a reader's wake event is built from it
+// as "<name>.R<n>" in a 96-wchar_t buffer (FeedOpen, FeedWake); a name long
+// enough to overflow either makes swprintf_s call the CRT's invalid-parameter
+// handler, which ends the process.
 #define FEED_MAGIC             0x46434B54u              // "TKCF"
 #define FEED_VERSION_MAJOR     1
 #define FEED_VERSION_MINOR     0
@@ -28,6 +33,10 @@
 #define FEED_SEQ_BUSY          (-1LL)     // FeedEvent.seq while the slot is written
 #define FEED_NO_INSTRUMENT     0xFFFFu
 #define FEED_HEARTBEAT_STALE_US 3000000LL // a heartbeat older than this: the writer hangs
+// The margin FeedRewind keeps below the slot the writer overwrites next, so a
+// live writer does not lap a just-rewound reader before its first FeedNext
+// (phase 54). See FeedRewind.
+#define FEED_REWIND_MARGIN     1024
 
 enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3 };       // FeedEvent.type
 enum { FEED_SRC_BINANCE_SPOT = 1 };                             // FeedEvent.source
@@ -58,7 +67,12 @@ typedef struct {                  // 64 bytes
 typedef struct {                  // 16 bytes; FeedEvent.instrument = FEED_NO_INSTRUMENT
     uint16_t state;               // FEED_ST_*
     uint16_t pad;
-    int32_t  error;               // WinHTTP error or WebSocket close status, 0 = none
+    // 0 = none. Otherwise one of three number spaces (phase 54): a Win32 or
+    // WinHTTP error (12000-12200 is WinHTTP's own range), an HTTP status from
+    // a failed upgrade (100-599), or a WebSocket close status (1000-4999).
+    // Which space a value is in follows from how the connection failed, not
+    // from the number alone.
+    int32_t  error;
     int64_t  retryAtUs;           // next attempt while DISCONNECTED, else 0
 } FeedStatus;
 
@@ -133,7 +147,9 @@ C_ASSERT(sizeof(FeedStatus) == 16);     C_ASSERT(sizeof(FeedEvent) == FEED_SLOT_
 C_ASSERT(sizeof(FeedInstrument) == 48); C_ASSERT(sizeof(FeedReaderSlot) == 16);
 C_ASSERT(sizeof(FeedSnapshot) == 128);  C_ASSERT(sizeof(FeedHeader) == FEED_HEADER_SIZE);
 C_ASSERT(offsetof(FeedEvent, u) == 32);
+C_ASSERT(offsetof(FeedHeader, sessionUs) == 32);
 C_ASSERT(offsetof(FeedHeader, writeSeq) == 64);
+C_ASSERT(offsetof(FeedHeader, heartbeatUs) == 72);
 C_ASSERT(offsetof(FeedHeader, connState) == 80);
 C_ASSERT(offsetof(FeedHeader, readers) == 128);
 C_ASSERT(offsetof(FeedHeader, instruments) == 256);
@@ -180,6 +196,10 @@ static __inline int64_t FeedLoadNoFence64(const volatile int64_t* p) {
     _mm_storel_epi64((__m128i*)(void*)&out, _mm_loadl_epi64((const __m128i*)(const void*)p));
     return out;
 }
+// No compiler barrier here: safe only right after a FEED_LOAD_FENCE (which
+// already has one), or for a field only this thread ever writes. A polling
+// load of a field another thread writes needs FeedLoadAcquire64 instead, or
+// the compiler may hoist it out of a loop (phase 54).
 static __inline int64_t FeedLoadAcquire64(const volatile int64_t* p) {
     int64_t v = FeedLoadNoFence64(p);
     _ReadWriteBarrier();
@@ -193,10 +213,25 @@ static __inline void FeedStoreRelease64(volatile int64_t* p, int64_t v) {
 static __inline int64_t FeedLoadNoFence64(const volatile int64_t* p) {
     return ReadNoFence64((LONG64 const volatile*)p);
 }
+// x64 and ARM64: ReadAcquire64/WriteRelease64 are single 64-bit accesses, so
+// no SSE2 helper is needed here as on x86. On x64 they are plain accesses to
+// a volatile LONG64 and order only under MSVC's default /volatile:ms; a
+// build with /volatile:iso or clang-cl gets no compiler barrier from the
+// volatile qualifier alone, so an explicit _ReadWriteBarrier() is added on
+// that path. ARM64's ReadAcquire64/WriteRelease64 already compile to
+// __ldar64/__stlr64, a real acquire/release; the extra barrier there is
+// harmless but not needed, so it stays x64-only (phase 54).
 static __inline int64_t FeedLoadAcquire64(const volatile int64_t* p) {
-    return ReadAcquire64((LONG64 const volatile*)p);
+    int64_t v = ReadAcquire64((LONG64 const volatile*)p);
+#if defined(_M_X64)
+    _ReadWriteBarrier();
+#endif
+    return v;
 }
 static __inline void FeedStoreRelease64(volatile int64_t* p, int64_t v) {
+#if defined(_M_X64)
+    _ReadWriteBarrier();
+#endif
     WriteRelease64((LONG64 volatile*)p, v);
 }
 #endif
@@ -257,6 +292,7 @@ static __inline void FeedClose(FeedReader* r) {
 // Opens the feed. wakeups: claim a reader slot and an event, so FeedWait
 // returns as soon as the writer publishes; without it the view is read-only
 // and FeedWait only watches the writer. The reader starts at the present.
+// name must be under 60 characters (see FEED_MAPPING_NAME) (phase 54).
 static __inline int FeedOpen(FeedReader* r, const wchar_t* name, BOOL wakeups) {
     DWORD access = wakeups ? (FILE_MAP_READ | FILE_MAP_WRITE) : FILE_MAP_READ;
     FeedHeader* h;
@@ -295,10 +331,16 @@ static __inline int FeedOpen(FeedReader* r, const wchar_t* name, BOOL wakeups) {
     return FEED_OK;
 }
 
-// Start at the oldest event still in the ring, not at the present.
+// Start at the oldest event still in the ring, not at the present. w -
+// FEED_SLOT_COUNT is the slot the writer overwrites next (the oldest event
+// still live shares that slot's index with the newest), so it leaves a
+// margin of FEED_REWIND_MARGIN events, not that exact slot: without it, one
+// publish between FeedRewind and the first FeedNext would already lap the
+// reader and the whole backlog would be lost (phase 54).
 static __inline void FeedRewind(FeedReader* r) {
     int64_t w = FeedLoadAcquire64(&r->hdr->writeSeq);
-    r->next = (w > (int64_t)FEED_SLOT_COUNT) ? w - (int64_t)FEED_SLOT_COUNT : 1;
+    int64_t back = w - (int64_t)FEED_SLOT_COUNT + (int64_t)FEED_REWIND_MARGIN;
+    r->next = (back > 1) ? back : 1;
 }
 
 // The next event. FEED_LAPPED: the writer overtook this reader; *lost events
@@ -362,6 +404,11 @@ static __inline BOOL FeedReadSnapshot(const FeedReader* r, unsigned instrument, 
     return FALSE;
 }
 
+// Right after the machine wakes from sleep, the heartbeat timer has not
+// ticked yet, so a reader can see a stale heartbeat and FeedWriterAlive can
+// read FALSE, and FeedWait can return WAIT_OBJECT_0 + 1 ("writer gone"), for
+// a moment even though the writer process is fine. A reader should retry
+// rather than give up; the next tick (within a second) clears it (phase 54).
 static __inline BOOL FeedWriterAlive(const FeedReader* r) {
     if (FeedMagic(r->hdr) != FEED_MAGIC) return FALSE;
     return FeedNowUs() - FeedLoadAcquire64(&r->hdr->heartbeatUs) <= FEED_HEARTBEAT_STALE_US;
@@ -369,7 +416,8 @@ static __inline BOOL FeedWriterAlive(const FeedReader* r) {
 
 // Waits up to ms for data. WAIT_OBJECT_0: the writer published (registered
 // readers only). WAIT_OBJECT_0 + 1: the writer exited, or its heartbeat is
-// stale. WAIT_TIMEOUT: nothing happened.
+// stale (see FeedWriterAlive on sleep/resume - retry instead of treating
+// this as final). WAIT_TIMEOUT: nothing happened.
 static __inline DWORD FeedWait(FeedReader* r, DWORD ms) {
     HANDLE hs[2];
     DWORD n = 0, x;
@@ -432,5 +480,11 @@ typedef struct {
 typedef struct { LONG published, dropped, connects, state; } FeedStats;
 
 BOOL FeedStart(const FeedConfig* cfg);   // FALSE: no mapping; nothing started
-void FeedStop(void);                     // safe to call when not started
+// Safe to call when not started (returns TRUE at once). Otherwise TRUE once
+// FeedThread has ended and everything it can reach is torn down; FALSE if
+// the 10 s join timed out, in which case the caller must not delete or close
+// anything FeedThread can still reach - g_Ctx.lock and whatever sessionLock
+// and pSession point at in the caller's FeedConfig - the same rule tickc.c
+// already follows for its own worker thread (phase 54).
+BOOL FeedStop(void);
 void FeedGetStats(FeedStats* out);
