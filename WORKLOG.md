@@ -4804,8 +4804,10 @@ no `feed.c`.
 (pitfall 176): a receive on a silent `/ws` stream did not return within
 45 s, with 3000 ms set on the request handle and 5000 ms on the session.
 Closing the WebSocket handle from another thread cancelled a pending
-receive in about 1000 ms (`12017`, `ERROR_WINHTTP_OPERATION_CANCELLED`).
-This picked the watchdog design over a receive-timeout option: a
+receive at once (`12017`, `ERROR_WINHTTP_OPERATION_CANCELLED`) - the
+spike's own 1000 ms was its Closer thread's scheduled sleep before it
+closed the handle, not the time the cancel itself took (final review,
+phase 54). This picked the watchdog design over a receive-timeout option: a
 thread-pool timer (`FeedTick`) checks once a second how long it has been
 since the last message, and past 10 s (`FEED_RECV_MS`) closes `hWs` from
 outside `FeedThread`. Because the watchdog closed the handle, not a
@@ -4923,6 +4925,50 @@ the `/TP` build.
 Changed: `tickc.c` (the feed's start/stop, `--daemon`, the probe fields),
 `README.md` (three source files, the feed, `--daemon`, the feed's tests),
 `WORKLOG.md` (this section).
+
+**Final review fixes.** The whole-branch review before merge found 0
+Critical and 0 Important issues and 11 Minor ones; the controller fixed all
+of them in one wave, plus a few small hardenings. Code: an explicit
+`_ReadWriteBarrier()` on the x64 path of `FeedLoadAcquire64` /
+`FeedStoreRelease64` (`#if defined(_M_X64)`), since `ReadAcquire64` /
+`WriteRelease64` order only under `/volatile:ms`, not `/volatile:iso` or
+clang-cl; `FeedStop` now returns `BOOL` (`TRUE` unless its 10 s join timed
+out), and `tickc.c` folds that into `workerDone` so a timed-out `FeedStop`
+holds back `g_Ctx.lock` and the session close the same way a live
+`NetworkThread` does, in the daemon path too; the writer keeps its own copy
+of the instrument table (`g_feed.ins`) instead of reading it back out of
+shared memory, which any process in the session can write; `FeedRewind`
+leaves a margin of `FEED_REWIND_MARGIN` (1024) below the slot the writer
+overwrites next, so a live writer publishing between the rewind and the
+first `FeedNext` no longer laps the reader and loses the whole backlog
+(`TestRewindMargin`); `WinHttpSetOption(..., WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, ...)`'s
+return is now checked in `FeedConnect`; `tests/feed_probe.c`'s `Watch`
+bounds `ev.instrument` before indexing `tr[]`/`kl[]`, since the mapping is
+writable by any process in the session and terminal authors will copy this
+code. Documentation in `feed.h`: the three number spaces of
+`FeedStatus.error`; the 60-character mapping-name limit; sleep/resume
+staleness at `FeedWait`/`FeedWriterAlive`; two more `C_ASSERT`s
+(`sessionUs` at 32, `heartbeatUs` at 72); and a note on
+`FeedLoadNoFence64` on x86. Comments: `FeedThread`'s header corrected -
+the watchdog only ever closes `hWs`, not all three handles as `FeedStop`
+does - and `lastMsgTick`'s comment now says it is also stamped at connect.
+Docs: every "about 1 s" for a cancelled WinHTTP call, in the spec, `feed.c`
+and this file, is corrected to "at once" - the spike's 1000 ms was its
+Closer thread's own scheduled sleep before the close, not the cancel's own
+duration (the 47 ms measured during a connect, Task 6, stands); the
+hand-over-gap limitation above is reworded to say milliseconds, not
+seconds; the spec's `FeedReader.hdr` is now non-`const`, as the code has
+always had it, with the reason (a slot claim writes through it) and
+`FeedClose`'s read-only guarantee kept in words; the spec's header block
+gains `FEED_HEARTBEAT_STALE_US`, `FEED_SLOT_INDEX`, `FEED_REWIND_MARGIN`
+and the `<stdio.h>`/`<emmintrin.h>` includes, to match `feed.h`; the
+spec's `FeedStop` description now covers the `BOOL` return; and the
+README gains `feed_probe`'s own build line next to `feed_test`'s.
+**Proof.** `feed_test.exe`: 135 checks, 0 failed, three runs (x86) and once
+more built and run as x64 in a scratch directory via `vcvars64.bat`, same
+135/0. `build_feedprobe.bat` and `build_test.bat`: no warnings.
+`shot_p54.ps1 -Part all`: 29/29. `build_size.bat`: unchanged at 275 456
+bytes. `feed_test.exe --live 20`: exit 0, all four symbols traded.
 
 ---
 
@@ -5366,11 +5412,6 @@ Changed: `tickc.c` (the feed's start/stop, `--daemon`, the probe fields),
   reconnect, the events lost are gone, along with any closed 1m bar that
   fell into the hole. Filling it needs history over the feed, which is out
   of scope.
-- **`FeedStop` returns void** (phase 54). If its 10 s join ever times out,
-  which is unlikely since closing the handles cancels the pending call
-  within about a second, the mapping stays mapped: `WinMain` still releases
-  the mutex and deletes `g_Ctx.lock` while `FeedThread` may still reach it
-  through `sessionLock`.
 - **No automated test covers the watchdog, fragment joining, the 64 KB drop
   or the 60 s reset** (phase 54). The watchdog was proven by hand on the
   real network (Task 6); the others are read, not exercised.
@@ -5378,7 +5419,9 @@ Changed: `tickc.c` (the feed's start/stop, `--daemon`, the probe fields),
   in this environment. Only the compiler-barrier macros differ there.
 - **The hand-over gap** (phase 54): while `FeedStop` waits for `FeedThread`
   to end, the main-instance mutex and the window title are still held, as
-  they are for the rest of shutdown.
+  they are for the rest of shutdown. Since closing the handles cancels a
+  pending call at once (not the roughly 1 s once measured, see pitfall 176),
+  this gap is milliseconds, not seconds, outside the rare 10 s join timeout.
 
 ---
 
@@ -6235,7 +6278,9 @@ Changed: `tickc.c` (the feed's start/stop, `--daemon`, the probe fields),
 176. **`WinHttpWebSocketReceive` ignores the receive timeouts** (phase 54).
     Neither the request handle's value nor the session's bounds a pending
     receive on a silent socket (45 s, no return). Only closing the handle
-    from another thread ends it, in about 1 s.
+    from another thread ends it, at once - the spike's 1000 ms figure was
+    its own scheduled close, not the cancel's own duration (final review,
+    phase 54).
 177. **A reader position below 1 matches the seq-0 and `FEED_SEQ_BUSY`
     sentinels** (phase 54): a never-written slot holds seq 0, and a slot the
     writer is in holds -1, so `want <= 0` can pass `FeedNext`'s checks
