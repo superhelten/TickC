@@ -381,4 +381,5 @@ BOOL FeedWriterOpen(FeedWriter* w, const wchar_t* name, const FeedInstrument* in
 void FeedPublish(FeedWriter* w, const FeedEvent* ev);
 void FeedSetConn(FeedWriter* w, int state, int32_t error, int64_t retryAtUs);
 void FeedHeartbeat(FeedWriter* w);
+void FeedSweepReaders(FeedWriter* w);
 void FeedWriterClose(FeedWriter* w);

@@ -132,6 +132,30 @@ void FeedHeartbeat(FeedWriter* w) {
     FeedStoreRelease64(&w->hdr->heartbeatUs, FeedNowUs());
 }
 
+// Frees the slots of readers whose process has exited (spec: Cleanup). A
+// process we may not open (access denied) is alive, not dead. A reused
+// process id keeps the slot until that process exits too - a known limit.
+void FeedSweepReaders(FeedWriter* w) {
+    for (int i = 0; i < FEED_MAX_READERS; ++i) {
+        FeedReaderSlot* s = &w->hdr->readers[i];
+        LONG owner = s->owner;
+        HANDLE p;
+        BOOL dead;
+        if (owner == 0) continue;
+        p = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)owner);
+        if (p) {
+            dead = (WaitForSingleObject(p, 0) == WAIT_OBJECT_0);
+            CloseHandle(p);
+        } else {
+            dead = (GetLastError() == ERROR_INVALID_PARAMETER);   // no such process
+        }
+        if (!dead) continue;
+        if (w->hWake[i]) { CloseHandle(w->hWake[i]); w->hWake[i] = NULL; w->wakePid[i] = 0; }
+        InterlockedExchange(&s->ready, 0);
+        InterlockedCompareExchange(&s->owner, 0, owner);
+    }
+}
+
 // magic goes to 0 first: a reader that opens now, or reads on, sees
 // FEED_NO_WRITER instead of a writer that is gone.
 void FeedWriterClose(FeedWriter* w) {
