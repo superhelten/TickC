@@ -116,7 +116,7 @@ Binance WebSocket  wss://stream.binance.com:443/stream?streams=
 #define FEED_MAPPING_NAME      L"Local\\TickC.Feed.1"   // major version in the name
 #define FEED_MAGIC             0x46434B54u              // "TKCF"
 #define FEED_VERSION_MAJOR     1
-#define FEED_VERSION_MINOR     0
+#define FEED_VERSION_MINOR     1  // 1.1 (phase 55): FEED_TICKER24 and tickers24
 #define FEED_HEADER_SIZE       4096u
 #define FEED_SLOT_SIZE         128u
 #define FEED_SLOT_COUNT        32768u                   // a power of two
@@ -128,7 +128,8 @@ Binance WebSocket  wss://stream.binance.com:443/stream?streams=
 #define FEED_HEARTBEAT_STALE_US 3000000LL // a heartbeat older than this: the writer hangs
 #define FEED_REWIND_MARGIN     1024       // FeedRewind's margin below the ring's oldest slot
 
-enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3 };       // FeedEvent.type
+enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3,          // FeedEvent.type
+       FEED_TICKER24 = 4 };   // 1.1 (phase 55); a 1.0 reader skips it
 enum { FEED_SRC_BINANCE_SPOT = 1 };                             // FeedEvent.source
 enum { FEED_SIDE_BUY = 1, FEED_SIDE_SELL = 2 };                 // the aggressor
 enum { FEED_ST_CONNECTING = 1, FEED_ST_CONNECTED = 2, FEED_ST_DISCONNECTED = 3 };
@@ -161,6 +162,15 @@ typedef struct {                  // 16 bytes; FeedEvent.instrument = FEED_NO_IN
     int64_t  retryAtUs;           // next attempt while DISCONNECTED, else 0
 } FeedStatus;
 
+// 1.1 (phase 55): Binance's rolling 24-hour statistics for one symbol (the
+// @miniTicker stream, about one a second). Not the UTC day: the window ends
+// at the event's time and starts 24 hours earlier.
+typedef struct {                  // 48 bytes
+    int64_t open, high, low, close;    // 10^priceExp
+    int64_t volume;               // base asset, 10^qtyExp
+    int64_t quoteVolume;          // quote asset, 10^priceExp
+} FeedTicker24;
+
 typedef struct {                  // 128 bytes: one ring slot
     volatile int64_t seq;         //   0  its sequence number; FEED_SEQ_BUSY while written
     int64_t  tsExchangeUs;        //   8  the exchange's event time
@@ -173,6 +183,7 @@ typedef struct {                  // 128 bytes: one ring slot
         FeedTrade  trade;
         FeedKline  kline;
         FeedStatus status;
+        FeedTicker24 ticker24;     // 1.1 (phase 55)
         uint8_t    raw[96];
     } u;
 } FeedEvent;
@@ -201,6 +212,14 @@ typedef struct {                  // 128 bytes: the latest per instrument
     uint8_t   pad[16];
 } FeedSnapshot;
 
+// 1.1 (phase 55): the latest 24-hour statistics per instrument, seqlocked
+// like FeedSnapshot. updatedUs 0 = none yet.
+typedef struct {                  // 64 bytes
+    volatile int64_t lock;        // seqlock: odd while the writer is in it
+    int64_t      updatedUs;
+    FeedTicker24 t;
+} FeedTicker24Snap;
+
 typedef struct {                  // 4096 bytes: page 0 of the mapping
     // Line 0: identity, written once per writer session. magic is stored last.
     volatile uint32_t magic;      //    0
@@ -222,7 +241,7 @@ typedef struct {                  // 4096 bytes: page 0 of the mapping
     FeedReaderSlot readers[FEED_MAX_READERS];         //  128
     FeedInstrument instruments[FEED_MAX_INSTRUMENTS]; //  256
     FeedSnapshot   snapshots[FEED_MAX_INSTRUMENTS];   // 1024
-    uint8_t  reserved[1024];      // 3072
+    FeedTicker24Snap tickers24[FEED_MAX_INSTRUMENTS]; // 3072; unused in 1.0
 } FeedHeader;
 
 #pragma pack(pop)
@@ -231,6 +250,8 @@ C_ASSERT(sizeof(FeedTrade) == 32);      C_ASSERT(sizeof(FeedKline) == 64);
 C_ASSERT(sizeof(FeedStatus) == 16);     C_ASSERT(sizeof(FeedEvent) == FEED_SLOT_SIZE);
 C_ASSERT(sizeof(FeedInstrument) == 48); C_ASSERT(sizeof(FeedReaderSlot) == 16);
 C_ASSERT(sizeof(FeedSnapshot) == 128);  C_ASSERT(sizeof(FeedHeader) == FEED_HEADER_SIZE);
+C_ASSERT(sizeof(FeedTicker24) == 48);   C_ASSERT(sizeof(FeedTicker24Snap) == 64);
+C_ASSERT(offsetof(FeedHeader, tickers24) == 3072);
 C_ASSERT(offsetof(FeedEvent, u) == 32);
 C_ASSERT(offsetof(FeedHeader, writeSeq) == 64);
 C_ASSERT(offsetof(FeedHeader, connState) == 80);
@@ -464,6 +485,7 @@ void  FeedRewind(FeedReader* r);           // the oldest event still in the ring
                                             // live writer does not lap the reader at once
 int   FeedNext(FeedReader* r, FeedEvent* ev, int64_t* lost);
 BOOL  FeedReadSnapshot(const FeedReader* r, unsigned instrument, FeedSnapshot* out);
+BOOL  FeedReadTicker24(const FeedReader* r, unsigned instrument, FeedTicker24Snap* out);  // 1.1 (phase 55)
 DWORD FeedWait(FeedReader* r, DWORD ms);   // WAIT_OBJECT_0 = data, +1 = writer gone, WAIT_TIMEOUT
 void  FeedClose(FeedReader* r);
 ```
@@ -697,6 +719,132 @@ not part of the automated suite.
   probe fields), `README.md` (the feed, `--daemon`, the build line, three
   source files), `WORKLOG.md` (phase 54).
 - The build line gains `feed.c`. The exe is expected to grow by 10–15 KB.
+
+## Version 1.1 (phase 55)
+
+A small addition on top of the format above: each symbol's rolling 24-hour
+statistics, which the terminal's quote monitor needs (change, high, low,
+volume). It follows the format's own rule: a minor version may only add event
+types and use reserved or padding space.
+
+### The stream
+
+TickC also subscribes to `<sym>@miniTicker` for every instrument. Binance
+sends each symbol's rolling 24-hour statistics about once a second:
+
+```json
+{"e":"24hrMiniTicker","E":1727222400123,"s":"BTCUSDT","c":"64123.45000000",
+ "o":"63000.00000000","h":"64500.00000000","l":"62800.10000000",
+ "v":"12345.67800000","q":"789012345.67000000"}
+```
+
+The combined-stream path gains `/<sym>@miniTicker` per instrument, so
+`FeedStreamPath` (below) now writes `<sym>@trade/<sym>@kline_1m/<sym>@miniTicker`
+for each one, in that order.
+
+### The format
+
+```c
+enum { FEED_TICKER24 = 4 };               // FeedEvent.type, new in 1.1
+
+typedef struct {                          // 48 bytes; in FeedEvent.u
+    int64_t open, high, low, close;       // 10^priceExp, rolling 24 h
+    int64_t volume;                       // base asset, 10^qtyExp
+    int64_t quoteVolume;                  // quote asset, 10^priceExp
+} FeedTicker24;
+
+typedef struct {                          // 64 bytes
+    volatile int64_t lock;                // seqlock, as FeedSnapshot's
+    int64_t      updatedUs;               // 0 = none yet
+    FeedTicker24 t;
+} FeedTicker24Snap;
+```
+
+- The union in `FeedEvent` gains `FeedTicker24 ticker24`, fitting the existing
+  96-byte `u`.
+- `tsExchangeUs` is `E` × 1000, as for a trade or kline.
+- The header's `reserved[1024]` at offset 3072 becomes
+  `FeedTicker24Snap tickers24[FEED_MAX_INSTRUMENTS]`: 16 × 64 = 1024 bytes,
+  exactly the space that was reserved. `sizeof(FeedHeader)` stays 4096, and
+  `FEED_MAPPING_NAME` and `FEED_VERSION_MAJOR` are unchanged: this is not a
+  layout move, so it needs no new major version.
+- `FEED_VERSION_MINOR` becomes 1.
+
+### The writer's order and its restart rule
+
+`FeedPublish` updates `tickers24[instrument]` under that entry's seqlock
+before it publishes the `FEED_TICKER24` ring event, the same order and the
+same reason as the trade/kline snapshot: a reader that resyncs reads
+`writeSeq` and then the snapshot tables, so everything below `writeSeq` must
+already be in them (see Resync, above).
+
+`FeedWriterOpen` clears `tickers24` on every writer restart, as it clears
+`snapshots`: it evens a lock a dead writer left odd (`FeedLoadNoFence64(&t->lock)
+& 1` → one extra `InterlockedIncrement64`), then increments, clears
+`updatedUs` and `t`, and increments again, landing back on even for the rest
+of the session. A 1.0 writer never touched `tickers24` at all, so a 1.1
+writer taking over from one finds it already zero and even.
+
+### `FeedReadTicker24`
+
+```c
+BOOL FeedReadTicker24(const FeedReader* r, unsigned instrument, FeedTicker24Snap* out);
+```
+
+Reads with the same seqlock loop as `FeedReadSnapshot` (`FeedSeqlockCopy`).
+It returns `FALSE` when the writer is 1.0 (`r->hdr->versionMinor < 1`, checked
+first, before `tickers24` is touched at all: against a 1.0 writer that memory
+is unused reserved space, never written, so nothing but the version check may
+gate reading it), when the instrument index is out of range, or when the
+writer held the lock through 64 tries.
+
+### `FeedStreamPath`
+
+```c
+#define FEED_PATH_CCH (16 + FEED_MAX_INSTRUMENTS * 80)
+int FeedStreamPath(const FeedInstrument* ins, unsigned count, wchar_t* out, size_t cch);
+```
+
+Builds `/stream?streams=` followed by, per instrument,
+`<sym>@trade/<sym>@kline_1m/<sym>@miniTicker`, joined with `/`. Returns the
+characters written, or -1 when the result does not fit `cch`
+(`_snwprintf_s` with `_TRUNCATE`, checked). `FEED_PATH_CCH` sizes the
+worst case: 16 instruments of 15-character symbols. Phase 55 exports it
+(it was `static` in `feed.c` for the four fixed symbols of phase 54) so
+`TestStreamPath` can build the longest path directly and confirm it neither
+overflows nor aborts.
+
+### Compatibility both ways
+
+- **A 1.0 reader against a 1.1 writer.** A 1.0 `feed_probe`, built from
+  phase 54's merge commit (`8d4b15a`) with phase 54's `feed.h`, opens a 1.1
+  feed without trouble: `versionMajor`, `headerSize`, `slotSize` and
+  `slotCount` are all unchanged, which is everything `FeedOpen` checks. It
+  reads every event, including the unknown `FEED_TICKER24` (type 4), which
+  its `Check` counts as `status` because its `if`/`else if` chain does not
+  know the type - it does not reject or skip the slot, just fall through to
+  its last branch. Evidence (task 3, step 4; replayed against the same
+  fixture as the golden below):
+
+  ```
+  events 379 trades 200 klines 129 status 50 hash 0xBA359CA7BDD92E0E
+  FAIL no golden
+  ```
+
+  `events` (379) equals the 1.1 golden's own total below; `status` (50) is
+  the 1.1 golden's `tickers24 48` plus `status 2`, both folded into the one
+  counter a 1.0 build has. The `FAIL no golden` (exit 1) is expected: the
+  worktree carries no golden file, not a mismatch. The proof is that a 1.0
+  reader reads every event of a 1.1 feed and breaks on none.
+- **A 1.1 reader against a 1.0 writer (`versionMinor` 0).** `FeedReadTicker24`
+  returns `FALSE`, never bytes from what that writer left as reserved space
+  (`TestTicker24OldWriter`, task 1).
+- **The 1.1 golden**, for reference (task 3, step 2), read against the grown
+  fixture (377 good lines, 48 of them `@miniTicker`, plus 3 bad ones):
+
+  ```
+  events 379 trades 200 klines 129 tickers24 48 status 2 hash 0xBA359CA7BDD92E0E
+  ```
 
 ## Risks
 
