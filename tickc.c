@@ -3002,13 +3002,75 @@ static BOOL EnsureBackBuffer(AppContext* ctx, HDC ref, int W, int H) {
     return TRUE;
 }
 
+// Phase 53: WCAG's relative luminance and contrast ratio, for the
+// watermark's step on the mountain's fill.
+static double WmLuminance(COLORREF c) {
+    double ch[3] = { GetRValue(c) / 255.0, GetGValue(c) / 255.0, GetBValue(c) / 255.0 };
+    for (int i = 0; i < 3; ++i)
+        ch[i] = (ch[i] <= 0.03928) ? ch[i] / 12.92 : pow((ch[i] + 0.055) / 1.055, 2.4);
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+static double WmContrast(COLORREF a, COLORREF b) {
+    double la = WmLuminance(a), lb = WmLuminance(b);
+    return (la > lb) ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+}
+
+// The step toward ink on surf (0-255, as Blend takes it) whose contrast
+// with surf is nearest to target. The same step as on the background would
+// not do: the navy is lighter than the black, and at 1280 px the dark
+// theme's text would stand out of it at 1.18:1 against 1.11 above it - the
+// watermark louder in the mountain than over it. Matched, it is 1.114
+// against 1.112 (the light theme: 1.143 against 1.142). Once per build.
+static int WatermarkStepOn(COLORREF surf, COLORREF ink, double target) {
+    int best = 0;
+    double bestD = 1e9;
+    for (int t = 0; t <= 255; ++t) {
+        double d = fabs(WmContrast(Blend(surf, ink, t), surf) - target);
+        if (d < bestD) { bestD = d; best = t; }
+    }
+    return best;
+}
+
+// The symbol and the interval under it, in ink - into the background's
+// bitmap, and for the mountain into the fill's (phase 53), in the same
+// places, so the text runs on across the fill's edge.
+static void DrawWatermarkText(AppContext* ctx, HDC dc, const ChartRect* g, int fh, COLORREF ink) {
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, ink);
+    HFONT prev = (HFONT)SelectObject(dc, ctx->hFontWm);
+    RECT rcSym = { g->left, g->top, g->right, g->bottom };
+    DrawTextW(dc, SYMBOLS[ctx->symIdx].api, -1, &rcSym,
+              DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    // The interval below the main line, in the usual small font.
+    SelectObject(dc, ctx->sty.fontSmall);
+    // The distance down to the interval follows the font height, otherwise the
+    // text would sit inside the main line on large panels.
+    RECT rcIv = { g->left, g->top + (g->ch / 2) + fh / 2 + Dp(4), g->right, g->bottom };
+    DrawTextW(dc, INTERVALS[ctx->ivIdx].label, -1, &rcIv,
+              DT_CENTER | DT_SINGLELINE | DT_TOP);
+    SelectObject(dc, prev);
+}
+
+static void FreeWatermarkFill(AppContext* ctx) {
+    if (ctx->wmFillBr)  { DeleteObject(ctx->wmFillBr);  ctx->wmFillBr  = NULL; }
+    if (ctx->wmFillBmp) { DeleteObject(ctx->wmFillBmp); ctx->wmFillBmp = NULL; }
+}
+
 // Builds background + watermark when (W, H, symIdx, ivIdx) changes - not
 // per frame. Same discipline as the GDI cache from phase 1.
 // If anything fails here, wmValid = FALSE is set and ChartDrawBackground falls back to
 // FillRect. The watermark is decoration; it must never block painting.
+// Phase 53: while the mountain is drawn, the same text on clr.mountain as
+// well, the pattern brush the engine fills the mountain with - the key gets
+// the chart type, so a switch to or from the mountain builds or frees it.
+// If only that part fails, the fill is solid, as up to phase 52.
 static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
+    BOOL wantFill = (ctx->ch.chartType == CHART_MOUNTAIN);
     if (ctx->wmValid && ctx->wmW == W && ctx->wmH == H &&
-        ctx->wmSym == ctx->symIdx && ctx->wmIv == ctx->ivIdx) {
+        ctx->wmSym == ctx->symIdx && ctx->wmIv == ctx->ivIdx &&
+        ctx->wmFillFor == wantFill) {
         return;
     }
     if (W <= 0 || H <= 0) { ctx->wmValid = FALSE; return; }
@@ -3022,6 +3084,7 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
         ctx->wmOldBmp = NULL;
     }
     if (ctx->wmBmp) { DeleteObject(ctx->wmBmp); ctx->wmBmp = NULL; }
+    FreeWatermarkFill(ctx);
 
     ctx->wmDC  = CreateCompatibleDC(ref);
     ctx->wmBmp = CreateCompatibleBitmap(ref, W, H);
@@ -3036,14 +3099,12 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     RECT rc = { 0, 0, W, H };
     FillRect(ctx->wmDC, &rc, ctx->sty.brBg);
 
-    SetBkMode(ctx->wmDC, TRANSPARENT);
     // Alpha follows W, and W is already part of the cache key above - the
     // color is therefore only computed when the bitmap is built. Everything
     // underneath is opaque CLR_BG, so Blend against the background IS alpha
     // blending.
     ctx->wmInk[0] = Blend(ctx->sty.clr.bg, ctx->theme->wmInk,
                           (int)(WatermarkAlpha(W) * 255.0 + 0.5));
-    SetTextColor(ctx->wmDC, ctx->wmInk[0]);
 
     ChartRect g = PanelGeometry(W, H);
 
@@ -3101,20 +3162,32 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
         }
     }
     ctx->wmFontH = fh;
+    SelectObject(ctx->wmDC, prevFit);
+    DrawWatermarkText(ctx, ctx->wmDC, &g, fh, ctx->wmInk[0]);
 
-    HFONT prev = prevFit;
-    RECT rcSym = { g.left, g.top, g.right, g.bottom };
-    DrawTextW(ctx->wmDC, SYMBOLS[ctx->symIdx].api, -1, &rcSym,
-              DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-
-    // The interval below the main line, in the usual small font.
-    SelectObject(ctx->wmDC, ctx->sty.fontSmall);
-    // The distance down to the interval follows the font height, otherwise the
-    // text would sit inside the main line on large panels.
-    RECT rcIv = { g.left, g.top + (g.ch / 2) + fh / 2 + Dp(4), g.right, g.bottom };
-    DrawTextW(ctx->wmDC, INTERVALS[ctx->ivIdx].label, -1, &rcIv,
-              DT_CENTER | DT_SINGLELINE | DT_TOP);
-    SelectObject(ctx->wmDC, prev);
+    // Phase 53: the fill's copy. Its own bitmap, drawn through a DC that is
+    // let go at once: the pattern brush is all the engine needs, and a
+    // bitmap selected into a DC cannot make one. The ink is stepped so the
+    // text stands out of the fill exactly as faintly as out of the
+    // background (WatermarkStepOn).
+    ctx->wmFillFor = wantFill;
+    ctx->wmInk[1] = Blend(ctx->sty.clr.mountain, ctx->theme->wmInk,
+                          WatermarkStepOn(ctx->sty.clr.mountain, ctx->theme->wmInk,
+                                          WmContrast(ctx->wmInk[0], ctx->sty.clr.bg)));
+    if (wantFill) {
+        HDC fdc = CreateCompatibleDC(ref);
+        ctx->wmFillBmp = CreateCompatibleBitmap(ref, W, H);
+        if (fdc && ctx->wmFillBmp) {
+            HGDIOBJ oldF = SelectObject(fdc, ctx->wmFillBmp);
+            SetDCBrushColor(fdc, ctx->sty.clr.mountain);
+            FillRect(fdc, &rc, (HBRUSH)GetStockObject(DC_BRUSH));
+            DrawWatermarkText(ctx, fdc, &g, fh, ctx->wmInk[1]);
+            SelectObject(fdc, oldF);
+            ctx->wmFillBr = CreatePatternBrush(ctx->wmFillBmp);
+        }
+        if (fdc) DeleteDC(fdc);
+        if (!ctx->wmFillBr) FreeWatermarkFill(ctx);   // the solid fill
+    }
 
     ctx->wmW = W; ctx->wmH = H;
     ctx->wmSym = ctx->symIdx; ctx->wmIv = ctx->ivIdx;
@@ -3631,6 +3704,7 @@ static void DrawChartFrame(AppContext* ctx, HDC hdc, int W, int H) {
 
     ChartStyle sty = ctx->sty;
     sty.fontPill = ctx->hFontPill;
+    sty.brFillWm = ctx->wmValid ? ctx->wmFillBr : NULL;   // phase 53
 
     ChartDrawBody(hdc, W, H, &ctx->ch, &in, &sty);
 }
@@ -7549,6 +7623,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         DeleteDC(g_Ctx.wmDC);
     }
     if (g_Ctx.wmBmp)   DeleteObject(g_Ctx.wmBmp);
+    FreeWatermarkFill(&g_Ctx);
     if (g_Ctx.hFontWm) DeleteObject(g_Ctx.hFontWm);
 
     // hConnect belongs to the worker thread: released only once it has ended
