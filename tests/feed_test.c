@@ -598,7 +598,7 @@ static void TestReplay(void) {
     int64_t hb = FeedLoadAcquire64(&r.hdr->heartbeatUs);
     Sleep(1600);
     CHECK(FeedLoadAcquire64(&r.hdr->heartbeatUs) > hb, "the heartbeat timer ticks");
-    FeedStop();
+    CHECK(FeedStop() == TRUE, "FeedStop returns TRUE once FeedThread has ended");
     CHECK(r.hdr->connState == FEED_ST_DISCONNECTED,
           "FeedStop published DISCONNECTED; the reader's own view survives the writer's unmap");
     CHECK(FeedNext(&r, &ev, &lost) == FEED_NO_WRITER, "after FeedStop: FEED_NO_WRITER");
@@ -636,8 +636,7 @@ static void TestReplayMissing(void) {
 }
 
 static void TestStopTwice(void) {
-    FeedStop();   // not started: must return at once
-    CHECK(TRUE, "FeedStop without FeedStart returns");
+    CHECK(FeedStop() == TRUE, "FeedStop without FeedStart returns TRUE at once");
 }
 
 // --live N: the real Binance, by hand. Prints what arrived per symbol.

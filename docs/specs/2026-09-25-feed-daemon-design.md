@@ -604,9 +604,11 @@ Kline (`data`):
   waits longer than the network thread's existing bound (10 s). `FeedStop`
   returns `BOOL`: `TRUE` once `FeedThread` has ended (or at once if the feed
   was never started), `FALSE` if the 10 s join timed out - in which case the
-  caller must not delete or close anything `FeedThread` can still reach
-  (`WinMain`'s `g_Ctx.lock`, and whatever `sessionLock`/`pSession` point at),
-  the same rule it already follows for `NetworkThread`.
+  caller must not delete the lock `sessionLock` points at (`WinMain`'s
+  `g_Ctx.lock`), nor anything else `FeedThread` can still reach, the same rule
+  it already follows for `NetworkThread`. The session itself is still closed:
+  `WinMain` first sets it to NULL under that lock, and `FeedThread` reads it
+  only under the lock.
 - `FeedThread` reads `hSession` under the same lock as `HttpGet`, because
   `WinMain` closes the session under that lock at exit.
 

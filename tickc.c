@@ -7764,7 +7764,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (hs) WinHttpCloseHandle(hs);
     }
     if (g_Ctx.hThread) {
-        workerDone = feedStopped && (WaitForSingleObject(g_Ctx.hThread, 10000) == WAIT_OBJECT_0);
+        // The join comes first (phase 54): a FeedStop that timed out must
+        // not also cost NetworkThread its 10 s.
+        workerDone = (WaitForSingleObject(g_Ctx.hThread, 10000) == WAIT_OBJECT_0) && feedStopped;
         CloseHandle(g_Ctx.hThread);
     }
     if (workerDone) {
