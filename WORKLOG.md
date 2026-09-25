@@ -4749,7 +4749,8 @@ line's capture has the watermark and the mountain's the fill, the fill
 carries the ink (99.4-100 %) - right after a theme switch, a resize to
 900x520, an interval switch and 144 dpi, captured before any type switch;
 no fill bitmap while the line is drawn, no build over five repaints, GDI
-68 → 68 over three rounds of type and theme switches. Nine mutations
+68 → 68 over three rounds of type and theme switches (65 on the red
+build: the second bitmap costs three objects while the mountain is drawn). Nine mutations
 (`mut53.py`) each fail: in the engine the brush ignored, anchored at the
 plot, drawn with an outline, and laid over the whole pane before the grid;
 in the app the step not matched (FAINT), the type out of the key (LAZY),
@@ -4822,13 +4823,16 @@ black) was not retaken. **Exe 262 656 → 264 704 bytes (+2 048).**
 - **The tray icon keeps the old background** (phase 51). The micro font's
   bitmap is filled with `0D1117` (`RenderMicroFontIcon`); the icon stands
   on the taskbar, not on the chart.
-- **`golden.ps1 -Light` was not re-run in phases 51 and 52.** The light
-  theme's chart was checked in `chart_golden`, `shot_p51` and `shot_p52`.
+- **`golden.ps1 -Light` was not re-run in phases 51-53.** The light
+  theme's chart was checked in `chart_golden`, `shot_p51`, `shot_p52` and
+  `shot_p53`.
 - **The watermark through the mountain costs a second bitmap** (phase 53)
   the size of the surface and a pattern brush made from it, only while the
   mountain is drawn - the bitmap is 3.7 MB at 1280x720 and 24.6 MB at
-  3840x1600 (whether GDI copies it into the brush was not measured), two
-  GDI objects - and about 1 ms a frame at 3840x1600 with 6000 candles. Up to phase 52 the solid fill hid the
+  3840x1600 (whether GDI copies it into the brush was not measured) -
+  three GDI objects, measured (65 on the red build, 68 on the green, in
+  the same state of `shot_p53`), and about 1 ms a frame at 3840x1600
+  with 6000 candles. Up to phase 52 the solid fill hid the
   watermark where it lay (phase 49's limitation).
 - **Opaque label cells on the fill cut the watermark** (phase 53), as they
   do on the background: the level names on the navy (`fillCell`), the
