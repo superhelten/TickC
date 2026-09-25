@@ -276,7 +276,12 @@ static __inline void    FeedStoreRelease64(volatile int64_t* p, int64_t v);
 ```
 
 - x64 and ARM64: `ReadAcquire64`, `ReadNoFence64` and `WriteRelease64`,
-  which are single 64-bit accesses there.
+  which are single 64-bit accesses there. On x64 they are plain accesses to a
+  `volatile LONG64` and order only under MSVC's default `/volatile:ms`, so
+  `FeedLoadAcquire64`/`FeedStoreRelease64` add an explicit
+  `_ReadWriteBarrier()` there for a build with `/volatile:iso` or clang-cl
+  (phase 54); ARM64's calls already compile to `__ldar64`/`__stlr64`, a real
+  acquire/release, so no extra barrier is needed there.
 - x86: SSE2 `movq` (`_mm_loadl_epi64` / `_mm_storel_epi64`), which is atomic
   for an 8-byte-aligned address, with `_ReadWriteBarrier()` after a load and
   before a store (x86 keeps the order of loads and of stores; the barrier

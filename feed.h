@@ -191,15 +191,15 @@ C_ASSERT((FEED_SLOT_COUNT & (FEED_SLOT_COUNT - 1)) == 0);
 // stores). Not InterlockedCompareExchange64 as a load: it writes, and a
 // reader may have mapped the region read-only.
 #if defined(_M_IX86)
+// No compiler barrier here: safe only right after a FEED_LOAD_FENCE (which
+// already has one), or for a field only this thread ever writes. A polling
+// load of a field another thread writes needs FeedLoadAcquire64 instead, or
+// the compiler may hoist it out of a loop (phase 54).
 static __inline int64_t FeedLoadNoFence64(const volatile int64_t* p) {
     int64_t out;
     _mm_storel_epi64((__m128i*)(void*)&out, _mm_loadl_epi64((const __m128i*)(const void*)p));
     return out;
 }
-// No compiler barrier here: safe only right after a FEED_LOAD_FENCE (which
-// already has one), or for a field only this thread ever writes. A polling
-// load of a field another thread writes needs FeedLoadAcquire64 instead, or
-// the compiler may hoist it out of a loop (phase 54).
 static __inline int64_t FeedLoadAcquire64(const volatile int64_t* p) {
     int64_t v = FeedLoadNoFence64(p);
     _ReadWriteBarrier();
@@ -483,8 +483,8 @@ BOOL FeedStart(const FeedConfig* cfg);   // FALSE: no mapping; nothing started
 // Safe to call when not started (returns TRUE at once). Otherwise TRUE once
 // FeedThread has ended and everything it can reach is torn down; FALSE if
 // the 10 s join timed out, in which case the caller must not delete or close
-// anything FeedThread can still reach - g_Ctx.lock and whatever sessionLock
-// and pSession point at in the caller's FeedConfig - the same rule tickc.c
-// already follows for its own worker thread (phase 54).
+// anything FeedThread can still reach - the caller's own lock, and whatever
+// its FeedConfig's sessionLock and pSession point at - the same rule
+// tickc.c already follows for its own worker thread (phase 54).
 BOOL FeedStop(void);
 void FeedGetStats(FeedStats* out);
