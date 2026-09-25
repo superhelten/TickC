@@ -5093,7 +5093,9 @@ Axiom's repo, in its own commit.
 Verified: `feed_test.exe` 167 checks, 0 failed, three x86 runs and one x64
 run, no warnings. `feed_probe --check` against `tests/golden/feed.txt`:
 PASS, golden unchanged. `shot_p54.ps1 -Part all`: 29/29. `build_size.bat`:
-see the commit for the exact bytes.
+**276 992 bytes, unchanged from Task 3's own figure** (both the plain and
+the `/TP` build) - none of this wave's changes (a branch reorder in
+`FeedWriterOpen`, comments, one small guard) moved the count.
 
 Pitfall 181, the last of this phase.
 
