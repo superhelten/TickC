@@ -341,13 +341,17 @@ int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, uns
 // ---------------------------------------------------------------------------
 // FeedThread
 // ---------------------------------------------------------------------------
-// One per process. It owns the WebSocket; FeedStop may close it from outside,
-// under g_feed.lock, which cancels a pending receive at once (measured in
-// task 1). The heartbeat is a thread-pool timer that writes heartbeatUs and
-// nothing else: it means "the writer process lives", whatever the line does.
+// One per process. It owns the WebSocket, and while FeedConnect runs, the
+// connect and request handles too; FeedStop or the watchdog may close
+// whichever is open from outside, under g_feed.lock, which cancels a
+// pending call at once (measured in task 1). The heartbeat is a thread-pool
+// timer that writes heartbeatUs every tick; it also runs the watchdog that
+// closes a silent hWs, so it is no longer "nothing else" (phase 54).
 
 #define FEED_MSG_MAX       65536
-#define FEED_RECV_MS       10000     // silence longer than this: the line is dead
+// The watchdog's silence bound; also the upgrade request's own timeout,
+// which alone does not bound the ongoing receive (task 1's spike) (phase 54).
+#define FEED_RECV_MS       10000
 #define FEED_STABLE_MS     60000     // a connection this old resets the backoff
 
 static struct {
@@ -355,13 +359,16 @@ static struct {
     FeedWriter       w;
     FeedConfig       cfg;
     wchar_t          replay[MAX_PATH];
-    CRITICAL_SECTION lock;           // guards hWs
+    CRITICAL_SECTION lock;           // guards hWs, hConnect and hRequest (phase 54)
     HINTERNET        hWs;
+    HINTERNET        hConnect;       // published only while FeedConnect may block on it (phase 54)
+    HINTERNET        hRequest;       // published only while FeedConnect may block on it (phase 54)
     HANDLE           hStop, hThread;
     PTP_TIMER        timer;
     ULONGLONG        lastSweep;
     volatile LONG    published, dropped, connects;
     volatile LONG64  lastMsgTick;    // GetTickCount64() of the last message read
+    volatile LONG    silent;         // 1: the watchdog closed hWs, not FeedStop (phase 54)
 } g_feed;
 
 static char g_feedBuf[FEED_MSG_MAX];
@@ -444,10 +451,50 @@ static void FeedStreamPath(wchar_t* out, size_t cch) {
     }
 }
 
-// Connects and upgrades. The 10 s receive timeout goes on this request's
-// handle, not on the session, which keeps 5 s for the REST fetches.
+// Publishes a handle in g_feed under the lock so FeedStop can find and
+// cancel it at once (about 1 s, task 1), unless stop was already asked, in
+// which case it is closed here and the caller must not touch it again. The
+// same publish-or-bail race protects hWs, hConnect and hRequest (phase 54:
+// FeedStop during FeedConnect).
+static BOOL FeedPublishHandle(HINTERNET* slot, HINTERNET h) {
+    BOOL stopped;
+    EnterCriticalSection(&g_feed.lock);
+    stopped = (WaitForSingleObject(g_feed.hStop, 0) == WAIT_OBJECT_0);
+    if (!stopped) *slot = h;
+    LeaveCriticalSection(&g_feed.lock);
+    if (stopped) WinHttpCloseHandle(h);
+    return !stopped;
+}
+
+// Closes a published handle unless FeedStop already did; whoever finds it
+// non-NULL under the lock is the one that closes it, so it is never closed
+// twice (phase 54).
+static void FeedCloseTracked(HINTERNET* slot) {
+    EnterCriticalSection(&g_feed.lock);
+    if (*slot) { WinHttpCloseHandle(*slot); *slot = NULL; }
+    LeaveCriticalSection(&g_feed.lock);
+}
+
+// Un-publishes a handle the caller goes on owning past this point (hc, kept
+// open for the WebSocket's own lifetime): if FeedStop has not raced in to
+// close it, only the g_feed slot is cleared and the caller's handle stays
+// good; if FeedStop already closed it, the caller's own copy is nulled too,
+// so it is never closed a second time (phase 54).
+static void FeedUnpublish(HINTERNET* slot, HINTERNET* hOwn) {
+    EnterCriticalSection(&g_feed.lock);
+    if (*slot) *slot = NULL; else *hOwn = NULL;
+    LeaveCriticalSection(&g_feed.lock);
+}
+
+// Connects and upgrades. FEED_RECV_MS on this request's handle bounds only
+// the upgrade request itself, not the ongoing WebSocket receive (task 1's
+// spike); the session keeps its own 5 s for the REST fetches. The connect
+// and request handles are published in g_feed under the lock while a
+// blocking call may be pending on them, the same way hWs is, so FeedStop can
+// close whichever is open and cancel it at once (phase 54: FeedStop during
+// FeedConnect).
 static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
-    wchar_t path[512];
+    wchar_t path[16 + FEED_MAX_INSTRUMENTS * 48];
     HINTERNET hr, ws = NULL;
     DWORD status = 0, cb = sizeof(status);
     *hc = NULL;
@@ -456,26 +503,38 @@ static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
         *hc = WinHttpConnect(*g_feed.cfg.pSession, L"stream.binance.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (g_feed.cfg.sessionLock) LeaveCriticalSection(g_feed.cfg.sessionLock);
     if (!*hc) { *err = GetLastError(); return NULL; }
-    FeedStreamPath(path, 512);
+    if (!FeedPublishHandle(&g_feed.hConnect, *hc)) { *hc = NULL; return NULL; }
+
+    FeedStreamPath(path, sizeof(path) / sizeof(path[0]));
     hr = WinHttpOpenRequest(*hc, L"GET", path, NULL, WINHTTP_NO_REFERER,
                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!hr) { *err = GetLastError(); return NULL; }
-    WinHttpSetOption(hr, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
-    WinHttpSetTimeouts(hr, 5000, 5000, 5000, FEED_RECV_MS);
-    if (WinHttpSendRequest(hr, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-        WinHttpReceiveResponse(hr, NULL) &&
-        WinHttpQueryHeaders(hr, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &cb, WINHTTP_NO_HEADER_INDEX) &&
-        status == 101) {
-        ws = WinHttpWebSocketCompleteUpgrade(hr, 0);
+    if (!hr) {
+        *err = GetLastError();
+    } else if (FeedPublishHandle(&g_feed.hRequest, hr)) {
+        WinHttpSetOption(hr, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
+        WinHttpSetTimeouts(hr, 5000, 5000, 5000, FEED_RECV_MS);
+        if (WinHttpSendRequest(hr, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+            WinHttpReceiveResponse(hr, NULL) &&
+            WinHttpQueryHeaders(hr, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                WINHTTP_HEADER_NAME_BY_INDEX, &status, &cb, WINHTTP_NO_HEADER_INDEX) &&
+            status == 101) {
+            ws = WinHttpWebSocketCompleteUpgrade(hr, 0);
+        }
+        if (!ws) *err = status && status != 101 ? status : GetLastError();
+        FeedCloseTracked(&g_feed.hRequest);
     }
-    if (!ws) *err = status && status != 101 ? status : GetLastError();
-    WinHttpCloseHandle(hr);
+    // else: stop was already asked; FeedPublishHandle closed hr itself, and
+    // hr must not be touched again.
+
+    FeedUnpublish(&g_feed.hConnect, hc);
     return ws;
 }
 
-// Reads messages until the socket fails, closes or is closed by FeedStop.
-// Returns the reason: a WinHTTP error or the WebSocket close status.
+// Reads messages until the socket fails, closes, or is closed by FeedStop or
+// the watchdog (phase 54). Returns the reason: a WinHTTP error or the
+// WebSocket close status; FeedThread turns a watchdog close into
+// ERROR_WINHTTP_TIMEOUT once it returns, since g_feed.silent says which one
+// happened.
 static DWORD FeedReceiveLoop(HINTERNET ws) {
     DWORD len = 0;
     BOOL over = FALSE;
@@ -515,22 +574,29 @@ static DWORD WINAPI FeedThread(LPVOID unused) {
     for (;;) {
         HINTERNET hc = NULL, ws;
         DWORD err = 0, wait;
-        ULONGLONG t0;
+        ULONGLONG t0 = 0;
+        BOOL connected = FALSE;
         if (WaitForSingleObject(g_feed.hStop, 0) == WAIT_OBJECT_0) break;
+        InterlockedExchange(&g_feed.silent, 0);   // this attempt's own flag, not a stale one (phase 54)
         FeedSetConn(&g_feed.w, FEED_ST_CONNECTING, 0, 0);
-        t0 = GetTickCount64();
         ws = FeedConnect(&hc, &err);
         if (ws) {
             BOOL stopped;
             EnterCriticalSection(&g_feed.lock);
             stopped = (WaitForSingleObject(g_feed.hStop, 0) == WAIT_OBJECT_0);
-            if (!stopped) g_feed.hWs = ws;
+            if (!stopped) {
+                InterlockedExchange64(&g_feed.lastMsgTick, (LONG64)GetTickCount64());
+                g_feed.hWs = ws;
+            }
             LeaveCriticalSection(&g_feed.lock);
             if (stopped) { WinHttpCloseHandle(ws); if (hc) WinHttpCloseHandle(hc); break; }
             InterlockedIncrement(&g_feed.connects);
-            InterlockedExchange64(&g_feed.lastMsgTick, (LONG64)GetTickCount64());
+            connected = TRUE;
+            t0 = GetTickCount64();   // the 60 s rule counts from here, not from before the attempt (phase 54)
             FeedSetConn(&g_feed.w, FEED_ST_CONNECTED, 0, 0);
             err = FeedReceiveLoop(ws);
+            if (InterlockedCompareExchange(&g_feed.silent, 0, 0))
+                err = ERROR_WINHTTP_TIMEOUT;   // the watchdog closed it, not FeedStop: say so, not 12017 (phase 54)
             EnterCriticalSection(&g_feed.lock);
             if (g_feed.hWs) { WinHttpCloseHandle(g_feed.hWs); g_feed.hWs = NULL; }
             LeaveCriticalSection(&g_feed.lock);
@@ -538,8 +604,10 @@ static DWORD WINAPI FeedThread(LPVOID unused) {
         if (hc) WinHttpCloseHandle(hc);
         if (WaitForSingleObject(g_feed.hStop, 0) == WAIT_OBJECT_0) break;
         // A connection that held a minute (Binance's 24 h cut) goes again at
-        // once; anything shorter backs off on TickC's curve.
-        if (ws && GetTickCount64() - t0 >= FEED_STABLE_MS) {
+        // once, counted from CONNECTED, not from before the attempt; anything
+        // shorter, or a connect that never reached CONNECTED, backs off on
+        // TickC's curve (phase 54).
+        if (connected && GetTickCount64() - t0 >= FEED_STABLE_MS) {
             failures = 0;
             wait = 0;
         } else {
@@ -555,11 +623,15 @@ static DWORD WINAPI FeedThread(LPVOID unused) {
 static VOID CALLBACK FeedTick(PTP_CALLBACK_INSTANCE inst, PVOID ctx, PTP_TIMER timer) {
     (void)inst; (void)ctx; (void)timer;
     FeedHeartbeat(&g_feed.w);
-    // Task 1 measured it: no timeout bounds a WebSocket receive, so a dead
-    // line is closed from here after FEED_RECV_MS of silence, which ends the
-    // receive the same way FeedStop does.
+    // Task 1 measured it: no timeout bounds an ongoing WebSocket receive, so
+    // a dead line is closed from here after FEED_RECV_MS of silence, the
+    // same way FeedStop ends a pending receive. silent records that this
+    // close came from here, not from FeedStop, so FeedThread can report the
+    // spec's own word for it, a timeout, instead of the cancellation status
+    // that closing the handle actually produces (phase 54).
     EnterCriticalSection(&g_feed.lock);
     if (g_feed.hWs && GetTickCount64() - (ULONGLONG)InterlockedCompareExchange64(&g_feed.lastMsgTick, 0, 0) > FEED_RECV_MS) {
+        InterlockedExchange(&g_feed.silent, 1);
         WinHttpCloseHandle(g_feed.hWs);
         g_feed.hWs = NULL;
     }
@@ -577,7 +649,7 @@ BOOL FeedStart(const FeedConfig* cfg) {
     g_feed.cfg.instruments = g_feed.w.hdr->instruments;   // the copy in the header outlives the caller's
     InitializeCriticalSection(&g_feed.lock);
     g_feed.hStop = CreateEventW(NULL, TRUE, FALSE, NULL);
-    g_feed.timer = CreateThreadpoolTimer(FeedTick, NULL, NULL);
+    g_feed.timer = g_feed.hStop ? CreateThreadpoolTimer(FeedTick, NULL, NULL) : NULL;
     if (g_feed.timer) {
         ULARGE_INTEGER t;
         t.QuadPart = (ULONGLONG)-10000000LL;   // 1 s from now, relative
@@ -585,7 +657,9 @@ BOOL FeedStart(const FeedConfig* cfg) {
         due.dwHighDateTime = t.HighPart;
         SetThreadpoolTimer(g_feed.timer, &due, 1000, 0);
     }
-    g_feed.hThread = g_feed.hStop ? CreateThread(NULL, 0, FeedThread, NULL, 0, NULL) : NULL;
+    // Without the timer there is no heartbeat and no watchdog, so its
+    // failure fails the whole start, not a degraded run (phase 54).
+    g_feed.hThread = g_feed.timer ? CreateThread(NULL, 0, FeedThread, NULL, 0, NULL) : NULL;
     if (!g_feed.hThread) {
         if (g_feed.timer) { SetThreadpoolTimer(g_feed.timer, NULL, 0, 0); WaitForThreadpoolTimerCallbacks(g_feed.timer, TRUE); CloseThreadpoolTimer(g_feed.timer); }
         if (g_feed.hStop) CloseHandle(g_feed.hStop);
@@ -598,15 +672,20 @@ BOOL FeedStart(const FeedConfig* cfg) {
     return TRUE;
 }
 
-// Stop, close the socket (which ends a pending receive), wait up to 10 s,
-// stop the heartbeat, say DISCONNECTED and unmap. A thread that did not end
-// keeps its resources; the process exit is moments away (as NetworkThread).
+// Stop, close whichever of hWs, hRequest and hConnect is open (which cancels
+// a pending receive or a pending connect/upgrade call at once, about 1 s,
+// task 1), wait up to 10 s, stop the heartbeat, say DISCONNECTED and unmap.
+// The request handle closes before its parent connect handle. A thread that
+// did not end keeps its resources; the process exit is moments away (as
+// NetworkThread) (phase 54: FeedStop during FeedConnect).
 void FeedStop(void) {
     BOOL done;
     if (!g_feed.running) return;
     SetEvent(g_feed.hStop);
     EnterCriticalSection(&g_feed.lock);
-    if (g_feed.hWs) { WinHttpCloseHandle(g_feed.hWs); g_feed.hWs = NULL; }
+    if (g_feed.hWs)      { WinHttpCloseHandle(g_feed.hWs);      g_feed.hWs = NULL; }
+    if (g_feed.hRequest) { WinHttpCloseHandle(g_feed.hRequest); g_feed.hRequest = NULL; }
+    if (g_feed.hConnect) { WinHttpCloseHandle(g_feed.hConnect); g_feed.hConnect = NULL; }
     LeaveCriticalSection(&g_feed.lock);
     done = (WaitForSingleObject(g_feed.hThread, 10000) == WAIT_OBJECT_0);
     if (g_feed.timer) {

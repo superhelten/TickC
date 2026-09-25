@@ -573,6 +573,8 @@ static void TestReplay(void) {
     Sleep(1600);
     CHECK(FeedLoadAcquire64(&r.hdr->heartbeatUs) > hb, "the heartbeat timer ticks");
     FeedStop();
+    CHECK(r.hdr->connState == FEED_ST_DISCONNECTED,
+          "FeedStop published DISCONNECTED; the reader's own view survives the writer's unmap");
     CHECK(FeedNext(&r, &ev, &lost) == FEED_NO_WRITER, "after FeedStop: FEED_NO_WRITER");
     FeedClose(&r);
     FeedGetStats(&st);
@@ -581,18 +583,28 @@ static void TestReplay(void) {
 
 static void TestReplayMissing(void) {
     FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost; int rc;
+    void* fake = (void*)1;   // never dereferenced by the replay path; a network attempt would crash on it
     const wchar_t* name = TestName(L"missing");
     memset(&cfg, 0, sizeof(cfg));
     cfg.mappingName = name; cfg.replayFile = L"C:\\no\\such\\ws_stream.jsonl"; cfg.backoffMs = TestBackoff;
+    cfg.pSession = &fake;
     cfg.instruments = TEST_INS; cfg.instrumentCount = 4;
     CHECK(FeedStart(&cfg), "FeedStart with a missing replay file still starts");
-    Sleep(300);
+    Sleep(1500);
     FeedGetStats(&st);
     CHECK(st.state == FEED_ST_DISCONNECTED && st.connects == 0 && st.published == 0, "a missing file: DISCONNECTED, never the network");
-    FeedOpen(&r, name, FALSE);
+    CHECK(FeedOpen(&r, name, FALSE) == FEED_OK, "a reader opens the feed");
     FeedRewind(&r);
-    while ((rc = FeedNext(&r, &ev, &lost)) == FEED_OK && ev.u.status.state != FEED_ST_DISCONNECTED) {}
-    CHECK(rc == FEED_OK && ev.u.status.error == ERROR_PATH_NOT_FOUND, "the status carries the error");
+    int n = 0, error = -1; BOOL order = TRUE;
+    while ((rc = FeedNext(&r, &ev, &lost)) == FEED_OK) {
+        n++;
+        if (ev.type != FEED_STATUS) order = FALSE;
+        else if (n == 1 && ev.u.status.state != FEED_ST_CONNECTING) order = FALSE;
+        else if (n == 2 && ev.u.status.state != FEED_ST_DISCONNECTED) order = FALSE;
+        if (n == 2) error = ev.u.status.error;
+    }
+    CHECK(rc == FEED_EMPTY && n == 2 && order && error == ERROR_PATH_NOT_FOUND,
+          "exactly two status events, CONNECTING then DISCONNECTED with the error: a fake session was never touched");
     FeedClose(&r);
     FeedStop();
 }
