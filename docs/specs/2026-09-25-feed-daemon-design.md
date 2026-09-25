@@ -362,7 +362,10 @@ If the mapping still exists (a reader holds it open), `CreateFileMappingW`
 returns `ERROR_ALREADY_EXISTS`. The writer then sets `magic` to 0, writes the
 identity fields, the instrument table, a new `sessionUs` and its own
 `writerPid`, and finally stores `magic` with a release. `writeSeq` continues
-from where it was. A reader sees the new `sessionUs`, returns
+from where it was. While `magic` is 0 the identity and instrument fields may
+be half written, so a reader that sees `magic != FEED_MAGIC` treats it as a
+transient `FEED_NO_WRITER` and reads nothing else until `magic` is back.
+A reader sees the new `sessionUs`, returns
 `FEED_NEW_SESSION`, resyncs, and opens the new writer process for its wait.
 
 ### The reader API (`feed.h`, `static __inline`)
@@ -427,8 +430,10 @@ that session can still read and write it. For a local tool this is accepted.
 
 - Binance sends a kline update about every 2 s per symbol, so 10 s without any
   message means the line is dead.
-- The receive timeout is 10 s: a dead line ends in `ERROR_WINHTTP_TIMEOUT`,
-  and `FeedThread` reconnects.
+- The receive timeout is 10 s, set with `WinHttpSetTimeouts` on the
+  WebSocket's own request handle before the upgrade. The session keeps its
+  5 s for the REST fetches. A dead line ends in `ERROR_WINHTTP_TIMEOUT`, and
+  `FeedThread` reconnects.
 - The wait before the next attempt follows `NetBackoffMs` (the jittered curve
   the rest of TickC uses). A connection that lasted at least 60 s, such as
   Binance's 24 h cut, resets the failure count, so the next attempt goes at
@@ -496,20 +501,27 @@ Kline (`data`):
 - `FeedStart` is called in `WinMain` after the main-instance mutex is taken.
   If it cannot create or map the region, it returns FALSE and TickC runs
   without a feed (in GUI mode).
-- `FeedStop` runs at exit, in the same place the network thread is stopped:
-  it sets the stop event, closes the WebSocket handle under the feed's lock to
-  cancel a pending receive, waits for `FeedThread`, stops the heartbeat timer,
-  publishes `DISCONNECTED`, and unmaps. It never waits longer than the network
-  thread's existing bound.
+- `FeedStop` runs at exit, **before the main-instance mutex is released**
+  (`WinMain` releases it when the message loop ends, ahead of the network
+  thread's join). Otherwise a TickC started in that window could take the
+  mutex and the mapping while the old `FeedThread` still publishes: two
+  writers. `FeedStop` sets the stop event, closes the WebSocket handle under
+  the feed's lock to cancel a pending receive, waits for `FeedThread`, stops
+  the heartbeat timer, publishes `DISCONNECTED`, and unmaps. Closing the
+  handle ends the receive at once, so this costs milliseconds. It never waits
+  longer than the network thread's existing bound (10 s).
+- `FeedThread` reads `hSession` under the same lock as `HttpGet`, because
+  `WinMain` closes the session under that lock at exit.
 
 ## `--daemon`
 
 | Situation | Behaviour |
 |---|---|
 | `TickC.exe --daemon`, no TickC running | A main instance without a tray icon, panel or desktop surface. It creates the hidden main window with the main title (for the hand-over below) and starts `FeedThread`. `NetworkThread` is not started: nothing shows its price. |
-| `--daemon` while a normal TickC runs | Exits silently with code 0: the feed already runs. |
+| `--daemon` while a normal TickC runs | Exits silently with code 0: the feed already runs. It takes the `--autostart` path in the mutex check, so it does not hand over and the running TickC's panel does not come forward. |
 | A normal start while the daemon runs | The existing hand-over (`HandOverToMainInstance`) posts `WM_APP_SHOW`. The daemon **becomes a normal TickC**: it adds the tray icon, starts `NetworkThread` and opens the panel. This is also how a daemon is stopped: show it, then Exit from the tray menu. |
 | `--daemon` combined with `--dup` or `--desktop-mode` | `--daemon` wins; the others are ignored. |
+| Explorer restarts (`TaskbarCreated`) | A daemon adds no tray icon. Once it has become a normal TickC, the icon is re-added as today. |
 | Sign-in | Autostart is not changed by this phase. |
 | The mapping fails in daemon mode | Exit with code 2. A daemon has no other job. |
 
