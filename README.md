@@ -1,8 +1,8 @@
 # TickC
 
 A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
-Two source files. No runtime, no installer, no dependencies beyond what ships with Windows.
-The whole thing compiles to a single exe of about 263 KB.
+Three source files. No runtime, no installer, no dependencies beyond what ships with Windows.
+The whole thing compiles to a single exe of about 269 KB.
 
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
@@ -45,6 +45,12 @@ balloon and a sound, even with the panel closed.
 - **Desktop mode.** The chart sits on your wallpaper, behind the desktop icons.
 It stays quiet on purpose: by default the price is a single line, with no volume or moving
 averages unless you turn them on.
+- **A feed for other programs.** While it runs, TickC streams Binance's trades and
+1-minute candles for its four symbols into shared memory (`Local\TickC.Feed.1`), as
+fixed 128-byte events in a lock-free ring. Any program can read it with `feed.h`
+alone: see `tests/feed_probe.c` for a reader in 200 lines. `TickC.exe --daemon` runs
+the feed without the tray icon or the panel; starting TickC normally afterwards
+turns it into the usual TickC.
 - **Dark or light.** A light theme from the tray menu (or `T`), with every text on it
 readable at WCAG AA contrast. The panel and desktop mode each have their own choice.
 - **Scrolls back in time.** Pan into the left edge and it fetches older candles,
@@ -69,7 +75,7 @@ with the Windows SDK
 Open a **Developer Command Prompt for VS** in the repo folder and run:
 
 ```
-cl /nologo /W4 /O2 tickc.c chart.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
+cl /nologo /W4 /O2 tickc.c chart.c feed.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
 ```
 
 That's it. The libraries are pulled in with `#pragma comment(lib, ...)` in the source,
@@ -92,6 +98,18 @@ held at their floor. Each case is hashed and compared with `tests/golden/chart.t
 is written to `tests/out/` as a BMP. Text goes through the installed fonts and
 the ClearType setting, so the hashes hold for the machine that wrote them. On
 another machine, look at the pictures (`--bmp`) and rewrite them with `--update`.
+
+The feed (`feed.c`, `feed.h`) has tests of its own - the ring, the parser, a
+multi-threaded stress run and a replay of a recorded Binance stream - with no
+network and no windows:
+
+```
+cl /nologo /W4 /O2 /I. /Fo:tests\ /Fe:tests\feed_test.exe tests\feed_test.c feed.c
+tests\feed_test.exe
+```
+
+`tests\feed_test.exe --live 30` connects to Binance for 30 seconds and prints what
+arrived. `tests\feed_probe.exe --watch` shows a running TickC's feed live.
 
 ## Usage
 
