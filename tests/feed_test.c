@@ -287,6 +287,23 @@ static DWORD WINAPI StressReaderThread(LPVOID p) {
     return 0;
 }
 
+// Parks right at the lap boundary before every read, rotating over the last
+// four slots, so a read races the writer's overwrite instead of trailing it
+// (a reader that reads in order never lands on a slot mid-overwrite: the
+// arithmetic lap check above catches it first).
+static DWORD WINAPI EdgeReaderThread(LPVOID p) {
+    StressReader* s = (StressReader*)p;
+    FeedEvent ev; int64_t lost; unsigned k = 0;
+    while (!g_stressDone) {
+        s->r.next = FeedLoadAcquire64(&s->r.hdr->writeSeq) - (int64_t)FEED_SLOT_COUNT + (int64_t)(k++ & 3);
+        if (FeedNext(&s->r, &ev, &lost) == FEED_OK) {
+            s->ok++;
+            if (!StressValid(&ev)) s->torn++;
+        }
+    }
+    return 0;
+}
+
 typedef struct { FeedReader* r; int64_t reads, torn; } SnapChecker;
 static DWORD WINAPI SnapCheckerThread(LPVOID p) {
     SnapChecker* c = (SnapChecker*)p;
@@ -300,29 +317,34 @@ static DWORD WINAPI SnapCheckerThread(LPVOID p) {
 }
 
 static void TestStress(void) {
-    FeedWriter w; StressReader fast, slow; SnapChecker snap; FeedReader snapR;
-    HANDLE th[3];
+    FeedWriter w; StressReader fast, slow, edge; SnapChecker snap; FeedReader snapR;
+    HANDLE th[4];
     const wchar_t* name = TestName(L"stress");
     FeedWriterOpen(&w, name, TEST_INS, 4);
-    memset(&fast, 0, sizeof(fast)); memset(&slow, 0, sizeof(slow)); memset(&snap, 0, sizeof(snap));
-    FeedOpen(&fast.r, name, FALSE); FeedOpen(&slow.r, name, FALSE); FeedOpen(&snapR, name, FALSE);
+    memset(&fast, 0, sizeof(fast)); memset(&slow, 0, sizeof(slow)); memset(&edge, 0, sizeof(edge));
+    memset(&snap, 0, sizeof(snap));
+    FeedOpen(&fast.r, name, FALSE); FeedOpen(&slow.r, name, FALSE); FeedOpen(&edge.r, name, FALSE);
+    FeedOpen(&snapR, name, FALSE);
     slow.slow = 1; snap.r = &snapR;
     g_stressDone = 0;
     th[0] = CreateThread(NULL, 0, StressReaderThread, &fast, 0, NULL);
     th[1] = CreateThread(NULL, 0, StressReaderThread, &slow, 0, NULL);
-    th[2] = CreateThread(NULL, 0, SnapCheckerThread, &snap, 0, NULL);
+    th[2] = CreateThread(NULL, 0, EdgeReaderThread, &edge, 0, NULL);
+    th[3] = CreateThread(NULL, 0, SnapCheckerThread, &snap, 0, NULL);
     for (int64_t n = 1; n <= STRESS_EVENTS; ++n) { FeedEvent ev; StressFill(&ev, n); FeedPublish(&w, &ev); }
     InterlockedExchange(&g_stressDone, 1);
-    WaitForMultipleObjects(3, th, TRUE, INFINITE);
-    for (int i = 0; i < 3; ++i) CloseHandle(th[i]);
-    printf("stress: fast ok %lld lapped %lld; slow ok %lld lapped %lld; snapshots %lld\n",
-           fast.ok, fast.lapped, slow.ok, slow.lapped, snap.reads);
+    WaitForMultipleObjects(4, th, TRUE, INFINITE);
+    for (int i = 0; i < 4; ++i) CloseHandle(th[i]);
+    printf("stress: fast ok %lld lapped %lld; slow ok %lld lapped %lld; edge ok %lld torn %lld; snapshots %lld\n",
+           fast.ok, fast.lapped, slow.ok, slow.lapped, edge.ok, edge.torn, snap.reads);
     CHECK(fast.torn == 0 && slow.torn == 0, "no torn event is ever returned as FEED_OK");
     CHECK(fast.disorder == 0 && slow.disorder == 0, "seq rises strictly for each reader");
     CHECK(slow.lapped > 0, "the slow reader was lapped (the test exercised the lap path)");
     CHECK(fast.ok > 0 && slow.ok > 0, "both readers read");
     CHECK(snap.reads > 0 && snap.torn == 0, "no torn snapshot");
-    FeedClose(&fast.r); FeedClose(&slow.r); FeedClose(&snapR);
+    CHECK(edge.torn == 0, "no torn event at the lap edge either");
+    CHECK(edge.ok > 0, "the edge reader got FEED_OK reads (the check is not vacuous)");
+    FeedClose(&fast.r); FeedClose(&slow.r); FeedClose(&edge.r); FeedClose(&snapR);
     FeedWriterClose(&w);
 }
 
@@ -334,7 +356,7 @@ static int ChildClaim(const wchar_t* name) {
 }
 
 static void TestDeadReader(void) {
-    FeedWriter w; FeedEvent t;
+    FeedWriter w; FeedEvent t; FeedReader live;
     wchar_t exe[MAX_PATH], cmd[512];
     STARTUPINFOW si; PROCESS_INFORMATION pi;
     const wchar_t* name = TestName(L"dead");
@@ -346,12 +368,16 @@ static void TestDeadReader(void) {
     WaitForSingleObject(pi.hProcess, 10000);
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     CHECK(w.hdr->readers[0].owner == (LONG)pi.dwProcessId, "the dead child still owns slot 0");
+    CHECK(FeedOpen(&live, name, TRUE) == FEED_OK && live.slot == 1, "a live reader claims slot 1");
     t = MakeTrade(0, 1);
     FeedPublish(&w, &t);   // opens and caches the dead reader's event
     ULONGLONG t0 = GetTickCount64();
     while (w.hdr->readers[0].owner != 0 && GetTickCount64() - t0 < 2000) { FeedSweepReaders(&w); Sleep(50); }
     CHECK(w.hdr->readers[0].owner == 0 && w.hdr->readers[0].ready == 0, "the sweep frees it within 2 s");
     CHECK(w.hWake[0] == NULL, "and closes the cached event");
+    CHECK(w.hdr->readers[live.slot].owner == (LONG)GetCurrentProcessId() && w.hdr->readers[live.slot].ready == 1,
+          "a live reader keeps its slot");
+    FeedClose(&live);
     FeedWriterClose(&w);
 }
 
