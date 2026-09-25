@@ -160,6 +160,32 @@ static void TestRewind(void) {
     FeedWriterClose(&w);
 }
 
+// Final review item 4: without FEED_REWIND_MARGIN, FeedRewind lands the
+// reader exactly on the slot the writer overwrites next, so a live writer
+// publishing even one more event before the first FeedNext laps the reader
+// and the whole backlog is lost. This publishes SLOT_COUNT + 100 events,
+// rewinds, publishes 10 more (reproducing that race), and checks the margin
+// keeps the rewound reader safely behind the writer.
+static void TestRewindMargin(void) {
+    FeedWriter w; FeedReader r; FeedEvent ev; int64_t lost, expect;
+    const wchar_t* name = TestName(L"rewm");
+    const int64_t total = (int64_t)FEED_SLOT_COUNT + 100;
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    for (int64_t i = 1; i <= total; ++i) { FeedEvent t = MakeTrade(0, i); FeedPublish(&w, &t); }
+    FeedOpen(&r, name, FALSE);
+    FeedRewind(&r);
+    expect = r.next;
+    for (int64_t i = total + 1; i <= total + 10; ++i) { FeedEvent t = MakeTrade(0, i); FeedPublish(&w, &t); }
+    int rc = FeedNext(&r, &ev, &lost);
+    CHECK(rc == FEED_OK && ev.seq == expect, "the margin keeps the rewound position ahead of a live writer");
+    int n = (rc == FEED_OK) ? 1 : 0;
+    while ((rc = FeedNext(&r, &ev, &lost)) == FEED_OK) n++;
+    CHECK(rc == FEED_EMPTY, "no FEED_LAPPED: reading goes on to the present");
+    CHECK(n == (int)(total + 10 - expect + 1), "every event from the rewound position to the present is read");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
 static void TestRestartContinuity(void) {   // Review Focus 5
     FeedWriter w; FeedReader r; FeedEvent ev; int64_t lost;
     const wchar_t* name = TestName(L"rs");
@@ -668,6 +694,7 @@ int wmain(int argc, wchar_t** argv) {
     TestLappedAndResync();
     TestPositionBelowOne();
     TestRewind();
+    TestRewindMargin();
     TestRestartContinuity();
     TestRestartOddLock();
     TestReaderBeforeWriter();

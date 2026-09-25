@@ -105,6 +105,12 @@ static int Watch(const wchar_t* name, int seconds) {
             while ((rc = FeedNext(&r, &ev, &lost)) != FEED_EMPTY && rc != FEED_NO_WRITER) {
                 if (rc == FEED_LAPPED) { lapped++; continue; }
                 if (rc != FEED_OK) continue;
+                // The shared mapping is writable by any process in the
+                // session (feed.h: Security), so a hostile or buggy writer
+                // could publish an out-of-range instrument; skip it rather
+                // than index tr[]/kl[] out of bounds. Terminal authors will
+                // copy this code, so the check belongs here (phase 54).
+                if (ev.instrument >= FEED_MAX_INSTRUMENTS || ev.instrument >= r.hdr->instrumentCount) continue;
                 if (ev.type == FEED_TRADE) { tr[ev.instrument]++; latSum += ev.tsRecvUs - ev.tsExchangeUs; latN++; anyTrade++; }
                 else if (ev.type == FEED_KLINE) kl[ev.instrument]++;
             }
