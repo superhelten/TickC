@@ -538,6 +538,14 @@ typedef struct {
     int     wmW, wmH;      // the size the bitmap was built for
     int     wmSym, wmIv;   // the config it was built for
     BOOL    wmValid;
+    // Phase 53: the watermark on the mountain's fill - the same text on
+    // clr.mountain, as a pattern brush the engine fills the polygons with
+    // (ChartStyle.brFillWm). Built with the bitmap above, and only while
+    // the mountain is drawn (wmFillFor): at 3840x1600 it is 24 MB.
+    HBITMAP wmFillBmp;
+    HBRUSH  wmFillBr;
+    BOOL    wmFillFor;     // built for the mountain (the brush may be NULL)
+    COLORREF wmInk[2];     // the ink on the background and on the fill
 } AppContext;
 
 static AppContext g_Ctx;
@@ -3029,8 +3037,9 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     // color is therefore only computed when the bitmap is built. Everything
     // underneath is opaque CLR_BG, so Blend against the background IS alpha
     // blending.
-    SetTextColor(ctx->wmDC, Blend(ctx->sty.clr.bg, ctx->theme->wmInk,
-                                  (int)(WatermarkAlpha(W) * 255.0 + 0.5)));
+    ctx->wmInk[0] = Blend(ctx->sty.clr.bg, ctx->theme->wmInk,
+                          (int)(WatermarkAlpha(W) * 255.0 + 0.5));
+    SetTextColor(ctx->wmDC, ctx->wmInk[0]);
 
     ChartRect g = PanelGeometry(W, H);
 
@@ -5112,6 +5121,18 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 case 95: r = g_Ctx.ch.probeLegendMask; break;
                 case 96: r = g_Ctx.ch.probeTimeAxis; break;
                 case 97: r = g_Ctx.ch.probeVolMask; break;
+                // 98 (phase 53): the watermark's ink as RRGGBB - lParam 0
+                // on the background, 1 on the mountain's fill; -1 while
+                // there is no such bitmap (the fill's exists only while the
+                // mountain is drawn).
+                case 98: {
+                    COLORREF c = (COLORREF)-1;
+                    if (g_Ctx.wmValid && lParam == 0) c = g_Ctx.wmInk[0];
+                    if (g_Ctx.wmValid && lParam == 1 && g_Ctx.wmFillBr) c = g_Ctx.wmInk[1];
+                    r = (c == (COLORREF)-1) ? -1
+                      : (LRESULT)(((DWORD)GetRValue(c) << 16) | ((DWORD)GetGValue(c) << 8) | GetBValue(c));
+                    break;
+                }
                 case 86: {
                     RECT rcS;
                     GetClientRect(hwnd, &rcS);
