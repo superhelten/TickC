@@ -4857,7 +4857,8 @@ turns the daemon into a normal TickC: adds the tray icon, starts
 `NetworkThread`, then shows the saved panel or desktop mode - this is also
 how a daemon is stopped (show it, then Exit). Probe fields 128-134:
 128 events published, 129 messages dropped, 130 `connState`, 131
-connections, 132 daemon, 133 whether `NetworkThread` was started, and 134
+connections, 132 a daemon not yet shown, 133 whether `NetworkThread` was
+started, and 134
 tray icon add attempts (`NIM_ADD` calls, not successes: the hidden desktop
 has no taskbar, so every add fails there, and the call is what is
 counted).
@@ -4878,26 +4879,41 @@ published 1630, dropped 0, connects 1, mean latency 110.4 ms.
 `shot_p54.ps1`'s feed part (`-Part feed`): **red** against the Task 7
 build, fields 128-130 and the `feed_probe --check` line failing, 5 fails;
 **green** 11/11. Its daemon part (`-Part daemon`): **red** against the
-Task 8 build, 7 of 18 failing (field 132, no panel, SHOW's network-thread
-and tray-icon lines, SILENT, EXIT2 exiting -1 instead of 2); **green**,
-`-Part all`, 29/29. `feed_test.exe`, this task's own run: 132 checks, 0
+Task 8 build, 7 of 18 failing (field 132 daemon = 1; no panel; SHOW's
+network thread; SHOW's tray icon added once; SHOW's Explorer restart
+re-adding the icon after it is shown; SILENT handing nothing over;
+EXIT2 exiting -1 instead of 2); **green**, `-Part all`, 29/29.
+`feed_test.exe`, this task's own run: 132 checks, 0
 failed (`stress: fast ok 3000000 lapped 0; slow ok 78000 lapped 38; edge ok
 3588106 torn 0; snapshots 9590016`; `fixture: 332 lines, 329 good, 1
 unknown, 2 bad, 8 closed bars`). `chart_golden.exe`: 73/73, the engine
 untouched by this phase. `golden.ps1 -Hidden` against a `main`-branch
 reference build (`d32a285`, in a worktree) and against this phase's test
 build: `Compare-Object` on the seven panel capture hashes printed nothing -
-identical. `regress53.ps1` (the 16 accumulated regression scripts), run
-twice: a first run overlapped with this task's own builds above and
-showed two failures from that contention (`shot_p52` 7 of 14, `shot_theme`
-6 of 23); a second, clean run showed one (`shot_range` 1 of
-21, "R goes back to the range's home", a timing-sensitive easing check,
-unrelated code). Every failing script passed cleanly on an isolated rerun
-right after - `shot_p52` 14/14, `shot_theme` (folded into the clean run,
-already 0), `shot_range` 21/21 - so none reproduced twice and none is a
-phase-54 regression: this phase's `tickc.c` change touches only the feed's
-start/stop and `--daemon`, nothing in the chart, range or theme code these
-scripts exercise. `build_size.bat`: **Exe
+identical. `regress53.ps1` (the 16 accumulated regression scripts) first
+showed two failures under this task's own concurrent builds (`shot_p52`
+7 of 14, `shot_theme` 6 of 23) and, in a second, clean run, one more
+(`shot_range` 1 of 21, "R goes back to the range's home"). Rather than
+assume these were flakes, the three suspect scripts were checked against a
+main-branch build: `shot_p52`, `shot_theme` and `shot_range`, three runs
+each, against both `ticker_test_main.exe` (`main` at `d32a285`, rebuilt in
+a worktree) and this phase's `ticker_test.exe`, 18 runs total, each after
+the real desktop's input sat idle at least 25 s (`GetLastInputInfo`),
+nothing else building or running:
+
+| script | main (3 runs) | phase 54 (3 runs) |
+|---|---|---|
+| `shot_p52` | 0, 0, 0 fails | 0, 0, 0 fails |
+| `shot_theme` | 0, 0, 0 fails | 0, 0, 0 fails |
+| `shot_range` | 0, 0, 0 fails | 0, 0, 0 fails |
+
+18 of 18 clean, `main` and phase 54 alike. Phase 54 adds a thread that
+always runs in the test build (`FeedThread`, replaying `ws_stream.jsonl`
+and waking every second) and could in principle shift a timing-sensitive
+capture, but it did not shift any of these three across 3 runs each: the
+three earlier failures were concurrent-load and isolated-flake artifacts
+of the machine, not of the code, the same conclusion the single retries
+already pointed to but now checked, not assumed. `build_size.bat`: **Exe
 264 704 → 275 456 bytes (+10 752, about +10.5 KB)**, both the plain and
 the `/TP` build.
 
