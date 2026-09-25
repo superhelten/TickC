@@ -398,10 +398,10 @@ state.
 
 ### Cleanup
 
-- Dead readers: at most once per second, between messages, `FeedThread`
-  checks every slot with an owner. When the process is gone, it closes its
-  cached event handle, sets `ready` to 0 and then `owner` to 0. A reader that
-  closes cleanly does the same itself.
+- Dead readers: at most once per second, between messages and during the
+  backoff wait, `FeedThread` checks every slot with an owner. When the
+  process is gone, it closes its cached event handle, sets `ready` to 0 and
+  then `owner` to 0. A reader that closes cleanly does the same itself.
 - A reused process id can keep a dead reader's slot taken until that other
   process also exits. This is a known, documented limit; with 8 slots and one
   terminal it is not expected to matter.
@@ -498,8 +498,9 @@ that session can still read and write it. For a local tool this is accepted.
   consumer, and reconnects.
 - `FeedStop` closes whichever of the WebSocket, the request and the connect
   handle is open the same way, so a stop asked while still inside
-  `FeedConnect` also ends in about a second, instead of waiting out WinHTTP's
-  own resolve, connect and send timeouts.
+  `FeedConnect` also ends within milliseconds (about 47 ms, measured at
+  `WinHttpSendRequest`), instead of waiting out WinHTTP's own resolve,
+  connect and send timeouts.
 - The wait before the next attempt follows `NetBackoffMs` (the jittered curve
   the rest of TickC uses). A connection that held `CONNECTED` for at least
   60 s, such as Binance's 24 h cut, resets the failure count, so the next
@@ -568,11 +569,14 @@ Kline (`data`):
   (`WinMain` releases it when the message loop ends, ahead of the network
   thread's join). Otherwise a TickC started in that window could take the
   mutex and the mapping while the old `FeedThread` still publishes: two
-  writers. `FeedStop` sets the stop event, closes the WebSocket handle under
-  the feed's lock to cancel a pending receive, waits for `FeedThread`, stops
-  the heartbeat timer, publishes `DISCONNECTED`, and unmaps. Closing the
-  handle ends the receive at once, so this costs milliseconds. It never waits
-  longer than the network thread's existing bound (10 s).
+  writers. `FeedStop` sets the stop event, then closes whichever of the
+  WebSocket, the request and the connect handle is open, under the feed's
+  lock, in that order (child before parent), to cancel a pending call; waits
+  for `FeedThread`; stops the heartbeat timer; publishes `DISCONNECTED`; and
+  unmaps. Task 1 measured that closing a handle from another thread cancels
+  a pending call within milliseconds: about 1 s for a receive, and about
+  47 ms during a connect. It never waits longer than the network thread's
+  existing bound (10 s).
 - `FeedThread` reads `hSession` under the same lock as `HttpGet`, because
   `WinMain` closes the session under that lock at exit.
 
@@ -648,9 +652,10 @@ no windows:
 ### 3. The consumer
 
 `tests/feed_probe.exe --watch` is the minimal consumer of the decomposition: a
-live table per symbol with the last price, events per second and latency
-(`tsRecvUs − tsExchangeUs`). The smoke test against the real Binance is run
-once by hand and is not part of the automated suite.
+header shows the mean latency (`tsRecvUs − tsExchangeUs`) once, across every
+symbol, and a live table shows the last price, trades/s and klines/s per
+symbol. The smoke test against the real Binance is run once by hand and is
+not part of the automated suite.
 
 ## Files
 
@@ -663,8 +668,11 @@ once by hand and is not part of the automated suite.
 
 ## Risks
 
-- **The WebSocket receive timeout** may not apply as assumed. It is verified
-  first, and the watchdog is the fallback.
+- **The WebSocket receive timeout.** Resolved by Task 1's spike: no timeout
+  bounds an ongoing `WinHttpWebSocketReceive` (a silent line did not return
+  in 45 s, with 3 s on the request and 5 s on the session). The watchdog
+  described in "Silence and reconnection" is the built mechanism, not a
+  fallback, and is proven on the real network (Task 6).
 - **The ring's size** is estimated, not measured. The watch mode reports
   events per second, and the live smoke test records the peak rate, to confirm
   the 30 s margin.
