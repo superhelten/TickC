@@ -48,7 +48,7 @@ averages unless you turn them on.
 - **A feed for other programs.** While it runs, TickC streams Binance's trades and
 1-minute candles for its four symbols into shared memory (`Local\TickC.Feed.1`), as
 fixed 128-byte events in a lock-free ring. Any program can read it with `feed.h`
-alone: see `tests/feed_probe.c` for a reader in 200 lines. `TickC.exe --daemon` runs
+alone: see `tests/feed_probe.c` for a reader in about 150 lines. `TickC.exe --daemon` runs
 the feed without the tray icon or the panel; starting TickC normally afterwards
 turns it into the usual TickC.
 - **Dark or light.** A light theme from the tray menu (or `T`), with every text on it
