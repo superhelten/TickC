@@ -343,6 +343,12 @@ x86 path.
 - A new minor version may only add event types and use reserved or padding
   space. Anything that moves an offset needs a new major version, and with it
   a new mapping name, so an old reader can never read a new layout.
+- 1.1 (phase 55) spent the header's whole `reserved[1024]` on `tickers24`:
+  no reserved space is left there. A later minor version can still add an
+  event type (the union still has room within `FeedEvent`'s 96-byte `u`)
+  and use the header's remaining padding (`pad0`, `pad1[24]`, `pad2[44]`);
+  a new per-instrument table the size of `tickers24` or `snapshots` needs a
+  new major version.
 - 32 768 slots hold at least 30 s of BTC at its busiest bursts and minutes of
   normal traffic. Doubling the ring is a change of one constant, and a new
   major version.
@@ -834,7 +840,8 @@ overflows nor aborts.
   `events` (379) equals the 1.1 golden's own total below; `status` (50) is
   the 1.1 golden's `tickers24 48` plus `status 2`, both folded into the one
   counter a 1.0 build has. The `FAIL no golden` (exit 1) is expected: the
-  worktree carries no golden file, not a mismatch. The proof is that a 1.0
+  probe was pointed at `none.txt`, a path that does not exist, so there is
+  nothing to compare against - not a mismatch. The proof is that a 1.0
   reader reads every event of a 1.1 feed and breaks on none.
 - **A 1.1 reader against a 1.0 writer (`versionMinor` 0).** `FeedReadTicker24`
   returns `FALSE`, never bytes from what that writer left as reserved space
