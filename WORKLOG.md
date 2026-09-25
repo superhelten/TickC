@@ -5032,8 +5032,9 @@ FAIL no golden
 
 `events` (379) equals the 1.1 golden's own total; `status` (50) is
 `tickers24 48` plus `status 2`, folded into the one counter a 1.0 build
-has. `FAIL no golden` (exit 1) is expected: the worktree carries no golden
-file, not a mismatch. This is the proof that a 1.0 reader reads every
+has. `FAIL no golden` (exit 1) is expected: the probe was pointed at
+`none.txt`, a path that does not exist, so there is nothing to compare
+against - not a mismatch. This is the proof that a 1.0 reader reads every
 event of a 1.1 feed and breaks on none.
 
 **Verified.** `feed_test.exe`: 161 checks, 0 failed (Task 2's count,
