@@ -47,6 +47,10 @@ BOOL FeedWriterOpen(FeedWriter* w, const wchar_t* name, const FeedInstrument* in
     memcpy(h->instruments, ins, count * sizeof(FeedInstrument));
     for (unsigned i = 0; i < FEED_MAX_INSTRUMENTS; ++i) {
         FeedSnapshot* s = &h->snapshots[i];
+        // A writer that died between FeedPublish's two increments left the
+        // lock odd; even it first so the pair below lands back on even,
+        // not inverted for the rest of this session.
+        if (FeedLoadNoFence64(&s->lock) & 1) InterlockedIncrement64((LONG64 volatile*)&s->lock);
         InterlockedIncrement64((LONG64 volatile*)&s->lock);
         s->updatedUs = 0;
         memset(&s->trade, 0, sizeof(s->trade));

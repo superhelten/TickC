@@ -162,6 +162,24 @@ static void TestRestartContinuity(void) {   // Review Focus 5
     FeedWriterClose(&w2);
 }
 
+static void TestRestartOddLock(void) {   // fix round 1: a writer died inside the seqlock
+    FeedWriter w; FeedReader r; FeedSnapshot s;
+    const wchar_t* name = TestName(L"odd");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedOpen(&r, name, FALSE);   // read-only: keeps the mapping alive after w is abandoned
+    InterlockedIncrement64((LONG64 volatile*)&w.hdr->snapshots[0].lock);   // odd: died mid-publish
+    // The reader holds the mapping: a new writer finds it and takes over.
+    UnmapViewOfFile(w.hdr); CloseHandle(w.hMap);
+    FeedWriter w2;
+    CHECK(FeedWriterOpen(&w2, name, TEST_INS, 4), "a second writer takes the mapping over");
+    FeedEvent t = MakeTrade(0, 7);
+    FeedPublish(&w2, &t);
+    CHECK((w2.hdr->snapshots[0].lock & 1) == 0, "the restart leaves the lock even, not inverted");
+    CHECK(FeedReadSnapshot(&r, 0, &s) && s.trade.tradeId == 7, "the snapshot reads back cleanly");
+    FeedClose(&r);
+    FeedWriterClose(&w2);
+}
+
 static void TestReaderBeforeWriter(void) {   // Review Focus 3
     FeedReader r; FeedWriter w;
     const wchar_t* name = TestName(L"rbw");
@@ -231,6 +249,7 @@ int wmain(int argc, wchar_t** argv) {
     TestLappedAndResync();
     TestRewind();
     TestRestartContinuity();
+    TestRestartOddLock();
     TestReaderBeforeWriter();
     TestReadOnlyClose();
     TestSlotsAndWake();
