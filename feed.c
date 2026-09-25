@@ -690,10 +690,10 @@ BOOL FeedStart(const FeedConfig* cfg) {
 }
 
 // Stop, close whichever of hWs, hRequest and hConnect is open (which cancels
-// a pending receive or a pending connect/upgrade call at once - task 1's
-// spike measured about 47 ms during a connect; its 1000 ms "cancel" figure
-// was its own Closer thread's scheduled sleep before the close, not the
-// cancel's own duration), wait up to 10 s, stop the heartbeat, say
+// a pending receive or a pending connect/upgrade call at once - task 6
+// measured about 47 ms during a connect; task 1's spike's 1000 ms "cancel"
+// figure was its own Closer thread's scheduled sleep before the close, not
+// the cancel's own duration), wait up to 10 s, stop the heartbeat, say
 // DISCONNECTED and unmap. The request handle closes before its parent
 // connect handle. A thread that did not end keeps its resources; the
 // process exit is moments away (as NetworkThread) (phase 54: FeedStop

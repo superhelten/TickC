@@ -19,8 +19,8 @@
 // Keep any mapping name under 60 characters (phase 54). The writer stores it
 // in 64 wchar_t (FeedWriter.name) and a reader's wake event is built from it
 // as "<name>.R<n>" in a 96-wchar_t buffer (FeedOpen, FeedWake); a name long
-// enough to overflow either makes swprintf_s call the CRT's invalid-parameter
-// handler, which ends the process.
+// enough to overflow either makes wcscpy_s (the writer) or swprintf_s (the
+// reader) call the CRT's invalid-parameter handler, which ends the process.
 #define FEED_MAGIC             0x46434B54u              // "TKCF"
 #define FEED_VERSION_MAJOR     1
 #define FEED_VERSION_MINOR     0
@@ -155,6 +155,7 @@ C_ASSERT(offsetof(FeedHeader, readers) == 128);
 C_ASSERT(offsetof(FeedHeader, instruments) == 256);
 C_ASSERT(offsetof(FeedHeader, snapshots) == 1024);
 C_ASSERT((FEED_SLOT_COUNT & (FEED_SLOT_COUNT - 1)) == 0);
+C_ASSERT(FEED_REWIND_MARGIN < FEED_SLOT_COUNT);
 
 // Slot s lives at FEED_HEADER_SIZE + FEED_SLOT_INDEX(s) * FEED_SLOT_SIZE.
 #define FEED_SLOT_INDEX(s) ((size_t)((uint64_t)(s) & (FEED_SLOT_COUNT - 1)))
@@ -482,9 +483,11 @@ typedef struct { LONG published, dropped, connects, state; } FeedStats;
 BOOL FeedStart(const FeedConfig* cfg);   // FALSE: no mapping; nothing started
 // Safe to call when not started (returns TRUE at once). Otherwise TRUE once
 // FeedThread has ended and everything it can reach is torn down; FALSE if
-// the 10 s join timed out, in which case the caller must not delete or close
-// anything FeedThread can still reach - the caller's own lock, and whatever
-// its FeedConfig's sessionLock and pSession point at - the same rule
-// tickc.c already follows for its own worker thread (phase 54).
+// the 10 s join timed out, in which case the caller must not delete the lock
+// its FeedConfig's sessionLock points at, nor anything else FeedThread can
+// still reach - the same rule tickc.c already follows for its own worker
+// thread (phase 54). The session itself may still be closed, if the caller
+// first sets *pSession to NULL under that lock: FeedThread reads it only
+// under the lock, and then finds none.
 BOOL FeedStop(void);
 void FeedGetStats(FeedStats* out);

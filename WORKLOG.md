@@ -4934,8 +4934,10 @@ of them in one wave, plus a few small hardenings. Code: an explicit
 `WriteRelease64` order only under `/volatile:ms`, not `/volatile:iso` or
 clang-cl; `FeedStop` now returns `BOOL` (`TRUE` unless its 10 s join timed
 out), and `tickc.c` folds that into `workerDone` so a timed-out `FeedStop`
-holds back `g_Ctx.lock` and the session close the same way a live
-`NetworkThread` does, in the daemon path too; the writer keeps its own copy
+holds back `g_Ctx.lock`, the events and `hConnect` the same way a live
+`NetworkThread` does, in the daemon path too (the session is still set to
+NULL under the lock and closed, which is safe because `FeedThread` reads it
+only under that lock); the writer keeps its own copy
 of the instrument table (`g_feed.ins`) instead of reading it back out of
 shared memory, which any process in the session can write; `FeedRewind`
 leaves a margin of `FEED_REWIND_MARGIN` (1024) below the slot the writer
