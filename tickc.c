@@ -14,6 +14,7 @@
 #include <limits.h>
 
 #include "chart.h"
+#include "feed.h"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -577,6 +578,19 @@ static int g_embedFails = 0;
 static HANDLE  g_mainMutex = NULL;
 static wchar_t g_mainTitle[48] = L"TickC";
 
+// The feed's mapping (phase 54): Local\TickC.Feed.1, and in the test build a
+// name of its own per exe path, like the mutex - a test run never writes
+// into the feed of the TickC the user runs. Set by MainInstanceNames.
+static wchar_t g_feedName[64] = FEED_MAPPING_NAME;
+// The feed runs (FeedStart succeeded). Main instance only.
+static BOOL    g_feedOn = FALSE;
+
+// --daemon (phase 54): a main instance with no tray icon, no panel and no
+// desktop surface - the feed alone - until a plain start hands over to it
+// (DaemonShow). g_daemonDesktop keeps the saved mode for then. UI thread only.
+static BOOL    g_daemon = FALSE;
+static BOOL    g_daemonDesktop = FALSE;
+
 // The panel's lengths at its dpi (phase 37). Every fixed length in the
 // header, the buttons, the toolbar and the overlay is given at 96 dpi and
 // goes through Dp, the same MulDiv as the chart engine's ChartPx: the
@@ -679,6 +693,10 @@ static int      g_probeMigrate  = 0;
 static int      g_probeTrayDecision = 0;
 static volatile LONG g_probeHandovers = 0;
 static int      g_probeIconState    = 0;
+// Phase 54: NIM_ADD calls for the tray icon (startup, DaemonShow, an Explorer
+// restart). Calls, not successes: the probes run on a desktop with no
+// taskbar, where every add fails. WM_APP_PROBE 134 on the main window.
+static volatile LONG g_probeTrayAdds = 0;
 static volatile LONG g_probeDayFetches = 0;
 static DWORD    g_probeAccessType   = 0;
 static int      g_probeEmptyMsg     = 0;
@@ -6810,6 +6828,26 @@ static void ShowRunningNote(AppContext* ctx) {
     Shell_NotifyIconW(NIM_MODIFY, &n);
 }
 
+// A plain start has handed over to a daemon (phase 54). It becomes the TickC
+// a plain start would have been: the icon, the network thread, and then the
+// panel or the desktop surface, as the saved mode says. The display choices
+// follow the mode, so they are set again here, as WinMain sets them.
+static void DaemonShow(AppContext* ctx, HINSTANCE hInst) {
+    g_daemon      = FALSE;
+    g_desktopMode = g_daemonDesktop;
+    ctx->ch.dispVolF  = ShowVolNow(ctx) ? 1.0 : 0.0;
+    ctx->ch.dispIndF  = ShowIndNow(ctx) ? 1.0 : 0.0;
+    ctx->ch.dispRsiF  = ShowRsiNow(ctx) ? 1.0 : 0.0;
+    ctx->ch.chartType = ChartTypeNow(ctx);
+    ctx->nid.uFlags   = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+#ifdef TICKER_PROBE
+    InterlockedIncrement(&g_probeTrayAdds);
+#endif
+    Shell_NotifyIconW(NIM_ADD, &ctx->nid);
+    if (!ctx->hThread) ctx->hThread = CreateThread(NULL, 0, NetworkThread, ctx, 0, NULL);
+    TogglePopup(ctx, hInst);
+}
+
 // ---------------------------------------------------------------------------
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -6849,6 +6887,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             InterlockedIncrement(&g_probeHandovers);
 #endif
             if (g_isDuplicate || !g_Ctx.hWakeEvent) return 0;
+            if (g_daemon) {
+                DaemonShow(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+                return 0;
+            }
             if (g_desktopMode) ShowRunningNote(&g_Ctx);
             else ShowPanel(&g_Ctx, (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
             return 0;
@@ -7167,6 +7209,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             //        checked where desktop mode cannot run (the hidden
             //        desktop has no WorkerW).
             if (wParam == 127) return lParam ? g_Ctx.chartTypeDesk : g_Ctx.chartType;
+            //   128-131  READING (phase 54): the feed - events published,
+            //        messages dropped, the connection's state (0 = no feed)
+            //        and the connections made. See FeedGetStats.
+            if (wParam >= 128 && wParam <= 131) {
+                FeedStats fs;
+                FeedGetStats(&fs);
+                if (wParam == 128) return (LRESULT)fs.published;
+                if (wParam == 129) return (LRESULT)fs.dropped;
+                if (wParam == 130) return (LRESULT)fs.state;
+                return (LRESULT)fs.connects;
+            }
+            //   132-134  READING (phase 54): a daemon not yet shown; the
+            //        network thread started; tray icon NIM_ADD calls.
+            if (wParam == 132) return (LRESULT)g_daemon;
+            if (wParam == 133) return (LRESULT)(g_Ctx.hThread != NULL);
+            if (wParam == 134) return (LRESULT)g_probeTrayAdds;
             return 0;
 #endif
 
@@ -7249,10 +7307,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // and the desktop stood without a chart for a second. So it is
             // torn down only if it does NOT sit in the current WorkerW.
             if (msg == g_msgTaskbarCreated && g_msgTaskbarCreated != 0) {
+                // A daemon (phase 54) has no icon to bring back.
+                if (g_daemon) return 0;
                 // The flags are set here, not inherited (phase 44): uFlags is
                 // whatever the last Shell_NotifyIconW call left, and a re-add
                 // without NIF_MESSAGE gave an icon that ignored all clicks.
                 g_Ctx.nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+#ifdef TICKER_PROBE
+                InterlockedIncrement(&g_probeTrayAdds);
+#endif
                 Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
                 if (g_desktopMode) {
                     if (!g_Ctx.hPopup) {
@@ -7268,6 +7331,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     return 0;
+}
+
+// The feed's instruments (phase 54): the symbols TickC has, in the same
+// order, so an instrument index is a SYMBOLS index. ASCII by construction.
+static unsigned BuildFeedInstruments(FeedInstrument* out) {
+    unsigned n = 0;
+    memset(out, 0, sizeof(FeedInstrument) * FEED_MAX_INSTRUMENTS);
+    for (int i = 0; i < SYMBOL_COUNT && n < FEED_MAX_INSTRUMENTS; ++i, ++n) {
+        for (int k = 0; SYMBOLS[i].api[k] && k < 15; ++k)   out[n].symbol[k] = (char)SYMBOLS[i].api[k];
+        for (int k = 0; SYMBOLS[i].label[k] && k < 15; ++k) out[n].label[k]  = (char)SYMBOLS[i].label[k];
+        out[n].source     = FEED_SRC_BINANCE_SPOT;
+        out[n].assetClass = FEED_ASSET_CRYPTO;
+        out[n].priceExp   = -8;
+        out[n].qtyExp     = -8;
+    }
+    return n;
 }
 
 // The main instance's mutex and window title (phase 46). "Local\": one per
@@ -7287,6 +7366,7 @@ static void MainInstanceNames(wchar_t* mutexName, size_t cch) {
     }
     swprintf_s(mutexName, cch, L"Local\\TickerTest.MainInstance.%08X", h);
     swprintf_s(g_mainTitle, 48, L"TickerTest %08X", h);
+    swprintf_s(g_feedName, 64, L"Local\\TickerTest.Feed.1.%08X", h);
 #else
     wcscpy_s(mutexName, cch, L"Local\\TickC.MainInstance");
     wcscpy_s(g_mainTitle, 48, L"TickC");
@@ -7332,7 +7412,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     //                          instance instead of guessing.
     //   --desktop-mode         the desktop surface for this run.
     //   --autostart            the Run value's start at sign-in: quiet.
-    BOOL argDup = FALSE, argDesktop = FALSE, argAutostart = FALSE;
+    //   --daemon               the feed alone (phase 54): no icon, no panel;
+    //                          a plain start shows it later (DaemonShow).
+    BOOL argDup = FALSE, argDesktop = FALSE, argAutostart = FALSE, argDaemon = FALSE;
     int dupV[6] = { 0 };
     {
         int argc = 0;
@@ -7346,6 +7428,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             for (int i = 1; i < argc; ++i) {
                 if (wcscmp(argv[i], L"--desktop-mode") == 0) argDesktop = TRUE;
                 else if (wcscmp(argv[i], AUTOSTART_ARG) == 0) argAutostart = TRUE;
+                else if (wcscmp(argv[i], L"--daemon") == 0) argDaemon = TRUE;
             }
         }
         if (argv) LocalFree(argv);
@@ -7368,7 +7451,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             g_mainMutex = CreateMutexW(NULL, FALSE, mutexName);
             if (g_mainMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
                 CloseHandle(g_mainMutex);
-                if (!argAutostart) HandOverToMainInstance();
+                // --daemon beside a running TickC (phase 54): the feed runs
+                // already; end quietly, like --autostart, without bringing
+                // that TickC's panel forward.
+                if (!argAutostart && !argDaemon) HandOverToMainInstance();
                 return 0;
             }
         }
@@ -7446,7 +7532,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_Ctx.nid.hIcon            = RenderMicroFontIcon("...", 0xFF00FF66);
     wcscpy_s(g_Ctx.nid.szTip, 128, L"Connecting to Binance...");
 
-    Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
+    // --daemon (phase 54) adds no icon until a plain start shows it.
+    if (!argDaemon) {
+#ifdef TICKER_PROBE
+        InterlockedIncrement(&g_probeTrayAdds);
+#endif
+        Shell_NotifyIconW(NIM_ADD, &g_Ctx.nid);
+    }
 
     // Fixed objects: created once, not per repaint (the buttons' pens are
     // built with the style, above)
@@ -7487,13 +7579,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         g_Ctx.symIdx     = dupV[4];
         g_Ctx.ivIdx      = dupV[5];
         g_Ctx.intervalMs = INTERVALS[dupV[5]].ms;
-    } else if (argDesktop) {
+    } else if (argDesktop && !argDaemon) {
         g_desktopMode = TRUE;
     }
     // Without --desktop-mode the registry decides: the tray menu remembers
     // the last chosen mode (phase 12). The flag wins for this run, and a
     // duplicate is always a panel.
     if (!g_desktopMode && !g_isDuplicate) g_desktopMode = LoadDesktopMode();
+    // --daemon (phase 54): no surface now; the saved mode waits for
+    // DaemonShow. Before the display choices below, which follow the mode.
+    if (argDaemon && !g_isDuplicate) {
+        g_daemon        = TRUE;
+        g_daemonDesktop = g_desktopMode;
+        g_desktopMode   = FALSE;
+    }
     // No animation at startup (phases 22 and 25). Here, and not right after
     // LoadConfig: which choice applies depends on the mode (phase 26).
     g_Ctx.ch.dispVolF = ShowVolNow(&g_Ctx) ? 1.0 : 0.0;
@@ -7557,7 +7656,48 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manual reset
     g_Ctx.hWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);  // auto reset
-    g_Ctx.hThread    = CreateThread(NULL, 0, NetworkThread, &g_Ctx, 0, NULL);
+
+    // The feed (phase 54): the main instance publishes Binance's stream into
+    // shared memory for the terminal; a duplicate never does - the ring has
+    // one writer. After the lock: FeedThread reads hSession under it. If the
+    // mapping cannot be made, TickC runs as before, without a feed. In the
+    // test build with fixtures the stream is replayed from ws_stream.jsonl,
+    // and a missing file never falls back to the network.
+    if (!g_isDuplicate) {
+        FeedInstrument ins[FEED_MAX_INSTRUMENTS];
+        FeedConfig fc;
+        memset(&fc, 0, sizeof(fc));
+        fc.mappingName     = g_feedName;
+        fc.pSession        = &g_Ctx.hSession;
+        fc.sessionLock     = &g_Ctx.lock;
+        fc.backoffMs       = NetBackoffMs;
+        fc.instruments     = ins;
+        fc.instrumentCount = BuildFeedInstruments(ins);
+#ifdef TICKER_PROBE
+        wchar_t replay[MAX_PATH];
+        if (g_fixtureDir[0]) {
+            swprintf_s(replay, MAX_PATH, L"%s\\ws_stream.jsonl", g_fixtureDir);
+            fc.replayFile = replay;
+        }
+#endif
+        g_feedOn = FeedStart(&fc);
+    }
+
+    // A daemon has no other job (phase 54): without its feed it ends, with
+    // exit code 2. Nothing has started yet but the window.
+    if (g_daemon && !g_feedOn) {
+        DestroyWindow(g_Ctx.hWnd);
+        CloseHandle(g_Ctx.hStopEvent);
+        CloseHandle(g_Ctx.hWakeEvent);
+        DeleteCriticalSection(&g_Ctx.lock);
+        if (g_Ctx.hSession) WinHttpCloseHandle(g_Ctx.hSession);
+        if (g_mainMutex) CloseHandle(g_mainMutex);
+        return 2;
+    }
+
+    // A daemon starts no network thread (phase 54): nothing shows its price.
+    // DaemonShow starts it.
+    if (!g_daemon) g_Ctx.hThread = CreateThread(NULL, 0, NetworkThread, &g_Ctx, 0, NULL);
 
     // A duplicate is started from a click and must show itself at once. So,
     // from phase 46, is a main instance started by hand: up to phase 45 it
@@ -7567,13 +7707,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // notification area, as every start did before. After the lock and the
     // events: TogglePopup enters the lock and wakes the thread. The desktop
     // surface is shown at every start - it exists only while it is shown.
-    if (g_isDuplicate || g_desktopMode || !argAutostart) TogglePopup(&g_Ctx, hInstance);
+    if (!g_daemon && (g_isDuplicate || g_desktopMode || !argAutostart)) TogglePopup(&g_Ctx, hInstance);
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+
+    // The feed stops before the main instance's name is let go (phase 54): a
+    // start in between would take the name and the mapping while this
+    // process's FeedThread still publishes - two writers. Closing its socket
+    // ends the receive at once, so this takes milliseconds, not the network
+    // thread's 10 s. Its result feeds workerDone below (phase 54): FeedThread
+    // can reach g_Ctx.lock and hSession through sessionLock and pSession, so
+    // a timed-out FeedStop must hold back the same lock deletion and handle
+    // closes that a live NetworkThread holds back.
+    BOOL feedStopped = FeedStop();
 
     // The main instance's name is let go here, not at exit (phase 46): the
     // wait for the worker below can take seconds, and a start in that time
@@ -7599,7 +7749,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // the lock, the events and hConnect are released only if the thread has
     // really ended. Otherwise they are left to the process exit, which is
     // moments away: a leaked handle beats a lock deleted under a live thread.
-    BOOL workerDone = (g_Ctx.hThread == NULL);
+    //
+    // workerDone also carries feedStopped (phase 54): a daemon has no
+    // NetworkThread, so g_Ctx.hThread is NULL and workerDone would otherwise
+    // be TRUE at once, regardless of whether FeedThread actually ended.
+    BOOL workerDone = feedStopped && (g_Ctx.hThread == NULL);
     if (g_Ctx.hStopEvent) SetEvent(g_Ctx.hStopEvent);
     {
         HINTERNET hs;
@@ -7610,7 +7764,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (hs) WinHttpCloseHandle(hs);
     }
     if (g_Ctx.hThread) {
-        workerDone = (WaitForSingleObject(g_Ctx.hThread, 10000) == WAIT_OBJECT_0);
+        workerDone = feedStopped && (WaitForSingleObject(g_Ctx.hThread, 10000) == WAIT_OBJECT_0);
         CloseHandle(g_Ctx.hThread);
     }
     if (workerDone) {
