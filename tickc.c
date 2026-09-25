@@ -706,6 +706,10 @@ static int  g_fakeWorkDx = 0, g_fakeWorkDy = 0;
 // it, 2 moved it onto a monitor's work area).
 static volatile LONG g_probeDpiChanges = 0;
 static int      g_probeOnScreen = 0;
+// 99 on the panel (phase 53): watermark caches built, the background's
+// bitmap with the fill's when there is one - a frame with nothing changed
+// must build none.
+static int      g_probeWmBuilds = 0;
 #endif
 
 
@@ -3115,6 +3119,9 @@ static void EnsureWatermark(AppContext* ctx, HDC ref, int W, int H) {
     ctx->wmW = W; ctx->wmH = H;
     ctx->wmSym = ctx->symIdx; ctx->wmIv = ctx->ivIdx;
     ctx->wmValid = TRUE;
+#ifdef TICKER_PROBE
+    g_probeWmBuilds++;
+#endif
 }
 
 // The stamp font for desktop mode. Built only when the height changes -
@@ -5133,6 +5140,7 @@ static LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                       : (LRESULT)(((DWORD)GetRValue(c) << 16) | ((DWORD)GetGValue(c) << 8) | GetBValue(c));
                     break;
                 }
+                case 99: r = g_probeWmBuilds; break;
                 case 86: {
                     RECT rcS;
                     GetClientRect(hwnd, &rcS);
