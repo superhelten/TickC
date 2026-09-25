@@ -106,6 +106,7 @@ network and no windows:
 ```
 cl /nologo /W4 /O2 /I. /Fo:tests\ /Fe:tests\feed_test.exe tests\feed_test.c feed.c
 tests\feed_test.exe
+cl /nologo /W4 /O2 /I. /Fo:tests\ /Fe:tests\feed_probe.exe tests\feed_probe.c
 ```
 
 `tests\feed_test.exe --live 30` connects to Binance for 30 seconds and prints what
