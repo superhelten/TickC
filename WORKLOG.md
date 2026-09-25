@@ -140,13 +140,17 @@ time axis in two rows, and Arial for the axis numbers.
 **Phase 53** lets the watermark show through the mountain: the fill is
 drawn with a pattern brush of the watermark on the navy, as faint there as
 on the black.
+**Phase 54** adds the feed: Binance's trades and 1-minute candles as
+128-byte events in a shared-memory ring (`feed.h`, `feed.c`), for the
+terminal that is to come, and `--daemon`.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
-The code is **two files** from phase 34: `tickc.c` (the app, ~7500 lines) and
-`chart.c` behind `chart.h` (the chart engine, ~3500 lines). Next to them is
-`tickc.manifest`, which the build embeds (phase 9). No external dependencies
-beyond Win32 and WinHTTP.
+The code is **three files** from phase 54: `tickc.c` (the app, ~7500 lines),
+`chart.c` behind `chart.h` (the chart engine, ~3500 lines) and `feed.c`
+behind `feed.h` (the shared-memory feed: the writer, the WebSocket client
+and the parser). Next to them is `tickc.manifest`, which the build embeds
+(phase 9). No external dependencies beyond Win32 and WinHTTP.
 
 ---
 
@@ -154,7 +158,7 @@ beyond Win32 and WinHTTP.
 
 ```
 "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars32.bat"
-cl /nologo /W4 /O2 tickc.c chart.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
+cl /nologo /W4 /O2 tickc.c chart.c feed.c /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:tickc.manifest /OUT:TickC.exe
 ```
 
 **The manifest is not optional** (phase 9). Without `supportedOS` Windows 8+ the
@@ -4771,6 +4775,139 @@ mountain is `chart_golden`'s) and `golden.ps1 -Light`. `/W4` clean, and
 `/TP` gives the same size. The README picture (the 1h scene, text on the
 black) was not retaken. **Exe 262 656 → 264 704 bytes (+2 048).**
 
+### Phase 54 — the feed in shared memory, and --daemon
+
+Branch `phase-54`, started at `1a82546` on top of `main` at `d32a285`
+(phase 53 merged). TickC becomes the market-data handler for a separate
+terminal project: sub-project (a) is a fixed binary event format
+(`feed.h`), a lock-free single-writer ring in named shared memory
+(`Local\TickC.Feed.1`), a live Binance WebSocket stream written into it
+(`feed.c`, thread `FeedThread`), a `--daemon` mode with no tray icon, panel
+or desktop surface, and a minimal reader (`tests/feed_probe.c`). Ten agent
+tasks against `docs/specs/2026-09-25-feed-daemon-design.md`. TickC keeps
+everything it did before; the feed runs beside the tray icon, the panel,
+desktop mode and the REST fetches, untouched.
+
+**The event format and the ring (`feed.h`).** 128-byte slots, two cache
+lines, 32 768 of them (the ring), behind a 4096-byte header with a
+snapshot table (one `FeedSnapshot` per instrument, a seqlock) and up to 8
+reader slots. Prices and quantities are `int64_t` at `10^-8`, not
+`double`, so parsing a Binance decimal string is exact. On x86 TickC's own
+`ReadAcquire64`/`WriteRelease64` would split an 8-byte access into two
+32-bit moves (pitfall 175), so `feed.h` has its own SSE2 `movq` helpers for
+every field one side writes while the other reads. The reader API
+(`FeedOpen`, `FeedNext`, `FeedReadSnapshot`, `FeedWait`, `FeedRewind`,
+`FeedClose`) is `static __inline` in the header alone, so a consumer needs
+no `feed.c`.
+
+**The spike (Task 1).** `WinHttpWebSocketReceive` ignores its timeouts
+(pitfall 176): a receive on a silent `/ws` stream did not return within
+45 s, with 3000 ms set on the request handle and 5000 ms on the session.
+Closing the WebSocket handle from another thread cancelled a pending
+receive in about 1000 ms (`12017`, `ERROR_WINHTTP_OPERATION_CANCELLED`).
+This picked the watchdog design over a receive-timeout option: a
+thread-pool timer (`FeedTick`) checks once a second how long it has been
+since the last message, and past 10 s (`FEED_RECV_MS`) closes `hWs` from
+outside `FeedThread`. Because the watchdog closed the handle, not a
+`FeedStop`, the resulting cancellation is reported to a consumer as
+`ERROR_WINHTTP_TIMEOUT` (`12002`, the spec's word for a dead line) through
+a `silent` flag, not the raw cancellation code. `FeedStop` closes the
+WebSocket, the request and the connect handle the same way, so a stop
+asked while still inside `FeedConnect` also ends fast: about 47 ms,
+measured at `WinHttpSendRequest` against a blackhole address (Task 6).
+
+**The torn read.** Task 5's stress test caught one torn `FEED_OK` event in
+about 10^7 edge reads. Not a memory-ordering bug: `rep movsd` (this
+build's `memcpy`) gave 0 tears in 3.8 billion valid reads. The cause was
+`FeedNext` comparing `slot->seq == want` for a `want` below 1: on the
+ring's first lap, `want = 0` matches an unwritten slot (seq 0 until event
+32768 lands) and `want = -1` matches `FEED_SEQ_BUSY`, the sentinel the
+writer holds while it is inside a slot - both sentinels, not event
+numbers, so `FeedNext` returned a phantom or a half-written slot as
+`FEED_OK`. `FeedNext` now clamps `want` to `max(r->next, 1)` (pitfall 177).
+Before the fix: 21 of 80 instrumented stress runs tore. After: 0 of 80,
+and a focused repro showed 0 tears in 10.6 billion lap-edge reads. As
+defense in depth against the fast-string reordering the SDM allows within
+one `rep movs` (Vol. 3A, 8.2.4.1), the reader now runs an LFENCE after its
+copy and the writer an SFENCE before it releases `seq`, on both x86 and
+x64; about 2 ns per call.
+
+**The stress test's blind spot.** The original stress test's fast and slow
+readers lap by distance, and every lap they hit was caught before the
+copy ran, so neither could have found the tear above. A new edge reader
+parks exactly at the lap boundary and races the copy on purpose (pitfall
+178); a mutant that removed `FeedNext`'s post-copy re-check passed the old
+test and failed the new one, proving the test can catch what it claims
+to.
+
+**The seqlock restart fix.** A writer that died inside a snapshot's
+seqlock (between the two `InterlockedIncrement64` calls around the copy)
+left `lock` odd forever. `FeedWriterOpen` now evens every snapshot's lock
+on a restart, before publishing `magic` again.
+
+**`--daemon`, and TickC publishes the feed (`tickc.c`, Tasks 8-9).** Only
+the main instance runs `FeedThread`, started right after `hWakeEvent` is
+created and stopped after the message loop ends, before the main-instance
+mutex is released - the same ordering the mutex protects everywhere else,
+so no window lets a new TickC take the name while the old `FeedThread`
+still publishes. `--daemon` is a main instance with no tray icon, no
+`NetworkThread` and no panel or desktop surface at start; it still starts
+the feed. A plain start afterwards hands over as always, and `DaemonShow`
+turns the daemon into a normal TickC: adds the tray icon, starts
+`NetworkThread`, then shows the saved panel or desktop mode - this is also
+how a daemon is stopped (show it, then Exit). Probe fields 128-134:
+128 events published, 129 messages dropped, 130 `connState`, 131
+connections, 132 daemon, 133 whether `NetworkThread` was started, and 134
+tray icon add attempts (`NIM_ADD` calls, not successes: the hidden desktop
+has no taskbar, so every add fails there, and the call is what is
+counted).
+
+**The minimal consumer (`tests/feed_probe.c`, Task 7).** `--check GOLDEN`
+rewinds the ring, hashes every event (FNV-1a, excluding `seq` and
+`tsRecvUs` so the golden never goes stale) and compares it with
+`tests/golden/feed.txt`; `--watch` shows a live table, last price plus
+trades/s and klines/s per symbol, with the mean latency once in the
+header.
+
+**Verified.** The spike's numbers are in `spike-results.txt`:
+`TIMEOUT=none 45000 /ws`, `CANCEL=12017 1000`, `GOOD=329`,
+`VARIANT=watchdog`. The live check (`feed_test.exe --live 30`, all four
+symbols, state `CONNECTED`): BTCUSDT trades 802 klines 15, ETHUSDT trades
+417 klines 15, SOLUSDT trades 265 klines 14, BNBUSDT trades 92 klines 10;
+published 1630, dropped 0, connects 1, mean latency 110.4 ms.
+`shot_p54.ps1`'s feed part (`-Part feed`): **red** against the Task 7
+build, fields 128-130 and the `feed_probe --check` line failing, 5 fails;
+**green** 11/11. Its daemon part (`-Part daemon`): **red** against the
+Task 8 build, 7 of 18 failing (field 132, no panel, SHOW's network-thread
+and tray-icon lines, SILENT, EXIT2 exiting -1 instead of 2); **green**,
+`-Part all`, 29/29. `feed_test.exe`, this task's own run: 132 checks, 0
+failed (`stress: fast ok 3000000 lapped 0; slow ok 78000 lapped 38; edge ok
+3588106 torn 0; snapshots 9590016`; `fixture: 332 lines, 329 good, 1
+unknown, 2 bad, 8 closed bars`). `chart_golden.exe`: 73/73, the engine
+untouched by this phase. `golden.ps1 -Hidden` against a `main`-branch
+reference build (`d32a285`, in a worktree) and against this phase's test
+build: `Compare-Object` on the seven panel/desktop capture hashes printed
+nothing - identical. `regress53.ps1` (the 16 accumulated regression
+scripts), run twice: a first run overlapped with this task's own builds
+above and showed two failures from that contention (`shot_p52` 7 of 14,
+`shot_theme` 6 of 14); a second, clean run showed one (`shot_range` 1 of
+21, "R goes back to the range's home", a timing-sensitive easing check,
+unrelated code). Every failing script passed cleanly on an isolated rerun
+right after - `shot_p52` 14/14, `shot_theme` (folded into the clean run,
+already 0), `shot_range` 21/21 - so none reproduced twice and none is a
+phase-54 regression: this phase's `tickc.c` change touches only the feed's
+start/stop and `--daemon`, nothing in the chart, range or theme code these
+scripts exercise. `build_size.bat`: **Exe
+264 704 → 275 456 bytes (+10 752, about +10.5 KB)**, both the plain and
+the `/TP` build.
+
+**Files.** New: `feed.h`, `feed.c`, `tests/feed_test.c`,
+`tests/feed_probe.c`, `tests/fixtures/ws_stream.jsonl`,
+`tests/golden/feed.txt`, `docs/specs/2026-09-25-feed-daemon-design.md`.
+Changed: `tickc.c` (the feed's start/stop, `--daemon`, the probe fields),
+`README.md` (three source files, the feed, `--daemon`, the feed's tests),
+`WORKLOG.md` (this section).
+
 ---
 
 ## Known limitations
@@ -5202,6 +5339,30 @@ black) was not retaken. **Exe 262 656 → 264 704 bytes (+2 048).**
   more than what it has seen. A gap in Binance's own history (maintenance)
   is prepended as it is: the candles are index-based, so time is compressed
   across the gap.
+- **A reused process id keeps a dead reader's slot** (phase 54) until that
+  process also exits, since a live process with the same id looks the same
+  as the reader that died. With 8 slots and one terminal this is not
+  expected to matter.
+- **The desktop-mode branch of `DaemonShow`** (phase 54, `g_daemonDesktop`
+  TRUE: a daemon shown while the saved mode is desktop mode) is covered by
+  no automated test. Desktop mode cannot run on the hidden desktop.
+- **A hole in the trade tape is not filled** (phase 54): after a lap or a
+  reconnect, the events lost are gone, along with any closed 1m bar that
+  fell into the hole. Filling it needs history over the feed, which is out
+  of scope.
+- **`FeedStop` returns void** (phase 54). If its 10 s join ever times out,
+  which is unlikely since closing the handles cancels the pending call
+  within about a second, the mapping stays mapped: `WinMain` still releases
+  the mutex and deletes `g_Ctx.lock` while `FeedThread` may still reach it
+  through `sessionLock`.
+- **No automated test covers the watchdog, fragment joining, the 64 KB drop
+  or the 60 s reset** (phase 54). The watchdog was proven by hand on the
+  real network (Task 6); the others are read, not exercised.
+- **ARM64 has not been compiled** (phase 54): no cross tools are installed
+  in this environment. Only the compiler-barrier macros differ there.
+- **The hand-over gap** (phase 54): while `FeedStop` waits for `FeedThread`
+  to end, the main-instance mutex and the window title are still held, as
+  they are for the rest of shutdown.
 
 ---
 
@@ -6051,21 +6212,54 @@ black) was not retaken. **Exe 262 656 → 264 704 bytes (+2 048).**
     under the fill. Measure that precondition first (pitfall 144).
 174. **`small` is a macro in the Windows headers** (`rpcndr.h`: `char`).
     A parameter named `small` fails with C2628.
+175. **`ReadAcquire64` is not atomic on x86** (phase 54): a plain
+    `volatile LONG64` access is two 32-bit moves, so a reader could see half
+    an old and half a new sequence number. `feed.h` uses SSE2 `movq` instead
+    on x86.
+176. **`WinHttpWebSocketReceive` ignores the receive timeouts** (phase 54).
+    Neither the request handle's value nor the session's bounds a pending
+    receive on a silent socket (45 s, no return). Only closing the handle
+    from another thread ends it, in about 1 s.
+177. **A reader position below 1 matches the seq-0 and `FEED_SEQ_BUSY`
+    sentinels** (phase 54): a never-written slot holds seq 0, and a slot the
+    writer is in holds -1, so `want <= 0` can pass `FeedNext`'s checks
+    against a slot that is no event. `FeedNext` clamps `want` to at least 1.
+    Not a memory-ordering bug: `rep movsd` gave 0 tears in 3.8 billion valid
+    reads.
+178. **A stress test that only laps by distance never exercises the
+    copy-time checks** (phase 54): every lap was caught before the reader's
+    copy ran. An edge reader that parks at the lap boundary hits the race;
+    prove the test itself with mutants, since a test that cannot fail is not
+    a test.
+179. **`GetTickCount64`'s ~15.6 ms resolution turns a fast, real duration
+    into "0 ms"** (phase 54): a stop-during-connect measurement read 0 ms
+    twice, while `printf` bracketing the same call, with a finer clock, put
+    it at about 47 ms. Trace with a finer clock before citing a near-zero
+    duration.
+180. **Running another build or test concurrently with a hidden-desktop
+    `shot_*`/`regress53` run makes its timing-sensitive checks fail**
+    (phase 54): `shot_p52` and `shot_theme` both failed only while
+    `chart_golden`/`feed_test`/`build_size` compiled at the same time, and
+    passed clean alone right after. Even alone, one easing check
+    (`shot_range`'s "R goes back to the range's home") can still flake once
+    in 21 - rerun a lone failure before concluding it is a regression, and
+    never run a second hidden-desktop script while one is in flight.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak47` and `chart.c.bak47` are left** (2026-09-25). From
-phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 53 and are the rollback reference for
-the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak46` (phases 34–52) are deleted: that history is in git.
+**Now `tickc.c.bak48`, `chart.c.bak48` and `feed.c.bak48`** (2026-09-25).
+From phase 54 the code is three files, so the backup is a triple, not a
+pair. They are identical to `tickc.c`, `chart.c` and `feed.c` after phase 54
+and are the rollback reference for the build that is running. `ticker.c.bak`
+… `.bak24`, `tickc.c.bak25` … `.bak27` and the pairs `.bak28` … `.bak47`
+(phases 34-53) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49), `.bak44` (phase 50), `.bak45` (phase 51), `.bak46` (phase 52) and `.bak47` (phase 53). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49), `.bak44` (phase 50), `.bak45` (phase 51), `.bak46` (phase 52), `.bak47` (phase 53) and the triple `.bak48` (phase 54). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.
