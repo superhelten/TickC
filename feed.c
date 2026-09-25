@@ -108,6 +108,7 @@ void FeedPublish(FeedWriter* w, const FeedEvent* ev) {
     slot = FeedSlot(w, seq);
     InterlockedExchange64((LONG64 volatile*)&slot->seq, FEED_SEQ_BUSY);   // a full barrier
     memcpy((uint8_t*)slot + 8, (const uint8_t*)ev + 8, FEED_SLOT_SIZE - 8);
+    FEED_STORE_FENCE();   // the whole copy is visible before the number (feed.h)
     FeedStoreRelease64(&slot->seq, seq);
     FeedStoreRelease64(&h->writeSeq, seq + 1);
     FeedWake(w);

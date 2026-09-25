@@ -11,7 +11,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <windows.h>
-#if defined(_M_IX86)
+#if defined(_M_IX86) || defined(_M_X64)
 #include <emmintrin.h>
 #endif
 
@@ -143,12 +143,28 @@ C_ASSERT((FEED_SLOT_COUNT & (FEED_SLOT_COUNT - 1)) == 0);
 // Slot s lives at FEED_HEADER_SIZE + FEED_SLOT_INDEX(s) * FEED_SLOT_SIZE.
 #define FEED_SLOT_INDEX(s) ((size_t)((uint64_t)(s) & (FEED_SLOT_COUNT - 1)))
 
-// ARM64 needs a real barrier between a copy and its re-check; x64 and x86
-// keep load order, so a compiler barrier is enough there.
+// The fences around a copy that a sequence number guards: a ring slot, or
+// a snapshot under its seqlock. FEED_LOAD_FENCE goes between the reader's
+// copy and its re-check; FEED_STORE_FENCE goes between the writer's slot
+// copy and its release store of seq (a snapshot's writer needs none: the
+// InterlockedIncrement64 that closes its seqlock is a full barrier). ARM64
+// reorders loads, so its reader needs a real barrier; its writer's release
+// store already orders the copy before seq. x86 and x64 keep the order of
+// plain loads and of plain stores, but memcpy may compile to a fast-string
+// operation (rep movs), and the SDM (Vol. 3A, 8.2.4.1) relaxes the order of
+// the accesses inside one: its stores may complete out of order, and it
+// says nothing explicit about its loads against a later load. LFENCE (every
+// earlier load completes first) and SFENCE (every earlier store becomes
+// visible before any later one) guard against
+// that ordering; they are defense in depth, not the fix of a seen failure -
+// no tear was ever traced to it (phase 54). x64 gets them too: the same
+// memcpy may become rep movs there, and the rules are the same.
 #if defined(_M_ARM64)
-  #define FEED_LOAD_FENCE() __dmb(_ARM64_BARRIER_ISHLD)
+  #define FEED_LOAD_FENCE()  __dmb(_ARM64_BARRIER_ISHLD)
+  #define FEED_STORE_FENCE() _ReadWriteBarrier()
 #else
-  #define FEED_LOAD_FENCE() _ReadWriteBarrier()
+  #define FEED_LOAD_FENCE()  do { _ReadWriteBarrier(); _mm_lfence(); _ReadWriteBarrier(); } while (0)
+  #define FEED_STORE_FENCE() do { _ReadWriteBarrier(); _mm_sfence(); _ReadWriteBarrier(); } while (0)
 #endif
 
 // Atomic 64-bit access. On x86, winnt.h's ReadAcquire64 and WriteRelease64

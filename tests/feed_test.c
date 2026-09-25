@@ -130,13 +130,15 @@ static void TestPositionBelowOne(void) {
     FeedOpen(&r, name, FALSE);
     for (int64_t i = 1; i <= 3; ++i) { FeedEvent t = MakeTrade(0, i); FeedPublish(&w, &t); }
     r.next = 0;   // slot 0 holds seq 0 until event 32768
-    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.seq == 1 && ev.u.trade.tradeId == 1,
-          "a position of 0 reads event 1, not the unwritten slot 0");
+    lost = -7;
+    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.seq == 1 && ev.u.trade.tradeId == 1 && lost == 0,
+          "a position of 0 reads event 1, not the unwritten slot 0, and loses nothing");
     // The last slot as a writer leaves it mid-publish.
     ((FeedEvent*)(w.ring + (size_t)(FEED_SLOT_COUNT - 1) * FEED_SLOT_SIZE))->seq = FEED_SEQ_BUSY;
     r.next = -1;
-    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.seq == 1 && ev.u.trade.tradeId == 1,
-          "a position of -1 reads event 1, not the busy slot");
+    lost = -7;
+    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.seq == 1 && ev.u.trade.tradeId == 1 && lost == 0,
+          "a position of -1 reads event 1, not the busy slot, and loses nothing");
     FeedClose(&r);
     FeedWriterClose(&w);
 }
