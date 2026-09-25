@@ -329,6 +329,79 @@ static void TestTicker24OldWriter(void) {   // Review Focus 2
     FeedWriterClose(&w);
 }
 
+// --- Final review fixes (phase 55): the restart race ----------------------
+// A writer that dies between FeedPublish's two increments leaves a table's
+// lock odd and its payload half old, half new. FeedWriterOpen used to even
+// that lock before clearing the table - closing the dead writer's critical
+// section and opening a fresh one - which left a window where a reader saw
+// an even lock over the still half-written payload and accepted it as
+// clean. The fix continues the odd lock's critical section into the clear
+// instead of closing and reopening it. This runs the crash-and-restart over
+// and over with a reader thread attached throughout, on both tables, and
+// checks it never sees that torn state. RED/GREEN counts: WORKLOG, "Final
+// review fixes".
+static volatile LONG   g_raceDone;
+static volatile LONG64 g_raceOk24, g_raceTorn24, g_raceOkS, g_raceTornS;
+
+static DWORD WINAPI RestartRaceReader(void* p) {
+    FeedReader* r = (FeedReader*)p;
+    FeedTicker24Snap t;
+    FeedSnapshot s;
+    while (!g_raceDone) {
+        if (FeedReadTicker24(r, 0, &t)) {
+            g_raceOk24++;
+            if (t.t.open != t.t.close) g_raceTorn24++;   // a clean state has open == close
+        }
+        if (FeedReadSnapshot(r, 0, &s)) {
+            g_raceOkS++;
+            if (s.trade.price != s.trade.qty) g_raceTornS++;   // a clean state has price == qty
+        }
+    }
+    return 0;
+}
+
+static void TestRestartRace(void) {
+    FeedWriter w;
+    FeedReader r;
+    HANDLE th;
+    const int iters = 20000;
+    ULONGLONG t0, ms;
+    const wchar_t* name = TestName(L"race");
+    g_raceDone = 0; g_raceOk24 = 0; g_raceTorn24 = 0; g_raceOkS = 0; g_raceTornS = 0;
+    CHECK(FeedWriterOpen(&w, name, TEST_INS, 4), "the restart race's first writer opens");
+    // The reader attaches, read-only, before the loop starts, so it holds
+    // the mapping alive across every writer close/reopen below (as
+    // TestRestartOddLock does): no window where a fresh, zeroed mapping
+    // could replace it and make the test vacuous.
+    CHECK(FeedOpen(&r, name, FALSE) == FEED_OK, "the restart race's reader attaches");
+    th = CreateThread(NULL, 0, RestartRaceReader, &r, 0, NULL);
+    t0 = GetTickCount64();
+    for (int i = 0; i < iters; ++i) {
+        FeedTicker24Snap* t = &w.hdr->tickers24[0];
+        FeedSnapshot* s = &w.hdr->snapshots[0];
+        // A writer dies between FeedPublish's two increments: the lock is
+        // odd and the payload half old, half new.
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        t->t.open = 111; t->t.high = 111; t->t.low = 111;
+        t->t.close = 222; t->t.volume = 222; t->t.quoteVolume = 222;
+        InterlockedIncrement64((LONG64 volatile*)&s->lock);
+        s->trade.price = 111; s->trade.qty = 222;
+        UnmapViewOfFile(w.hdr); CloseHandle(w.hMap);
+        if (!FeedWriterOpen(&w, name, TEST_INS, 4)) { CHECK(FALSE, "the restart race's reopen"); break; }
+    }
+    ms = GetTickCount64() - t0;
+    InterlockedExchange(&g_raceDone, 1);
+    WaitForSingleObject(th, INFINITE);
+    CloseHandle(th);
+    printf("restart race: %d iters in %llu ms, t24 ok %lld torn %lld, snap ok %lld torn %lld\n",
+           iters, ms, g_raceOk24, g_raceTorn24, g_raceOkS, g_raceTornS);
+    CHECK(g_raceTorn24 == 0, "no torn read of the 24h table across the restart race");
+    CHECK(g_raceTornS == 0, "no torn read of the trade/kline snapshot across the restart race");
+    CHECK(g_raceOk24 > 0 && g_raceOkS > 0, "the reader got TRUE reads on both tables (not vacuous)");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
 static void TestSlotsAndWake(void) {
     FeedWriter w; FeedReader rs[FEED_MAX_READERS + 1];
     const wchar_t* name = TestName(L"slot");
@@ -634,6 +707,7 @@ static void TestStreamPath(void) {   // Review Focus 4
     CHECK(n > 0 && n < FEED_PATH_CCH && wcsstr(out, L"abcdefghijklmno@miniTicker") != NULL,
           "16 instruments of 15 characters fit the buffer");
     CHECK(FeedStreamPath(big, FEED_MAX_INSTRUMENTS, out, 100) == -1, "a buffer too small: -1, no abort");
+    CHECK(FeedStreamPath(TEST_INS, 1, out, 0) == -1, "cch 0: -1, no abort (phase 55)");
 }
 
 // Every line of the recorded stream parses, except the three bad ones at the end.
@@ -819,6 +893,7 @@ int wmain(int argc, wchar_t** argv) {
     TestTicker24Snapshot();
     TestTicker24RestartOddLock();
     TestTicker24OldWriter();
+    TestRestartRace();
     TestSlotsAndWake();
     TestStatusAndHeartbeat();
     TestStress();
