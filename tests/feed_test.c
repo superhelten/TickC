@@ -120,6 +120,27 @@ static void TestLappedAndResync(void) {
     FeedWriterClose(&w);
 }
 
+// No event is numbered below 1. A slot not yet written holds seq 0 and a
+// slot being written holds FEED_SEQ_BUSY (-1), so a reader positioned at 0
+// or -1 must not take either for its event; it starts at event 1 (phase 54).
+static void TestPositionBelowOne(void) {
+    FeedWriter w; FeedReader r; FeedEvent ev; int64_t lost;
+    const wchar_t* name = TestName(L"below1");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedOpen(&r, name, FALSE);
+    for (int64_t i = 1; i <= 3; ++i) { FeedEvent t = MakeTrade(0, i); FeedPublish(&w, &t); }
+    r.next = 0;   // slot 0 holds seq 0 until event 32768
+    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.seq == 1 && ev.u.trade.tradeId == 1,
+          "a position of 0 reads event 1, not the unwritten slot 0");
+    // The last slot as a writer leaves it mid-publish.
+    ((FeedEvent*)(w.ring + (size_t)(FEED_SLOT_COUNT - 1) * FEED_SLOT_SIZE))->seq = FEED_SEQ_BUSY;
+    r.next = -1;
+    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.seq == 1 && ev.u.trade.tradeId == 1,
+          "a position of -1 reads event 1, not the busy slot");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
 static void TestRewind(void) {
     FeedWriter w; FeedReader r; FeedEvent ev; int64_t lost;
     const wchar_t* name = TestName(L"rew");
@@ -290,7 +311,8 @@ static DWORD WINAPI StressReaderThread(LPVOID p) {
 // Parks right at the lap boundary before every read, rotating over the last
 // four slots, so a read races the writer's overwrite instead of trailing it
 // (a reader that reads in order never lands on a slot mid-overwrite: the
-// arithmetic lap check above catches it first).
+// arithmetic lap check above catches it first). In the first lap that
+// position is below 1, and FeedNext starts such a reader at event 1.
 static DWORD WINAPI EdgeReaderThread(LPVOID p) {
     StressReader* s = (StressReader*)p;
     FeedEvent ev; int64_t lost; unsigned k = 0;
@@ -516,6 +538,7 @@ int wmain(int argc, wchar_t** argv) {
     TestAtomics();
     TestRoundTrip();
     TestLappedAndResync();
+    TestPositionBelowOne();
     TestRewind();
     TestRestartContinuity();
     TestRestartOddLock();

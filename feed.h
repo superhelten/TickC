@@ -303,7 +303,13 @@ static __inline int FeedNext(FeedReader* r, FeedEvent* ev, int64_t* lost) {
         FeedReopenWriter(r);
         return FEED_NEW_SESSION;
     }
-    want = r->next;
+    // No event is numbered below 1: a slot not yet written holds seq 0 and a
+    // slot being written holds FEED_SEQ_BUSY, so a position below 1 would
+    // match one of them in both checks below and return a slot that is no
+    // event. FeedOpen, FeedRewind and a resync never go below 1; a caller
+    // that sets next by hand starts at the first event, as FeedRewind does
+    // (phase 54).
+    want = (r->next < 1) ? 1 : r->next;
     w = FeedLoadAcquire64(&h->writeSeq);
     if (want >= w) return FEED_EMPTY;
     if (w - want > (int64_t)FEED_SLOT_COUNT) goto lapped;
