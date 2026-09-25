@@ -39,7 +39,9 @@
 #define FEED_REWIND_MARGIN     1024
 
 enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3,          // FeedEvent.type
-       FEED_TICKER24 = 4 };   // 1.1 (phase 55); a 1.0 reader skips it
+       FEED_TICKER24 = 4 };   // 1.1 (phase 55); a 1.0 reader receives it as
+                               // an unknown type and must ignore it, not
+                               // reject it (final review, phase 55)
 enum { FEED_SRC_BINANCE_SPOT = 1 };                             // FeedEvent.source
 enum { FEED_SIDE_BUY = 1, FEED_SIDE_SELL = 2 };                 // the aggressor
 enum { FEED_ST_CONNECTING = 1, FEED_ST_CONNECTED = 2, FEED_ST_DISCONNECTED = 3 };
@@ -90,7 +92,7 @@ typedef struct {                  // 128 bytes: one ring slot
     volatile int64_t seq;         //   0  its sequence number; FEED_SEQ_BUSY while written
     int64_t  tsExchangeUs;        //   8  the exchange's event time
     int64_t  tsRecvUs;            //  16  when TickC read it off the socket
-    uint16_t type;                //  24  FEED_TRADE / FEED_KLINE / FEED_STATUS
+    uint16_t type;                //  24  FEED_TRADE / FEED_KLINE / FEED_STATUS / FEED_TICKER24
     uint16_t instrument;          //  26  index into FeedHeader.instruments
     uint16_t source;              //  28  FEED_SRC_*
     uint16_t flags;               //  30

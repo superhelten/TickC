@@ -1,5 +1,5 @@
 // feed.c - the TickC feed's writer (phase 54): the ring and the snapshot
-// table in shared memory, the Binance message parser, and FeedThread, which
+// tables in shared memory, the Binance message parser, and FeedThread, which
 // reads Binance's WebSocket stream and publishes it. The contract - the
 // layout and the reader - is feed.h. One writer per mapping: only TickC's
 // main instance starts the feed.
@@ -49,17 +49,22 @@ BOOL FeedWriterOpen(FeedWriter* w, const wchar_t* name, const FeedInstrument* in
         FeedSnapshot* s = &h->snapshots[i];
         FeedTicker24Snap* t = &h->tickers24[i];
         // A writer that died between FeedPublish's two increments left the
-        // lock odd; even it first so the pair below lands back on even,
-        // not inverted for the rest of this session. The same for the 24 h
-        // table (phase 55), which a 1.0 writer left zero: even already.
-        if (FeedLoadNoFence64(&s->lock) & 1) InterlockedIncrement64((LONG64 volatile*)&s->lock);
-        InterlockedIncrement64((LONG64 volatile*)&s->lock);
+        // lock odd: that writer is still "inside" the critical section, mid
+        // write. The restart continues that same section instead of closing
+        // it and opening a new one - closing it first (evening the odd lock
+        // before the clear) would let a reader positioned between the close
+        // and the reopen see an even lock over the still half-written
+        // payload and accept it as clean. So only an already-even lock (a
+        // clean exit, or a 1.0 writer's untouched, zeroed 24 h table) gets
+        // the opening increment below; either way the closing increment,
+        // after the clear, is the only place the lock goes back to even
+        // (phase 55: measured torn reads without this, see WORKLOG).
+        if (!(FeedLoadNoFence64(&s->lock) & 1)) InterlockedIncrement64((LONG64 volatile*)&s->lock);
         s->updatedUs = 0;
         memset(&s->trade, 0, sizeof(s->trade));
         memset(&s->kline, 0, sizeof(s->kline));
         InterlockedIncrement64((LONG64 volatile*)&s->lock);
-        if (FeedLoadNoFence64(&t->lock) & 1) InterlockedIncrement64((LONG64 volatile*)&t->lock);
-        InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        if (!(FeedLoadNoFence64(&t->lock) & 1)) InterlockedIncrement64((LONG64 volatile*)&t->lock);
         t->updatedUs = 0;
         memset(&t->t, 0, sizeof(t->t));
         InterlockedIncrement64((LONG64 volatile*)&t->lock);
@@ -475,8 +480,14 @@ static void FeedReplay(void) {
 // "/stream?streams=btcusdt@trade/btcusdt@kline_1m/btcusdt@miniTicker/..."
 // (phase 55: the miniTicker stream, and a length check - _snwprintf_s with
 // _TRUNCATE returns -1 instead of calling the invalid-parameter handler).
+// cch 0 or out NULL is rejected before that first call, for the same reason
+// (final review, phase 55): _snwprintf_s's own _TRUNCATE handling still
+// reaches the invalid-parameter handler when the buffer cannot hold even a
+// NUL, so the guard has to come first, not fall out of the length check.
 int FeedStreamPath(const FeedInstrument* ins, unsigned count, wchar_t* out, size_t cch) {
-    int n = _snwprintf_s(out, cch, _TRUNCATE, L"/stream?streams=");
+    int n;
+    if (cch == 0 || out == NULL) return -1;
+    n = _snwprintf_s(out, cch, _TRUNCATE, L"/stream?streams=");
     if (n < 0) return -1;
     for (unsigned i = 0; i < count; ++i) {
         wchar_t sym[16];
