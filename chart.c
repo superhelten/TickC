@@ -1551,8 +1551,10 @@ void ChartStyleDestroy(ChartStyle* sty) {
     for (int i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++)
         if (own[i]) DeleteObject(own[i]);
     HFONT pill = sty->fontPill;   // the app's, see chart.h
+    HBRUSH fillWm = sty->brFillWm;
     ZeroMemory(sty, sizeof(*sty));
     sty->fontPill = pill;
+    sty->brFillWm = fillWm;
 }
 
 // The background under everything: the app's cached watermark bitmap when it
