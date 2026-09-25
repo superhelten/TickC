@@ -129,7 +129,9 @@ Binance WebSocket  wss://stream.binance.com:443/stream?streams=
 #define FEED_REWIND_MARGIN     1024       // FeedRewind's margin below the ring's oldest slot
 
 enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3,          // FeedEvent.type
-       FEED_TICKER24 = 4 };   // 1.1 (phase 55); a 1.0 reader skips it
+       FEED_TICKER24 = 4 };   // 1.1 (phase 55); a 1.0 reader receives it as
+                               // an unknown type and must ignore it, not
+                               // reject it (final review, phase 55)
 enum { FEED_SRC_BINANCE_SPOT = 1 };                             // FeedEvent.source
 enum { FEED_SIDE_BUY = 1, FEED_SIDE_SELL = 2 };                 // the aggressor
 enum { FEED_ST_CONNECTING = 1, FEED_ST_CONNECTED = 2, FEED_ST_DISCONNECTED = 3 };
@@ -175,7 +177,7 @@ typedef struct {                  // 128 bytes: one ring slot
     volatile int64_t seq;         //   0  its sequence number; FEED_SEQ_BUSY while written
     int64_t  tsExchangeUs;        //   8  the exchange's event time
     int64_t  tsRecvUs;            //  16  when TickC read it off the socket
-    uint16_t type;                //  24  FEED_TRADE / FEED_KLINE / FEED_STATUS
+    uint16_t type;                //  24  FEED_TRADE / FEED_KLINE / FEED_STATUS / FEED_TICKER24
     uint16_t instrument;          //  26  index into FeedHeader.instruments
     uint16_t source;              //  28  FEED_SRC_*
     uint16_t flags;               //  30
@@ -785,11 +787,20 @@ same reason as the trade/kline snapshot: a reader that resyncs reads
 already be in them (see Resync, above).
 
 `FeedWriterOpen` clears `tickers24` on every writer restart, as it clears
-`snapshots`: it evens a lock a dead writer left odd (`FeedLoadNoFence64(&t->lock)
-& 1` → one extra `InterlockedIncrement64`), then increments, clears
-`updatedUs` and `t`, and increments again, landing back on even for the rest
-of the session. A 1.0 writer never touched `tickers24` at all, so a 1.1
-writer taking over from one finds it already zero and even.
+`snapshots`, and continues a dead writer's critical section instead of
+closing and reopening it (final review, phase 55). A writer that died
+between `FeedPublish`'s two increments left the lock odd - it is still
+"inside" that section, mid-write - so the restart must not even the lock
+before the clear: doing that would open a window where a reader positioned
+between the close and the reopen sees an even lock over the still
+half-written payload and accepts it as clean. Reviewer measurement, 100k
+restarts: 11 080 (`tickers24`, x86) to 16 503 (`snapshots`, x64) torn reads
+out of that window alone. Instead, `FeedWriterOpen` increments only when
+the lock is already even (`!(FeedLoadNoFence64(&t->lock) & 1)`) - a clean
+exit, or a 1.0 writer's untouched, zeroed `tickers24` - clears `updatedUs`
+and `t`, and increments again; that second increment, after the clear, is
+the only place the lock goes back to even, whether it started even or odd.
+0 torn reads over 1M restarts on each architecture with this order.
 
 ### `FeedReadTicker24`
 
@@ -828,7 +839,7 @@ overflows nor aborts.
   `slotCount` are all unchanged, which is everything `FeedOpen` checks. It
   reads every event, including the unknown `FEED_TICKER24` (type 4), which
   its `Check` counts as `status` because its `if`/`else if` chain does not
-  know the type - it does not reject or skip the slot, just fall through to
+  know the type - it does not reject or skip the slot, falls through to
   its last branch. Evidence (task 3, step 4; replayed against the same
   fixture as the golden below):
 
@@ -865,3 +876,7 @@ overflows nor aborts.
   the 30 s margin.
 - **Binance's JSON** could change a field. The parser drops what it cannot
   read and counts it; the probe fields make a sudden rise visible.
+- **The combined stream path.** Binance rejecting it (final review, phase
+  55) would stop trades and klines too, not just the 24 h statistics - all
+  three streams share the one connection. TickC's own UI is unaffected,
+  since it gets its prices over REST, not this feed. Accepted.
