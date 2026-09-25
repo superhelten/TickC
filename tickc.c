@@ -7719,8 +7719,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // start in between would take the name and the mapping while this
     // process's FeedThread still publishes - two writers. Closing its socket
     // ends the receive at once, so this takes milliseconds, not the network
-    // thread's 10 s.
-    FeedStop();
+    // thread's 10 s. Its result feeds workerDone below (phase 54): FeedThread
+    // can reach g_Ctx.lock and hSession through sessionLock and pSession, so
+    // a timed-out FeedStop must hold back the same lock deletion and handle
+    // closes that a live NetworkThread holds back.
+    BOOL feedStopped = FeedStop();
 
     // The main instance's name is let go here, not at exit (phase 46): the
     // wait for the worker below can take seconds, and a start in that time
@@ -7746,7 +7749,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // the lock, the events and hConnect are released only if the thread has
     // really ended. Otherwise they are left to the process exit, which is
     // moments away: a leaked handle beats a lock deleted under a live thread.
-    BOOL workerDone = (g_Ctx.hThread == NULL);
+    //
+    // workerDone also carries feedStopped (phase 54): a daemon has no
+    // NetworkThread, so g_Ctx.hThread is NULL and workerDone would otherwise
+    // be TRUE at once, regardless of whether FeedThread actually ended.
+    BOOL workerDone = feedStopped && (g_Ctx.hThread == NULL);
     if (g_Ctx.hStopEvent) SetEvent(g_Ctx.hStopEvent);
     {
         HINTERNET hs;
@@ -7757,7 +7764,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (hs) WinHttpCloseHandle(hs);
     }
     if (g_Ctx.hThread) {
-        workerDone = (WaitForSingleObject(g_Ctx.hThread, 10000) == WAIT_OBJECT_0);
+        workerDone = feedStopped && (WaitForSingleObject(g_Ctx.hThread, 10000) == WAIT_OBJECT_0);
         CloseHandle(g_Ctx.hThread);
     }
     if (workerDone) {
