@@ -1,6 +1,6 @@
 # TickC — work log
 
-Status as of 2026-09-24. Written for agents who continue work on `tickc.c`
+Status as of 2026-09-25. Written for agents who continue work on `tickc.c`
 (`ticker.c` up to and including phase 29).
 Phase 1 is done. Phase 2 part A (animation timer, backoff, stale indicator),
 part B (symbol/interval, overlay, watermark, the registry) and part C (last-price
@@ -137,6 +137,9 @@ and low as labels.
 High, Average, Low and the overlays as rows) in place of the one-line
 legend, the volume pane in the series' steel blue with an average line, a
 time axis in two rows, and Arial for the axis numbers.
+**Phase 53** lets the watermark show through the mountain: the fill is
+drawn with a pattern brush of the watermark on the navy, as faint there as
+on the black.
 See **The window** below. Design spec for phase 2:
 `docs/specs/2026-09-16-phase2-design.md`.
 
@@ -619,6 +622,13 @@ must never prevent painting.
 The color is white blended in with `WatermarkAlpha(W)` =
 `clamp(0,08 · √(W/1920), 0,04, 0,10)` (phase 11). Since `W` is already part of
 the cache key, the alpha costs nothing per frame.
+
+From phase 53, while the mountain is drawn, the cache holds a second bitmap:
+the same text on `clr.mountain`, as a pattern brush the engine fills the
+mountain's polygons with (`ChartStyle.brFillWm`), so the text runs on
+through the fill. Its ink is stepped so the text stands out of the fill by
+the same WCAG ratio as out of the background (`WatermarkStepOn`). The chart
+type is part of the key: a switch away from the mountain frees it.
 
 ### Target vs. display — the key idea in part C
 
@@ -4667,6 +4677,100 @@ cannot run hidden; the desktop was checked in `chart_golden` only),
 same size. The README picture is the same fixture scene, retaken.
 **Exe 256 000 → 262 656 bytes (+6 656); the overlays' fix adds nothing.**
 
+### Phase 53 — the watermark shows through the mountain
+
+Branch `phase-53`. The user sent a screenshot of the panel's default
+mountain: the watermark was hidden wherever the navy fill lay, and only
+"USDT" showed over the black. The fill was a solid polygon drawn over the
+background's watermark bitmap - phase 49's known limitation "the mountain
+hides the watermark". The user expects the watermark behind the whole
+chart. One agent edited `tickc.c`, `chart.c`, `chart.h`, `tests/` and the
+docs.
+
+**The engine: a pattern brush, not a clip.** `ChartStyle` gets
+`brFillWm`, the app's brush for the mountain's fill, with `fontPill`'s
+contract: the app sets it per frame, `ChartStyleCreate` leaves it NULL
+(the solid `clr.mountain`, as before) and `ChartStyleDestroy` keeps it.
+Not a `ChartData` field (pitfall 143). With it, the fill's polygons are
+filled with the brush, anchored at the surface's origin as the background
+bitmap is, so the text runs on through the fill. The suggested design - a
+clip path of the polygons and a `BitBlt` of a second bitmap - was not
+built: it makes a region from up to 6000 points every frame, and GDI need
+not rasterize a region's edges as it does `Polygon`'s. The brush goes
+through the same `Polygon` calls, so it covers the same pixels by
+construction, and `chart_golden` proves it: a flat bitmap draws exactly
+the solid fill in every mountain case. The grid, the bars behind the
+price, the alert and level lines and the labels are drawn over the fill as
+before.
+
+**The app: a second bitmap, as faint.** `EnsureWatermark` draws the symbol
+and the interval a second time on `clr.mountain` while the mountain is
+drawn, through a DC it lets go at once, and keeps the bitmap and its
+pattern brush (`wmFillBmp`, `wmFillBr`); `DrawWatermarkText` draws both in
+the same places. The chart type joins the cache key (`wmFillFor`), so a
+switch to the mountain builds the second bitmap and a switch away frees it
+- at 3840x1600 it is 24.6 MB, not worth keeping for the desktop's line.
+Every other invalidation (size, theme and dpi through `ApplyPanelStyle`,
+symbol and interval, mode, the panes) already clears `wmValid`, and the
+second bitmap is built with the first. If only the second fails, the fill
+is solid. The same step toward the ink would not do: the navy is lighter
+than black, and at 1280 px the dark text would stand out of it at 1.18:1
+against 1.11 above it (ΔL* 7.0 against 5.1), louder in the mountain than
+over it. `WatermarkStepOn` picks the step whose WCAG ratio on the fill is
+nearest the background's, phase 40's measure: dark `0C243A` on `011A31`
+1.114:1 against `111111` on black 1.112; light `C9D6E5` on `D6E4F4` 1.143
+against `EBEBEC` on `FAFAFB` 1.142. The first build used `pow()` for the
+sRGB curve and the exe grew by 23 040 bytes (the CRT's pow, the story of
+`AlertRound`); x^2.4 is now x^2 times the fifth root of x^2, found by
+Newton from 1 in at most nine steps to the last bit.
+Probe fields (panel): 98, the watermark's ink as RRGGBB (`lParam` 0 on the
+background, 1 on the fill, -1 without that bitmap), and 99, the caches
+built.
+
+**Verified.** `chart_golden`: nine new cases (`wm_`: the mountain in both
+themes, with a crosshair, with alerts, at 144 dpi with RSI, with more
+candles than pixels, the desktop at 3840x1600 and light; the line and the
+candles as controls), **73 in total**, built with a watermark made as the
+app makes it (`WatermarkOpen`). `CheckWatermarkFill` draws each case four
+ways: as it is, without a watermark, with flat bitmaps (must equal the
+solid fill: 0 px differ), and with the fill's bitmap in a sentinel color
+(its pixels are where the fill shows). The fill must carry its bitmap
+there pixel for pixel, the text must lie under the fill (the cause,
+measured: 663 to 16 046 px), and nothing off the text may change. **Red**
+against the engine's commit 1: the seven mountain checks fail, the 64
+goldens pass, the line and candle controls pass. Green: 73/73 twice, the
+64 older hashes unchanged; the nine new pictures were looked at before
+`--update`. `shot_p53.ps1` (19 checks, hidden desktop, the recorded 5m
+view - in the 1h view the text stands on the black above the fill):
+**red** against `ticker_test_53c1.exe` 11 fail and 8 controls pass; green
+19/19 twice (once in `regress53`). It checks that the fill's ink is in the
+capture (10 010 px dark, 10 010 light), the WCAG match, and that where the
+line's capture has the watermark and the mountain's the fill, the fill
+carries the ink (99.4-100 %) - right after a theme switch, a resize to
+900x520, an interval switch and 144 dpi, captured before any type switch;
+no fill bitmap while the line is drawn, no build over five repaints, GDI
+68 → 68 over three rounds of type and theme switches (65 on the red
+build: the second bitmap costs three objects while the mountain is drawn). Nine mutations
+(`mut53.py`) each fail: in the engine the brush ignored, anchored at the
+plot, drawn with an outline, and laid over the whole pane before the grid;
+in the app the step not matched (FAINT), the type out of the key (LAZY),
+the fill built once (5 checks - the first draft of SHAPE took the
+mountain's capture after a line round trip, which rebuilt the bitmap and
+hid this one, pitfall 171), the brush not passed (7) and the background's
+ink on the fill (7). `regress53.ps1` (`regress52` and `shot_p53`) 16/16.
+`golden.ps1 -Hidden` against a reference from `main`: `p1280_15m` (190
+px), `p1280_1d` (3 603 px) and `p400_1h` (68 px) differ, each where the
+watermark meets the fill, and were looked at; the other four are
+identical (their text stands on the black). Before/after crops of the
+panel's mountain, dark and light, and of the desktop's (`chart_golden`)
+were looked at. Draw time at 3840x1600 with 6000 candles, median of two
+runs: the panel's mountain with the watermark behind it 17.0 ms, through
+it 18.0; the desktop's 24.5 and 25.5 (a second run 27.9, noisy). Not
+exercised: desktop mode itself (it cannot run hidden; the desktop's
+mountain is `chart_golden`'s) and `golden.ps1 -Light`. `/W4` clean, and
+`/TP` gives the same size. The README picture (the 1h scene, text on the
+black) was not retaken. **Exe 262 656 → 264 704 bytes (+2 048).**
+
 ---
 
 ## Known limitations
@@ -4719,12 +4823,25 @@ same size. The README picture is the same fixture scene, retaken.
 - **The tray icon keeps the old background** (phase 51). The micro font's
   bitmap is filled with `0D1117` (`RenderMicroFontIcon`); the icon stands
   on the taskbar, not on the chart.
-- **`golden.ps1 -Light` was not re-run in phases 51 and 52.** The light
-  theme's chart was checked in `chart_golden`, `shot_p51` and `shot_p52`.
-- **The mountain hides the watermark where its fill lies** (phase 49). The
-  fill is opaque and drawn under the grid, the bars behind the price and
-  the alert and level lines, but over the watermark. That is one reason
-  the desktop's default is the line.
+- **`golden.ps1 -Light` was not re-run in phases 51-53.** The light
+  theme's chart was checked in `chart_golden`, `shot_p51`, `shot_p52` and
+  `shot_p53`.
+- **The watermark through the mountain costs a second bitmap** (phase 53)
+  the size of the surface and a pattern brush made from it, only while the
+  mountain is drawn - the bitmap is 3.7 MB at 1280x720 and 24.6 MB at
+  3840x1600 (whether GDI copies it into the brush was not measured) -
+  three GDI objects, measured (65 on the red build, 68 on the green, in
+  the same state of `shot_p53`), and about 1 ms a frame at 3840x1600
+  with 6000 candles. Up to phase 52 the solid fill hid the
+  watermark where it lay (phase 49's limitation).
+- **Opaque label cells on the fill cut the watermark** (phase 53), as they
+  do on the background: the level names on the navy (`fillCell`), the
+  high/low labels' cells, and in the light theme the background patches
+  under the level labels.
+- **The desktop's mountain with the watermark was not run in the app**
+  (phase 53); desktop mode cannot run hidden. `chart_golden` draws it
+  (`wm_mountain_desktop_3840x1600`, `wm_mountain_light_desktop`), and the
+  desktop goes through the same `DrawChartFrame`.
 - **The mountain's fill is solid, not a gradient** (phase 49). A gradient
   would need msimg32's `GradientFill` or a region every frame.
 - **In the light theme a level label on the fill stands on a patch of the
@@ -5914,21 +6031,41 @@ same size. The README picture is the same fixture scene, retaken.
     forever** (the 120 s timeout).
 169. **.ps1 files can mix LF and CRLF within one file** (pitfall 129
     again): `shot_vol.ps1` had 88 CRLF lines out of 163.
+170. **The older scripts need an absolute `-Exe` path.** `golden.ps1`,
+    `shot_fix44`, `shot_range` and the others before phase 46 pass it to
+    `CreateProcess` as given, which fails on a relative one (error 2): the
+    captures come out "HIDDEN - not captured" and a run reads
+    `checks=0`. The phase 46+ scripts `Resolve-Path` it.
+171. **A check that switches away and back rebuilds the cache it tests.**
+    `shot_p53` first captured the mountain after a line round trip, and
+    the type switch rebuilt the fill's bitmap every time: a mutation that
+    never rebuilt it on a resize, a theme or dpi change failed one check,
+    not five. Capture right after the change under test.
+172. **`pow`, `log` and `exp` bring the CRT's tables into the exe:** 23 KB
+    for one `pow` in phase 53 (28 KB for `AlertRound`'s in its day).
+    Measure the size after any new math call; `sqrt` and `fabs` are
+    intrinsics and cost nothing.
+173. **Pick the fixture view where the effect is.** In the recorded 1h
+    view the watermark stands on the black above the fill, so no capture
+    of it can show a fill change; the 5m view has 10 067 px of the text
+    under the fill. Measure that precondition first (pitfall 144).
+174. **`small` is a macro in the Windows headers** (`rpcndr.h`: `char`).
+    A parameter named `small` fails with C2628.
 
 ---
 
 ## Backups
 
-**Only `tickc.c.bak46` and `chart.c.bak46` are left** (2026-09-24). From
+**Only `tickc.c.bak47` and `chart.c.bak47` are left** (2026-09-25). From
 phase 34 the code is two files, so the backup is a pair. They are identical
-to `tickc.c` and `chart.c` after phase 52 and are the rollback reference for
+to `tickc.c` and `chart.c` after phase 53 and are the rollback reference for
 the build that is running. `ticker.c.bak` … `.bak24`, `tickc.c.bak25` …
-`.bak27` and the pairs `.bak28` … `.bak45` (phases 34–51) are deleted: that history is in git.
+`.bak27` and the pairs `.bak28` … `.bak46` (phases 34–52) are deleted: that history is in git.
 
 The order was `.bak` … `.bak7` (phases 1–8), `.bak8` (phase 13), `.bak9`
 (phase 14), `.bak10` (phase 15), `.bak11` (phase 16), `.bak12` (phase 17),
 `.bak13` (phase 18), `.bak14` (phase 19), `.bak15` (phase 20), `.bak16`
-(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49), `.bak44` (phase 50), `.bak45` (phase 51) and `.bak46` (phase 52). The files are ignored by
+(phase 21), `.bak17` (phase 22), `.bak18` (phase 23), `.bak19` (phase 24), `.bak20` (phase 25), `.bak21` (phase 26), `.bak22` (phase 27), `.bak23` (phase 28), `.bak24` (phase 29), `tickc.c.bak25` (phase 30), `.bak26` (phase 31), `.bak27` (phase 32), then the pairs `.bak28` (phase 34), `.bak29` (phase 35), `.bak30` (phase 36), `.bak31` (phase 37), `.bak32` (phase 38), `.bak33` (phase 39), `.bak34` (phase 40), `.bak35` (phase 41), `.bak36` (phase 42), `.bak37` (phase 43), `.bak38` (phase 44), `.bak39` (phase 45), `.bak40` (phase 46), `.bak41` (phase 47), `.bak42` (phase 48), `.bak43` (phase 49), `.bak44` (phase 50), `.bak45` (phase 51), `.bak46` (phase 52) and `.bak47` (phase 53). The files are ignored by
 git; the pattern
 is `*.bak[0-9]*`, with an asterisk, because `*.bak[0-9]` alone let the two-digit ones
 through.

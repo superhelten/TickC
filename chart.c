@@ -1551,8 +1551,10 @@ void ChartStyleDestroy(ChartStyle* sty) {
     for (int i = 0; i < (int)(sizeof(own) / sizeof(own[0])); i++)
         if (own[i]) DeleteObject(own[i]);
     HFONT pill = sty->fontPill;   // the app's, see chart.h
+    HBRUSH fillWm = sty->brFillWm;
     ZeroMemory(sty, sizeof(*sty));
     sty->fontPill = pill;
+    sty->brFillWm = fillWm;
 }
 
 // The background under everything: the app's cached watermark bitmap when it
@@ -1990,13 +1992,28 @@ void ChartDrawBody(HDC hdc, int W, int H, ChartState* st, const ChartData* in,
     // Under everything else in the pane: the grid, the bars behind the
     // price, the alert and level lines stand on it, as they would on a
     // translucent fill, and the line itself is drawn where the candles are.
-    // Opaque, so it hides the watermark where it lies.
+    // Opaque, so up to phase 52 it hid the watermark where it lay. Phase 53:
+    // with the app's brFillWm the polygons are filled with the watermark
+    // drawn again on clr.mountain, a pattern brush of a bitmap the size of
+    // the surface, anchored at the surface's origin as the background's is
+    // - the text runs on through the fill. The same Polygon calls fill the
+    // same pixels as the solid brush (chart_golden checks it); a clip path
+    // of the polygons would have built a region from up to 6000 points per
+    // frame, whose edges GDI need not rasterize as Polygon does.
     if (ctype == CHART_MOUNTAIN) {
         HGDIOBJ oldPenM = SelectObject(hdc, GetStockObject(NULL_PEN));
-        HGDIOBJ oldBrM  = SelectObject(hdc, GetStockObject(DC_BRUSH));
-        SetDCBrushColor(hdc, sty->clr.mountain);
+        HGDIOBJ oldBrM;
+        POINT oldOrg = { 0, 0 };
+        if (sty->brFillWm) {
+            SetBrushOrgEx(hdc, 0, 0, &oldOrg);
+            oldBrM = SelectObject(hdc, sty->brFillWm);
+        } else {
+            oldBrM = SelectObject(hdc, GetStockObject(DC_BRUSH));
+            SetDCBrushColor(hdc, sty->clr.mountain);
+        }
         DrawPriceLine(hdc, in->candles, n, &g, dStart, slot, i0, i1, maxP, range, TRUE);
         SelectObject(hdc, oldBrM);
+        if (sty->brFillWm) SetBrushOrgEx(hdc, oldOrg.x, oldOrg.y, NULL);
         SelectObject(hdc, oldPenM);
     }
 

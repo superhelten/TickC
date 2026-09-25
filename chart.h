@@ -168,7 +168,7 @@ extern const ChartTheme ChartThemeLight;   // phase 38: light background
 // GDI objects the chart draws with (phase 35: built by ChartStyleCreate, so
 // the app and the golden tests draw with the very same objects). fontPill
 // is NOT part of it: its height follows the surface, and the app builds it
-// and sets it per frame. ChartStyleDestroy leaves it alone.
+// and sets it per frame. ChartStyleDestroy leaves it alone (brFillWm too).
 typedef struct {
     HFONT  fontSmall, fontAxis;
     HFONT  fontPill;            // desktop stamp font, NULL = use fontAxis
@@ -181,6 +181,12 @@ typedef struct {
     // surface 1280 px or higher the frame draws the line with a wider pen
     // of its own instead (DeskLineW).
     HPEN   penLine;
+    // Phase 53: the mountain's fill as a pattern brush - the app's watermark
+    // bitmap drawn again on clr.mountain, built for the surface's size, so
+    // the watermark reads through the fill as it does on the background.
+    // Like fontPill it is the app's: set per frame, NULL (as ChartStyleCreate
+    // leaves it) = the solid clr.mountain, and ChartStyleDestroy leaves it.
+    HBRUSH brFillWm;
     int    dpi;               // phase 36: the fonts are built for it; 96 = 100 %
     ChartTheme clr;             // phase 38: the colors, copied from the theme
 } ChartStyle;
@@ -573,8 +579,9 @@ int       TimeTickStep(double dispCount, int chartW, int minDx);
 int       NiceTimeStep(int step, long long intervalMs);
 
 // --- Style ---
-// Creates every object in ChartStyle except fontPill (set to NULL), with the
-// fonts sized for dpi (0 = 96) and the colors from theme (NULL = dark).
+// Creates every object in ChartStyle except fontPill and brFillWm (set to
+// NULL), with the fonts sized for dpi (0 = 96) and the colors from theme
+// (NULL = dark).
 // FALSE when any creation failed; the rest are then still valid or NULL, and
 // ChartStyleDestroy frees them.
 BOOL      ChartStyleCreate(ChartStyle* sty, int dpi, const ChartTheme* theme);

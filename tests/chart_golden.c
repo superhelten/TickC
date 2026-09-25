@@ -70,6 +70,10 @@ typedef struct {
     BOOL loudLast;
     // Phase 49: the chart type, CHART_* (0, the candles, in the older rows).
     int  type;
+    // Phase 53: the app's watermark behind the chart (WatermarkOpen), and
+    // for the mountain the same text on the fill (ChartStyle.brFillWm).
+    // The older rows draw the flat background, as before.
+    BOOL wm;
 } Case;
 
 // The desktop stamp is sized from H (DeskPillFontH); 1920x1080 and a 3840x1600
@@ -183,6 +187,20 @@ static const Case CASES[] = {
     { "mountain_1m_dense",      1280, 720, FALSE, MIN_MS,      2400, FALSE,   0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_desktop_3840x1600",3840,1600,TRUE, MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
     { "mountain_light_desktop", 1920,1080, TRUE,  MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN },
+    // Phase 53: the watermark shows through the mountain. The mountain in
+    // both themes, with a crosshair, alerts and levels over the fill, 150 %
+    // with RSI, more candles than pixels (the fill's edge runs up and down
+    // one column), the desktop at 3840x1600 and light; and the line and the
+    // candles with the watermark, which draw no fill.
+    { "wm_mountain_1h_1280x720",1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN, TRUE },
+    { "wm_mountain_light_hover",1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0, 700, 300, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN, TRUE },
+    { "wm_mountain_15m_alerts", 1280, 720, FALSE, 15 * MIN_MS,  360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, TRUE,   96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN, TRUE },
+    { "wm_mountain_dpi144_rsi", 1920,1080, FALSE, MIN_MS,      2400, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE, 144, FALSE, TRUE,  0.0, 0,  0, FALSE, CHART_MOUNTAIN, TRUE },
+    { "wm_mountain_1m_dense",   1280, 720, FALSE, MIN_MS,      2400, FALSE,   0,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN, TRUE },
+    { "wm_mountain_desktop_3840x1600",3840,1600,TRUE,MIN_MS,  2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN, TRUE },
+    { "wm_mountain_light_desktop",1920,1080,TRUE, MIN_MS,      2400, FALSE, 300,  0, 0.0, 0.0,  -1,  -1, FALSE,  96, TRUE,  FALSE, 0.0, 0,  0, FALSE, CHART_MOUNTAIN, TRUE },
+    { "wm_line_1h_1280x720",    1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_LINE,     TRUE },
+    { "wm_candles_1h_1280x720", 1280, 720, FALSE, HOUR_MS,      360, FALSE, 300,  0, 1.0, 1.0,  -1,  -1, FALSE,  96, FALSE, FALSE, 0.0, 0,  0, FALSE, CHART_CANDLES,  TRUE },
 };
 #define NCASES ((int)(sizeof(CASES) / sizeof(CASES[0])))
 
@@ -213,6 +231,128 @@ static void MakeCandles(Candle* c, int n, long long ivMs, double base) {
         c[i].volume = (2.0 + Rnd() * 30.0) * (double)(ivMs / MIN_MS);
         p = cl;
     }
+}
+
+// --- Phase 53: the watermark ---
+// TickC's watermark is the app's (EnsureWatermark in tickc.c): the symbol in
+// bold Segoe UI, a fifth of the plot's height (32-120 px at 96 dpi) and
+// fitted to its width, centered in the plot, the interval under it in
+// fontSmall, all blended from the background toward the ink (white; the
+// light theme's text) by WatermarkAlpha of the logical width. It is built
+// the same way here: a bitmap for ChartDrawBackground and, for the
+// mountain, the same text on clr.mountain as the pattern brush
+// ChartStyle.brFillWm, its ink stepped so it stands out of the fill as
+// faintly as out of the background (WmStepOn, as the app's
+// WatermarkStepOn). s_wmMode: 0 as the case says; 1 no watermark (the
+// solid fill); 2 both bitmaps flat, no text (the fill's coverage); 3 flat,
+// with the fill in WM_SENTINEL, a color nothing else draws, so a pixel of
+// it is a pixel where the fill's bitmap shows.
+#define WM_SENTINEL RGB(0x01, 0x02, 0x03)
+typedef struct { HDC dc; HBITMAP bmp, old, bmpFill; HBRUSH brFill; COLORREF inkBg, inkFill; } Watermark;
+static int s_wmMode;
+static const Watermark* s_wmCached;   // --perf: built once, not per frame
+
+static double ContrastRatio(COLORREF a, COLORREF b);
+
+static int WmStep(int W, int dpi) {
+    double a = 0.08 * sqrt((double)MulDiv(W, 96, dpi) / 1920.0);
+    if (a < 0.04) a = 0.04;
+    if (a > 0.10) a = 0.10;
+    return (int)(a * 255.0 + 0.5);
+}
+
+// The step toward ink on surf whose contrast is nearest to target.
+static int WmStepOn(COLORREF surf, COLORREF ink, double target) {
+    int best = 0;
+    double bestD = 99.0;
+    for (int t = 0; t <= 255; t++) {
+        double d = fabs(ContrastRatio(Blend(surf, ink, t), surf) - target);
+        if (d < bestD) { bestD = d; best = t; }
+    }
+    return best;
+}
+
+static void WmText(HDC dc, const ChartRect* g, HFONT big, HFONT sml, int fh, int dpi,
+                   const Case* k, COLORREF c) {
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, c);
+    HGDIOBJ old = SelectObject(dc, big);
+    RECT rcSym = { g->left, g->top, g->right, g->bottom };
+    DrawTextW(dc, L"BTCUSDT", -1, &rcSym, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    SelectObject(dc, sml);
+    RECT rcIv = { g->left, g->top + g->ch / 2 + fh / 2 + ChartPx(dpi, 4), g->right, g->bottom };
+    const wchar_t* iv = (k->ivMs == MIN_MS) ? L"1m" : (k->ivMs == 15 * MIN_MS) ? L"15m"
+                      : (k->ivMs == HOUR_MS) ? L"1h" : (k->ivMs == DAY_MS) ? L"1d" : L"1w";
+    DrawTextW(dc, iv, -1, &rcIv, DT_CENTER | DT_SINGLELINE | DT_TOP);
+    SelectObject(dc, old);
+}
+
+static HFONT WmFont(int fh) {
+    return CreateFontW(-fh, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                       OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                       DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+}
+
+static void WatermarkClose(Watermark* w) {
+    if (w->dc && w->old) SelectObject(w->dc, w->old);
+    if (w->dc) DeleteDC(w->dc);
+    if (w->bmp) DeleteObject(w->bmp);
+    if (w->brFill) DeleteObject(w->brFill);
+    if (w->bmpFill) DeleteObject(w->bmpFill);
+    ZeroMemory(w, sizeof(*w));
+}
+
+// Bitmaps compatible with ref, the DC the case is drawn into (a DIB section,
+// or CrossCheck's screen bitmap).
+static BOOL WatermarkOpen(Watermark* w, HDC ref, const Case* k, const ChartStyle* sty, int mode) {
+    ZeroMemory(w, sizeof(*w));
+    ChartRect g = ChartGeometry(k->W, k->H, k->desktop, k->dpi, k->rsi, k->volF > 0.0);
+    COLORREF ink = k->light ? RGB(0x1F, 0x23, 0x28) : RGB(0xFF, 0xFF, 0xFF);
+    int t = WmStep(k->W, k->dpi);
+    w->inkBg = Blend(sty->clr.bg, ink, t);
+    w->inkFill = Blend(sty->clr.mountain, ink,
+                       WmStepOn(sty->clr.mountain, ink, ContrastRatio(w->inkBg, sty->clr.bg)));
+    int fh = g.ch / 5;
+    if (fh < ChartPx(k->dpi, 32))  fh = ChartPx(k->dpi, 32);
+    if (fh > ChartPx(k->dpi, 120)) fh = ChartPx(k->dpi, 120);
+    w->dc = CreateCompatibleDC(ref);
+    w->bmp = CreateCompatibleBitmap(ref, k->W, k->H);
+    if (!w->dc || !w->bmp) { WatermarkClose(w); return FALSE; }
+    w->old = (HBITMAP)SelectObject(w->dc, w->bmp);
+    HFONT big = WmFont(fh);
+    SIZE sz = { 0, 0 };
+    int availW = g.cw - ChartPx(k->dpi, 8);
+    HGDIOBJ o = SelectObject(w->dc, big);
+    if (GetTextExtentPoint32W(w->dc, L"BTCUSDT", 7, &sz) && sz.cx > availW && availW > 0) {
+        int fitted = MulDiv(fh, availW, sz.cx);
+        if (fitted < ChartPx(k->dpi, 8)) fitted = ChartPx(k->dpi, 8);
+        if (fitted < fh) {
+            SelectObject(w->dc, o);
+            DeleteObject(big);
+            fh = fitted;
+            big = WmFont(fh);
+            o = SelectObject(w->dc, big);
+        }
+    }
+    SelectObject(w->dc, o);
+    RECT all = { 0, 0, k->W, k->H };
+    FillRect(w->dc, &all, sty->brBg);
+    if (mode == 0) WmText(w->dc, &g, big, sty->fontSmall, fh, k->dpi, k, w->inkBg);
+    if (k->type == CHART_MOUNTAIN) {
+        HDC tmp = CreateCompatibleDC(ref);
+        w->bmpFill = CreateCompatibleBitmap(ref, k->W, k->H);
+        if (tmp && w->bmpFill) {
+            HGDIOBJ ob = SelectObject(tmp, w->bmpFill);
+            SetDCBrushColor(tmp, (mode == 3) ? WM_SENTINEL : sty->clr.mountain);
+            FillRect(tmp, &all, (HBRUSH)GetStockObject(DC_BRUSH));
+            if (mode == 0) WmText(tmp, &g, big, sty->fontSmall, fh, k->dpi, k, w->inkFill);
+            SelectObject(tmp, ob);
+            w->brFill = CreatePatternBrush(w->bmpFill);
+        }
+        if (tmp) DeleteDC(tmp);
+    }
+    DeleteObject(big);
+    return TRUE;
 }
 
 // --- One case into a DC ---
@@ -296,9 +436,18 @@ static void DrawCase(HDC hdc, const Case* k, const ChartStyle* base, ChartState*
 
     ChartStyle sty = *base;
     sty.fontPill = k->desktop ? ChartPillFontCreate(k->H) : NULL;
-    ChartDrawBackground(hdc, k->W, k->H, NULL, sty.brBg);
+    // Phase 53: the watermark, as the app passes it - the bitmap to
+    // ChartDrawBackground and the fill's brush in the style.
+    Watermark wm;
+    ZeroMemory(&wm, sizeof(wm));
+    const Watermark* w = NULL;
+    if (s_wmCached) w = s_wmCached;
+    else if ((k->wm || s_wmMode >= 2) && s_wmMode != 1 && WatermarkOpen(&wm, hdc, k, &sty, s_wmMode)) w = &wm;
+    sty.brFillWm = w ? w->brFill : NULL;
+    ChartDrawBackground(hdc, k->W, k->H, w ? w->dc : NULL, sty.brBg);
     ChartDrawBody(hdc, k->W, k->H, &st, &in, &sty);
     GdiFlush();
+    if (w == &wm) WatermarkClose(&wm);
     if (sty.fontPill) DeleteObject(sty.fontPill);
     if (outSt) *outSt = st;
     if (outIn) *outIn = in;
@@ -408,7 +557,7 @@ static BOOL WriteBmp(const char* path, const Surface* s) {
 
 // --- Golden file ---
 typedef struct { char name[64]; int W, H; unsigned long long hash; } Golden;
-#define GOLD_MAX 96   // phase 49: 61 cases
+#define GOLD_MAX 96   // phase 49: 61 cases; phase 53: 73
 static Golden s_gold[GOLD_MAX];
 static int    s_goldCount;
 
@@ -2378,25 +2527,129 @@ static int CheckBloomberg(void) {
            CheckBloombergStamp() + CheckBloombergHiLo();
 }
 
+// --- Phase 53: the watermark shows through the mountain ---
+// Until phase 52 the fill was a solid polygon over the background's
+// watermark, and only the text over the black showed. Each case is drawn
+// four ways: as it is (A); with no watermark (B, the solid fill); flat (C,
+// both bitmaps without text), which must be B exactly - the brush covers
+// the polygon's pixels and no others; and with the fill's bitmap in
+// WM_SENTINEL (D), whose pixels are those where the fill shows. Then the
+// fill's bitmap must have ink where the fill shows (the text lies under the
+// fill: the precondition, measured on the cause, pitfall 144), and A must
+// show that bitmap there, pixel for pixel; and A may differ from B only
+// where one of the two bitmaps has ink, so the grid, the bars behind the
+// price, the lines, the labels and the boxes over the fill are untouched.
+// The line and the candles draw no fill: their watermark shows on the
+// background, as before.
+static DWORD DibOf(COLORREF c) {
+    return ((DWORD)GetRValue(c) << 16) | ((DWORD)GetGValue(c) << 8) | GetBValue(c);
+}
+
+static int CheckWatermarkFill(void) {
+    static const char* const WF[] = { "wm_mountain_1h_1280x720", "wm_mountain_light_hover",
+        "wm_mountain_15m_alerts", "wm_mountain_dpi144_rsi", "wm_mountain_1m_dense",
+        "wm_mountain_desktop_3840x1600", "wm_mountain_light_desktop",
+        "wm_line_1h_1280x720", "wm_candles_1h_1280x720" };
+    int bad = 0;
+    for (int i = 0; i < (int)(sizeof(WF) / sizeof(WF[0])); i++) {
+        const Case* k = FindCase(WF[i]);
+        ChartStyle sty;
+        Surface s[6];   // A, B, C, D, the background's bitmap, the fill's
+        ZeroMemory(s, sizeof(s));
+        ZeroMemory(&sty, sizeof(sty));
+        BOOL ok = k && ChartStyleCreate(&sty, k->dpi, k->light ? &ChartThemeLight : NULL);
+        for (int j = 0; ok && j < 6; j++) ok = SurfaceOpen(&s[j], k->W, k->H);
+        Watermark w;
+        ZeroMemory(&w, sizeof(w));
+        if (ok) {
+            for (int j = 0; j < 4; j++) {
+                s_wmMode = j;
+                DrawCase(s[j].dc, k, &sty, NULL, NULL);
+            }
+            s_wmMode = 0;
+            ok = WatermarkOpen(&w, s[4].dc, k, &sty, 0);
+        }
+        if (!ok) {
+            printf("FAIL watermark fill %s: no scene\n", WF[i]);
+            bad++;
+        } else {
+            RECT all = { 0, 0, k->W, k->H };
+            BitBlt(s[4].dc, 0, 0, k->W, k->H, w.dc, 0, 0, SRCCOPY);
+            if (w.brFill) FillRect(s[5].dc, &all, w.brFill);
+            GdiFlush();
+            BOOL mtn = (k->type == CHART_MOUNTAIN);
+            DWORD bg = DibOf(sty.clr.bg), fill = DibOf(sty.clr.mountain), sent = DibOf(WM_SENTINEL);
+            int flatDiff = 0, shown = 0, inkUnder = 0, mism = 0, stray = 0, inkOverBg = 0;
+            for (int p = 0; p < k->W * k->H; p++) {
+                DWORD a = s[0].px[p] & 0xFFFFFF, bb = s[1].px[p] & 0xFFFFFF;
+                DWORD c = s[2].px[p] & 0xFFFFFF, d = s[3].px[p] & 0xFFFFFF;
+                DWORD wb = s[4].px[p] & 0xFFFFFF, wf = mtn ? (s[5].px[p] & 0xFFFFFF) : fill;
+                if (c != bb) flatDiff++;
+                if (d == sent) {
+                    shown++;
+                    if (wf != fill) inkUnder++;
+                    if (a != wf) mism++;
+                }
+                if (a != bb && wb == bg && wf == fill) stray++;
+                if (wb != bg && a == wb && d != sent) inkOverBg++;
+            }
+            BOOL pass;
+            if (mtn) {
+                pass = flatDiff == 0 && shown > 0 && inkUnder >= 200 && mism == 0 && stray == 0;
+                printf("%s watermark fill %s: the fill shows %d px, %d with ink, %d not the fill's bitmap;"
+                       " %d px off the text changed; flat vs solid %d px differ\n",
+                       pass ? "ok  " : "FAIL", WF[i], shown, inkUnder, mism, stray, flatDiff);
+            } else {
+                pass = flatDiff == 0 && shown == 0 && stray == 0 && inkOverBg >= 200;
+                printf("%s watermark fill %s (no fill): %d px of the watermark over the background,"
+                       " %d px off the text changed, %d px of fill\n",
+                       pass ? "ok  " : "FAIL", WF[i], inkOverBg, stray, shown);
+            }
+            if (!pass) bad++;
+            if (mtn && pass)
+                printf("     ink %06lX on the background %.3f:1, %06lX on the fill %.3f:1\n",
+                       (unsigned long)DibOf(w.inkBg), ContrastRatio(w.inkBg, sty.clr.bg),
+                       (unsigned long)DibOf(w.inkFill), ContrastRatio(w.inkFill, sty.clr.mountain));
+        }
+        WatermarkClose(&w);
+        for (int j = 0; j < 6; j++) SurfaceClose(&s[j]);
+        ChartStyleDestroy(&sty);
+    }
+    s_wmMode = 0;
+    return bad;
+}
+
 // --- Phase 49: draw time per type (--perf, not part of the run) ---
 // TickC's whole buffer, 6000 1m candles, all in view at 3840x1600 - the
 // densest frame the app can draw - once as a panel with the volume pane and
 // the averages, once as the desktop. The types are drawn round robin, so
 // the machine's state is shared; the median of 21 draws per type.
+// Phase 53: two more rows, the mountain with the app's watermark behind it
+// (the background's bitmap, the solid fill: the frame up to phase 52) and
+// through it (the fill's pattern brush too), each built once.
+#define PERF_ROWS (CHART_TYPE_COUNT + 2)
 static void PerfTypes(void) {
-    static const char* const NAME[CHART_TYPE_COUNT] = { "candles", "ohlc", "line", "mountain" };
+    static const char* const NAME[PERF_ROWS] = { "candles", "ohlc", "line", "mountain",
+                                                 "mountain, watermark behind", "mountain, watermark through" };
     for (int desk = 0; desk < 2; desk++) {
-        double ms[CHART_TYPE_COUNT][21];
+        double ms[PERF_ROWS][21];
         ChartStyle sty;
         Surface s;
         if (!ChartStyleCreate(&sty, 96, NULL) || !SurfaceOpen(&s, 3840, 1600)) { printf("perf: no surface\n"); return; }
         LARGE_INTEGER f;
         QueryPerformanceFrequency(&f);
+        Case km = { "perf", 3840, 1600, desk, MIN_MS, MAX_CANDLES, FALSE, 0, 0,
+                    desk ? 0.0 : 1.0, desk ? 0.0 : 1.0, -1, -1, FALSE, 96, FALSE, FALSE };
+        km.type = CHART_MOUNTAIN;
+        Watermark wmThrough, wmBehind;
+        if (!WatermarkOpen(&wmThrough, s.dc, &km, &sty, 0)) { printf("perf: no watermark\n"); return; }
+        wmBehind = wmThrough;
+        wmBehind.brFill = NULL;
         for (int r = -2; r < 21; r++) {
-            for (int t = 0; t < CHART_TYPE_COUNT; t++) {
-                Case k = { "perf", 3840, 1600, desk, MIN_MS, MAX_CANDLES, FALSE, 0, 0,
-                           desk ? 0.0 : 1.0, desk ? 0.0 : 1.0, -1, -1, FALSE, 96, FALSE, FALSE };
-                k.type = t;
+            for (int t = 0; t < PERF_ROWS; t++) {
+                Case k = km;
+                k.type = (t < CHART_TYPE_COUNT) ? t : CHART_MOUNTAIN;
+                s_wmCached = (t == CHART_TYPE_COUNT) ? &wmBehind : (t > CHART_TYPE_COUNT) ? &wmThrough : NULL;
                 LARGE_INTEGER a, b;
                 QueryPerformanceCounter(&a);
                 DrawCase(s.dc, &k, &sty, NULL, NULL);
@@ -2404,12 +2657,14 @@ static void PerfTypes(void) {
                 if (r >= 0) ms[t][r] = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
             }
         }
-        for (int t = 0; t < CHART_TYPE_COUNT; t++) {
+        s_wmCached = NULL;
+        WatermarkClose(&wmThrough);
+        for (int t = 0; t < PERF_ROWS; t++) {
             for (int i = 1; i < 21; i++)
                 for (int j = i; j > 0 && ms[t][j] < ms[t][j - 1]; j--) {
                     double tmp = ms[t][j]; ms[t][j] = ms[t][j - 1]; ms[t][j - 1] = tmp;
                 }
-            printf("perf %-7s 3840x1600, %d candles, %-8s median %.2f ms (min %.2f, max %.2f)\n",
+            printf("perf %-7s 3840x1600, %d candles, %-27s median %.2f ms (min %.2f, max %.2f)\n",
                    desk ? "desktop" : "panel", MAX_CANDLES, NAME[t], ms[t][10], ms[t][0], ms[t][20]);
         }
         SurfaceClose(&s);
@@ -2445,7 +2700,7 @@ int main(int argc, char** argv) {
                         CheckTimeAxisSmall() + CheckHoverTime() + CheckTimeForms() +
                         CheckGhostRank() + CheckGhostRow() + CheckLegendAlert() + CheckVolTag() +
                         CheckLevelLabels() + CheckChartTypes() + CheckDeskLine() + CheckBloomberg() +
-                        CheckPhase52();
+                        CheckPhase52() + CheckWatermarkFill();
     int fails = 0;
     for (int i = 0; i < NCASES; i++) {
         const Case* k = &CASES[i];
@@ -2514,6 +2769,6 @@ int main(int argc, char** argv) {
     else       printf("all %d cases passed\n", NCASES);
     if (contrastFails) printf("%d unit checks failed (contrast pairs, price floor, time axis, hover time, time forms,\n"
                               "ghost rank and row, legend alert, volume tag, level labels, chart types, bloomberg,\n"
-                              "view stats, statistics box, volume pane, time rows, axis font)\n", contrastFails);
+                              "view stats, statistics box, volume pane, time rows, axis font, watermark fill)\n", contrastFails);
     return (fails || contrastFails) ? 1 : 0;
 }
