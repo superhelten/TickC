@@ -90,8 +90,8 @@ Binance WebSocket  wss://stream.binance.com:443/stream?streams=
   behind a 32-byte event header. The spare room leaves space for order-book
   events later without a layout change.
 - **`#pragma pack(push, 8)` with explicit padding, not `pack(1)`.** Every field
-  keeps its natural alignment, which the `Interlocked*`, `ReadAcquire64` and
-  `WriteRelease64` calls on the sequence fields require (on ARM64 in
+  keeps its natural alignment, which the `Interlocked*` calls and the atomic
+  64-bit loads and stores on the sequence fields (below) require (on ARM64 in
   particular). `push, 8` makes the layout independent of a consumer's `/Zp`
   setting. `C_ASSERT` checks every size and the key offsets at compile time.
 - **The union is named (`u`).** An anonymous union raises C4201 under `/W4`.
@@ -244,6 +244,40 @@ C_ASSERT((FEED_SLOT_COUNT & (FEED_SLOT_COUNT - 1)) == 0);
 #endif
 ```
 
+### Atomic 64-bit access
+
+TickC builds as **32-bit x86** (`vcvars32`); the terminal may be x64. The
+layout is the same for both, because the shared structs hold only
+fixed-width integers: no pointers, no `size_t`, no `long`.
+
+On x86, `ReadAcquire64`, `ReadNoFence64` and `WriteRelease64` from `winnt.h`
+are plain accesses to a `volatile LONG64`, which the compiler splits into two
+32-bit moves: a reader could see half an old and half a new sequence number.
+`feed.h` therefore has its own three helpers, used for every 64-bit field that
+one side writes while the other reads (`FeedEvent.seq`, `writeSeq`,
+`heartbeatUs`, `sessionUs`, `FeedSnapshot.lock`):
+
+```c
+static __inline int64_t FeedLoadAcquire64(const volatile int64_t* p);
+static __inline int64_t FeedLoadNoFence64(const volatile int64_t* p);
+static __inline void    FeedStoreRelease64(volatile int64_t* p, int64_t v);
+```
+
+- x64 and ARM64: `ReadAcquire64`, `ReadNoFence64` and `WriteRelease64`,
+  which are single 64-bit accesses there.
+- x86: SSE2 `movq` (`_mm_loadl_epi64` / `_mm_storel_epi64`), which is atomic
+  for an 8-byte-aligned address, with `_ReadWriteBarrier()` after a load and
+  before a store (x86 keeps the order of loads and of stores; the barrier
+  stops the compiler). SSE2 is MSVC's default on x86.
+- Not `InterlockedCompareExchange64(p, 0, 0)` as a load: it writes, and a
+  reader may have mapped the region read-only.
+
+The writer's read-modify-writes (`InterlockedExchange64`,
+`InterlockedIncrement64`) exist on all three targets. The reader slots are
+32-bit `LONG`s, whose aligned accesses are atomic everywhere.
+`tests/feed_test.c` is built as x86, like TickC, so the stress test runs the
+x86 path.
+
 ### Names
 
 - Production mapping: `Local\TickC.Feed.1`. A reader's wake event is the
@@ -277,8 +311,8 @@ s = hdr->writeSeq                              // the writer's own; a plain read
 1. update the instrument's snapshot            // BEFORE the ring: see Resync
 2. InterlockedExchange64(&slot->seq, FEED_SEQ_BUSY)   // a full barrier
 3. copy the fields after seq (tsExchangeUs .. u)
-4. WriteRelease64(&slot->seq, s)               // the contents before the number
-5. WriteRelease64(&hdr->writeSeq, s + 1)
+4. FeedStoreRelease64(&slot->seq, s)               // the contents before the number
+5. FeedStoreRelease64(&hdr->writeSeq, s + 1)
 6. SetEvent on each reader slot with ready == 1
 ```
 
@@ -289,13 +323,13 @@ Status events have no instrument and skip step 1. The writer also stores
 
 ```
 want = r->next
-w = ReadAcquire64(&hdr->writeSeq)
+w = FeedLoadAcquire64(&hdr->writeSeq)
 if want >= w                   -> FEED_EMPTY
 if w - want > FEED_SLOT_COUNT  -> FEED_LAPPED
-a = ReadAcquire64(&slot->seq); if a != want -> FEED_LAPPED   // BUSY or a newer seq
+a = FeedLoadAcquire64(&slot->seq); if a != want -> FEED_LAPPED   // BUSY or a newer seq
 memcpy(ev, slot, FEED_SLOT_SIZE)
 FEED_LOAD_FENCE()
-if ReadNoFence64(&slot->seq) != want        -> FEED_LAPPED   // overwritten during the copy
+if FeedLoadNoFence64(&slot->seq) != want        -> FEED_LAPPED   // overwritten during the copy
 r->next = want + 1             -> FEED_OK
 ```
 
@@ -309,8 +343,8 @@ bar that fell into the hole. Filling it needs history, which is out of scope.
 - The writer: `InterlockedIncrement64(&lock)` (now odd), write `updatedUs`,
   `trade` or `kline`, then `InterlockedIncrement64(&lock)` (even again). Both
   increments are full barriers.
-- The reader: `a = ReadAcquire64(&lock)`; if `a` is odd, retry; copy;
-  `FEED_LOAD_FENCE()`; if `ReadNoFence64(&lock) != a`, retry. At most 64 tries
+- The reader: `a = FeedLoadAcquire64(&lock)`; if `a` is odd, retry; copy;
+  `FEED_LOAD_FENCE()`; if `FeedLoadNoFence64(&lock) != a`, retry. At most 64 tries
   with `YieldProcessor()` between them; the writer holds the lock for well
   under a microsecond. After 64 failed tries `FeedReadSnapshot` returns FALSE.
 
@@ -319,7 +353,7 @@ bar that fell into the hole. Filling it needs history, which is out of scope.
 On open, after `FEED_LAPPED` and on a new session:
 
 ```
-w = ReadAcquire64(&hdr->writeSeq)
+w = FeedLoadAcquire64(&hdr->writeSeq)
 read every snapshot and connState
 r->next = w
 ```
