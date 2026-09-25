@@ -192,3 +192,193 @@ static __inline int64_t FeedNowUs(void) {
     return (int64_t)(((((uint64_t)ft.dwHighDateTime) << 32) | ft.dwLowDateTime)
                      - 116444736000000000ULL) / 10;
 }
+
+// ---------------------------------------------------------------------------
+// The reader
+// ---------------------------------------------------------------------------
+
+enum { FEED_OK = 0, FEED_EMPTY, FEED_LAPPED, FEED_NEW_SESSION,
+       FEED_NO_WRITER, FEED_BAD_VERSION, FEED_NO_SLOT };
+
+typedef struct {
+    HANDLE         hMap;
+    FeedHeader*    hdr;        // written to only through a claimed slot
+    const uint8_t* ring;
+    int64_t        next;       // the next seq to read
+    int64_t        session;
+    int            slot;       // -1 = not registered for wake-ups
+    HANDLE         hWake;      // the slot's event, or NULL
+    HANDLE         hWriter;    // the writer process, for the wait
+    uint32_t       writerPid;
+} FeedReader;
+
+static __inline uint32_t FeedMagic(const FeedHeader* h) {
+    return (uint32_t)ReadAcquire((LONG const volatile*)(const volatile void*)&h->magic);
+}
+
+static __inline void FeedReopenWriter(FeedReader* r) {
+    if (r->hWriter) CloseHandle(r->hWriter);
+    r->writerPid = r->hdr->writerPid;
+    r->hWriter = OpenProcess(SYNCHRONIZE, FALSE, r->writerPid);
+}
+
+static __inline void FeedClose(FeedReader* r) {
+    // A slot is only ever claimed through a writable view, so a read-only
+    // reader never gets here with slot >= 0 and never writes.
+    if (r->slot >= 0 && r->hdr) {
+        FeedReaderSlot* s = &r->hdr->readers[r->slot];
+        InterlockedExchange(&s->ready, 0);
+        InterlockedCompareExchange(&s->owner, 0, (LONG)GetCurrentProcessId());
+    }
+    if (r->hWake)   CloseHandle(r->hWake);
+    if (r->hWriter) CloseHandle(r->hWriter);
+    if (r->hdr)     UnmapViewOfFile(r->hdr);
+    if (r->hMap)    CloseHandle(r->hMap);
+    memset(r, 0, sizeof(*r));
+    r->slot = -1;
+}
+
+// Opens the feed. wakeups: claim a reader slot and an event, so FeedWait
+// returns as soon as the writer publishes; without it the view is read-only
+// and FeedWait only watches the writer. The reader starts at the present.
+static __inline int FeedOpen(FeedReader* r, const wchar_t* name, BOOL wakeups) {
+    DWORD access = wakeups ? (FILE_MAP_READ | FILE_MAP_WRITE) : FILE_MAP_READ;
+    FeedHeader* h;
+    memset(r, 0, sizeof(*r));
+    r->slot = -1;
+    if (!name) name = FEED_MAPPING_NAME;
+    r->hMap = OpenFileMappingW(access, FALSE, name);
+    if (!r->hMap) return FEED_NO_WRITER;
+    h = (FeedHeader*)MapViewOfFile(r->hMap, access, 0, 0, FEED_MAPPING_SIZE);
+    if (!h) { FeedClose(r); return FEED_NO_WRITER; }
+    r->hdr  = h;
+    r->ring = (const uint8_t*)h + FEED_HEADER_SIZE;
+    if (FeedMagic(h) != FEED_MAGIC) { FeedClose(r); return FEED_NO_WRITER; }
+    if (h->versionMajor != FEED_VERSION_MAJOR || h->headerSize != FEED_HEADER_SIZE ||
+        h->slotSize != FEED_SLOT_SIZE || h->slotCount != FEED_SLOT_COUNT) {
+        FeedClose(r);
+        return FEED_BAD_VERSION;
+    }
+    r->session = FeedLoadAcquire64(&h->sessionUs);
+    r->next    = FeedLoadAcquire64(&h->writeSeq);
+    FeedReopenWriter(r);
+    if (wakeups) {
+        LONG pid = (LONG)GetCurrentProcessId();
+        for (int i = 0; i < FEED_MAX_READERS; ++i) {
+            wchar_t evName[96];
+            if (InterlockedCompareExchange(&h->readers[i].owner, pid, 0) != 0) continue;
+            swprintf_s(evName, 96, L"%s.R%d", name, i);
+            r->hWake = CreateEventW(NULL, FALSE, FALSE, evName);
+            if (!r->hWake) { InterlockedExchange(&h->readers[i].owner, 0); break; }
+            r->slot = i;
+            InterlockedExchange(&h->readers[i].ready, 1);
+            break;
+        }
+        if (r->slot < 0) { FeedClose(r); return FEED_NO_SLOT; }
+    }
+    return FEED_OK;
+}
+
+// Start at the oldest event still in the ring, not at the present.
+static __inline void FeedRewind(FeedReader* r) {
+    int64_t w = FeedLoadAcquire64(&r->hdr->writeSeq);
+    r->next = (w > (int64_t)FEED_SLOT_COUNT) ? w - (int64_t)FEED_SLOT_COUNT : 1;
+}
+
+// The next event. FEED_LAPPED: the writer overtook this reader; *lost events
+// were skipped and the reader is now at the present - read the snapshots.
+// FEED_NEW_SESSION: the writer restarted; the reader is at the present -
+// read the snapshots. The snapshots must be read after this call returns,
+// never before: everything below the new position is in them.
+static __inline int FeedNext(FeedReader* r, FeedEvent* ev, int64_t* lost) {
+    const FeedHeader* h = r->hdr;
+    const FeedEvent* slot;
+    int64_t want, w, sess;
+    if (lost) *lost = 0;
+    if (FeedMagic(h) != FEED_MAGIC) return FEED_NO_WRITER;
+    sess = FeedLoadAcquire64(&h->sessionUs);
+    if (sess != r->session) {
+        r->session = sess;
+        r->next = FeedLoadAcquire64(&h->writeSeq);
+        FeedReopenWriter(r);
+        return FEED_NEW_SESSION;
+    }
+    want = r->next;
+    w = FeedLoadAcquire64(&h->writeSeq);
+    if (want >= w) return FEED_EMPTY;
+    if (w - want > (int64_t)FEED_SLOT_COUNT) goto lapped;
+    slot = (const FeedEvent*)(r->ring + FEED_SLOT_INDEX(want) * FEED_SLOT_SIZE);
+    if (FeedLoadAcquire64(&slot->seq) != want) goto lapped;     // BUSY or a newer seq
+    memcpy(ev, (const void*)slot, FEED_SLOT_SIZE);
+    FEED_LOAD_FENCE();
+    if (FeedLoadNoFence64(&slot->seq) != want) goto lapped;    // overwritten during the copy
+    ev->seq = want;   // the copy's own seq may be torn; the checks above are what count
+    r->next = want + 1;
+    return FEED_OK;
+lapped:
+    w = FeedLoadAcquire64(&h->writeSeq);
+    if (lost) *lost = w - want;
+    r->next = w;
+    return FEED_LAPPED;
+}
+
+// The latest trade and kline of one instrument. FALSE when the index is out
+// of range or the writer held the lock through 64 tries.
+static __inline BOOL FeedReadSnapshot(const FeedReader* r, unsigned instrument, FeedSnapshot* out) {
+    const FeedSnapshot* s;
+    if (instrument >= r->hdr->instrumentCount || instrument >= FEED_MAX_INSTRUMENTS) return FALSE;
+    s = &r->hdr->snapshots[instrument];
+    for (int t = 0; t < 64; ++t) {
+        int64_t a = FeedLoadAcquire64(&s->lock);
+        if (!(a & 1)) {
+            memcpy(out, (const void*)s, sizeof(*out));
+            FEED_LOAD_FENCE();
+            if (FeedLoadNoFence64(&s->lock) == a) { out->lock = a; return TRUE; }
+        }
+        YieldProcessor();
+    }
+    return FALSE;
+}
+
+static __inline BOOL FeedWriterAlive(const FeedReader* r) {
+    if (FeedMagic(r->hdr) != FEED_MAGIC) return FALSE;
+    return FeedNowUs() - FeedLoadAcquire64(&r->hdr->heartbeatUs) <= FEED_HEARTBEAT_STALE_US;
+}
+
+// Waits up to ms for data. WAIT_OBJECT_0: the writer published (registered
+// readers only). WAIT_OBJECT_0 + 1: the writer exited, or its heartbeat is
+// stale. WAIT_TIMEOUT: nothing happened.
+static __inline DWORD FeedWait(FeedReader* r, DWORD ms) {
+    HANDLE hs[2];
+    DWORD n = 0, x;
+    if (r->hWake)   hs[n++] = r->hWake;
+    if (r->hWriter) hs[n++] = r->hWriter;
+    if (n == 0) {
+        Sleep(ms);
+        x = WAIT_TIMEOUT;
+    } else {
+        x = WaitForMultipleObjects(n, hs, FALSE, ms);
+        if (r->hWriter && x == WAIT_OBJECT_0 + n - 1) return WAIT_OBJECT_0 + 1;
+    }
+    if (x == WAIT_TIMEOUT && !FeedWriterAlive(r)) return WAIT_OBJECT_0 + 1;
+    return x;
+}
+
+// ---------------------------------------------------------------------------
+// The writer (feed.c; TickC and the tests only)
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    HANDLE      hMap;
+    FeedHeader* hdr;
+    uint8_t*    ring;
+    HANDLE      hWake[FEED_MAX_READERS];    // the readers' events, opened lazily
+    LONG        wakePid[FEED_MAX_READERS];  // the owner each handle was opened for
+    wchar_t     name[64];
+} FeedWriter;
+
+BOOL FeedWriterOpen(FeedWriter* w, const wchar_t* name, const FeedInstrument* ins, unsigned count);
+void FeedPublish(FeedWriter* w, const FeedEvent* ev);
+void FeedSetConn(FeedWriter* w, int state, int32_t error, int64_t retryAtUs);
+void FeedHeartbeat(FeedWriter* w);
+void FeedWriterClose(FeedWriter* w);
