@@ -573,10 +573,10 @@ Kline (`data`):
   WebSocket, the request and the connect handle is open, under the feed's
   lock, in that order (child before parent), to cancel a pending call; waits
   for `FeedThread`; stops the heartbeat timer; publishes `DISCONNECTED`; and
-  unmaps. Task 1 measured that closing a handle from another thread cancels
-  a pending call within milliseconds: about 1 s for a receive, and about
-  47 ms during a connect. It never waits longer than the network thread's
-  existing bound (10 s).
+  unmaps. Closing a handle from another thread cancels a pending call
+  within milliseconds: Task 1 measured about 1 s for a receive, and Task 6
+  measured about 47 ms during a connect. It never waits longer than the
+  network thread's existing bound (10 s).
 - `FeedThread` reads `hSession` under the same lock as `HttpGet`, because
   `WinMain` closes the session under that lock at exit.
 
