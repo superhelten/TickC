@@ -47,15 +47,22 @@ BOOL FeedWriterOpen(FeedWriter* w, const wchar_t* name, const FeedInstrument* in
     memcpy(h->instruments, ins, count * sizeof(FeedInstrument));
     for (unsigned i = 0; i < FEED_MAX_INSTRUMENTS; ++i) {
         FeedSnapshot* s = &h->snapshots[i];
+        FeedTicker24Snap* t = &h->tickers24[i];
         // A writer that died between FeedPublish's two increments left the
         // lock odd; even it first so the pair below lands back on even,
-        // not inverted for the rest of this session.
+        // not inverted for the rest of this session. The same for the 24 h
+        // table (phase 55), which a 1.0 writer left zero: even already.
         if (FeedLoadNoFence64(&s->lock) & 1) InterlockedIncrement64((LONG64 volatile*)&s->lock);
         InterlockedIncrement64((LONG64 volatile*)&s->lock);
         s->updatedUs = 0;
         memset(&s->trade, 0, sizeof(s->trade));
         memset(&s->kline, 0, sizeof(s->kline));
         InterlockedIncrement64((LONG64 volatile*)&s->lock);
+        if (FeedLoadNoFence64(&t->lock) & 1) InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        t->updatedUs = 0;
+        memset(&t->t, 0, sizeof(t->t));
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
     }
     h->writerPid = GetCurrentProcessId();
     InterlockedExchange(&h->connState, 0);
@@ -103,6 +110,15 @@ void FeedPublish(FeedWriter* w, const FeedEvent* ev) {
         if (ev->type == FEED_TRADE) s->trade = ev->u.trade;
         else                        s->kline = ev->u.kline;
         InterlockedIncrement64((LONG64 volatile*)&s->lock);   // even again
+    }
+    else if (ev->instrument < h->instrumentCount && ev->type == FEED_TICKER24) {
+        // 1.1 (phase 55): the 24 h table, before the ring for the same
+        // reason as the snapshot above.
+        FeedTicker24Snap* t = &h->tickers24[ev->instrument];
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        t->updatedUs = ev->tsRecvUs;
+        t->t = ev->u.ticker24;
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
     }
     seq  = FeedLoadNoFence64(&h->writeSeq);   // only this thread writes it
     slot = FeedSlot(w, seq);

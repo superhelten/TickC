@@ -23,7 +23,7 @@
 // reader) call the CRT's invalid-parameter handler, which ends the process.
 #define FEED_MAGIC             0x46434B54u              // "TKCF"
 #define FEED_VERSION_MAJOR     1
-#define FEED_VERSION_MINOR     0
+#define FEED_VERSION_MINOR     1  // 1.1 (phase 55): FEED_TICKER24 and tickers24
 #define FEED_HEADER_SIZE       4096u
 #define FEED_SLOT_SIZE         128u
 #define FEED_SLOT_COUNT        32768u                   // a power of two
@@ -38,7 +38,8 @@
 // (phase 54). See FeedRewind.
 #define FEED_REWIND_MARGIN     1024
 
-enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3 };       // FeedEvent.type
+enum { FEED_TRADE = 1, FEED_KLINE = 2, FEED_STATUS = 3,          // FeedEvent.type
+       FEED_TICKER24 = 4 };   // 1.1 (phase 55); a 1.0 reader skips it
 enum { FEED_SRC_BINANCE_SPOT = 1 };                             // FeedEvent.source
 enum { FEED_SIDE_BUY = 1, FEED_SIDE_SELL = 2 };                 // the aggressor
 enum { FEED_ST_CONNECTING = 1, FEED_ST_CONNECTED = 2, FEED_ST_DISCONNECTED = 3 };
@@ -76,6 +77,15 @@ typedef struct {                  // 16 bytes; FeedEvent.instrument = FEED_NO_IN
     int64_t  retryAtUs;           // next attempt while DISCONNECTED, else 0
 } FeedStatus;
 
+// 1.1 (phase 55): Binance's rolling 24-hour statistics for one symbol (the
+// @miniTicker stream, about one a second). Not the UTC day: the window ends
+// at the event's time and starts 24 hours earlier.
+typedef struct {                  // 48 bytes
+    int64_t open, high, low, close;    // 10^priceExp
+    int64_t volume;               // base asset, 10^qtyExp
+    int64_t quoteVolume;          // quote asset, 10^priceExp
+} FeedTicker24;
+
 typedef struct {                  // 128 bytes: one ring slot
     volatile int64_t seq;         //   0  its sequence number; FEED_SEQ_BUSY while written
     int64_t  tsExchangeUs;        //   8  the exchange's event time
@@ -88,6 +98,7 @@ typedef struct {                  // 128 bytes: one ring slot
         FeedTrade  trade;
         FeedKline  kline;
         FeedStatus status;
+        FeedTicker24 ticker24;
         uint8_t    raw[96];
     } u;
 } FeedEvent;
@@ -116,6 +127,14 @@ typedef struct {                  // 128 bytes: the latest per instrument
     uint8_t   pad[16];
 } FeedSnapshot;
 
+// 1.1 (phase 55): the latest 24-hour statistics per instrument, seqlocked
+// like FeedSnapshot. updatedUs 0 = none yet.
+typedef struct {                  // 64 bytes
+    volatile int64_t lock;        // seqlock: odd while the writer is in it
+    int64_t      updatedUs;
+    FeedTicker24 t;
+} FeedTicker24Snap;
+
 typedef struct {                  // 4096 bytes: page 0 of the mapping
     // Line 0: identity, written once per writer session. magic is stored last.
     volatile uint32_t magic;      //    0
@@ -137,7 +156,7 @@ typedef struct {                  // 4096 bytes: page 0 of the mapping
     FeedReaderSlot readers[FEED_MAX_READERS];         //  128
     FeedInstrument instruments[FEED_MAX_INSTRUMENTS]; //  256
     FeedSnapshot   snapshots[FEED_MAX_INSTRUMENTS];   // 1024
-    uint8_t  reserved[1024];      // 3072
+    FeedTicker24Snap tickers24[FEED_MAX_INSTRUMENTS]; // 3072; unused in 1.0
 } FeedHeader;
 
 #pragma pack(pop)
@@ -146,6 +165,8 @@ C_ASSERT(sizeof(FeedTrade) == 32);      C_ASSERT(sizeof(FeedKline) == 64);
 C_ASSERT(sizeof(FeedStatus) == 16);     C_ASSERT(sizeof(FeedEvent) == FEED_SLOT_SIZE);
 C_ASSERT(sizeof(FeedInstrument) == 48); C_ASSERT(sizeof(FeedReaderSlot) == 16);
 C_ASSERT(sizeof(FeedSnapshot) == 128);  C_ASSERT(sizeof(FeedHeader) == FEED_HEADER_SIZE);
+C_ASSERT(sizeof(FeedTicker24) == 48);   C_ASSERT(sizeof(FeedTicker24Snap) == 64);
+C_ASSERT(offsetof(FeedHeader, tickers24) == 3072);
 C_ASSERT(offsetof(FeedEvent, u) == 32);
 C_ASSERT(offsetof(FeedHeader, sessionUs) == 32);
 C_ASSERT(offsetof(FeedHeader, writeSeq) == 64);
@@ -387,22 +408,41 @@ lapped:
     return FEED_LAPPED;
 }
 
+// The seqlock read both snapshot tables use: copy n bytes from src while the
+// lock is even and unchanged across the copy. FALSE if the writer held the
+// lock through 64 tries. The caller's copy of the lock field is whatever the
+// copy saw; it carries no meaning.
+static __inline BOOL FeedSeqlockCopy(const volatile int64_t* lock, const void* src, void* dst, size_t n) {
+    for (int t = 0; t < 64; ++t) {
+        int64_t a = FeedLoadAcquire64(lock);
+        if (!(a & 1)) {
+            memcpy(dst, src, n);
+            FEED_LOAD_FENCE();
+            if (FeedLoadNoFence64(lock) == a) return TRUE;
+        }
+        YieldProcessor();
+    }
+    return FALSE;
+}
+
 // The latest trade and kline of one instrument. FALSE when the index is out
 // of range or the writer held the lock through 64 tries.
 static __inline BOOL FeedReadSnapshot(const FeedReader* r, unsigned instrument, FeedSnapshot* out) {
     const FeedSnapshot* s;
     if (instrument >= r->hdr->instrumentCount || instrument >= FEED_MAX_INSTRUMENTS) return FALSE;
     s = &r->hdr->snapshots[instrument];
-    for (int t = 0; t < 64; ++t) {
-        int64_t a = FeedLoadAcquire64(&s->lock);
-        if (!(a & 1)) {
-            memcpy(out, (const void*)s, sizeof(*out));
-            FEED_LOAD_FENCE();
-            if (FeedLoadNoFence64(&s->lock) == a) { out->lock = a; return TRUE; }
-        }
-        YieldProcessor();
-    }
-    return FALSE;
+    return FeedSeqlockCopy(&s->lock, (const void*)s, out, sizeof(*out));
+}
+
+// 1.1 (phase 55): the latest 24-hour statistics of one instrument. FALSE when
+// the writer is 1.0 - tickers24 is unused space there, never written - or
+// the index is out of range, or the writer held the lock through 64 tries.
+static __inline BOOL FeedReadTicker24(const FeedReader* r, unsigned instrument, FeedTicker24Snap* out) {
+    const FeedTicker24Snap* s;
+    if (r->hdr->versionMinor < 1) return FALSE;
+    if (instrument >= r->hdr->instrumentCount || instrument >= FEED_MAX_INSTRUMENTS) return FALSE;
+    s = &r->hdr->tickers24[instrument];
+    return FeedSeqlockCopy(&s->lock, (const void*)s, out, sizeof(*out));
 }
 
 // Right after the machine wakes from sleep, the heartbeat timer has not

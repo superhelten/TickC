@@ -255,6 +255,80 @@ static void TestReadOnlyClose(void) {   // Review Focus 4
     FeedWriterClose(&w);
 }
 
+// --- Phase 55: feed 1.1, the 24 h statistics -----------------------------
+
+static FeedEvent MakeTicker(unsigned ins, int64_t n) {
+    FeedEvent ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = FEED_TICKER24; ev.instrument = (uint16_t)ins; ev.source = FEED_SRC_BINANCE_SPOT;
+    ev.tsExchangeUs = n; ev.tsRecvUs = n + 1;
+    ev.u.ticker24.open = n; ev.u.ticker24.high = n + 5; ev.u.ticker24.low = n - 5;
+    ev.u.ticker24.close = n + 1; ev.u.ticker24.volume = 3 * n; ev.u.ticker24.quoteVolume = 7 * n;
+    return ev;
+}
+
+static void TestLayout11(void) {
+    CHECK(FEED_VERSION_MAJOR == 1 && FEED_VERSION_MINOR == 1, "feed 1.1");
+    CHECK(sizeof(FeedTicker24) == 48 && sizeof(FeedTicker24Snap) == 64, "the 24 h sizes");
+    CHECK(offsetof(FeedHeader, tickers24) == 3072 && sizeof(FeedHeader) == 4096, "tickers24 fills the old reserved space");
+    CHECK(offsetof(FeedEvent, u) + sizeof(FeedTicker24) <= FEED_SLOT_SIZE, "the payload fits the slot");
+}
+
+static void TestTicker24Snapshot(void) {
+    FeedWriter w; FeedReader r; FeedEvent ev; FeedTicker24Snap t; int64_t lost;
+    const wchar_t* name = TestName(L"t24");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedOpen(&r, name, FALSE);
+    CHECK(r.hdr->versionMinor == 1, "the writer says 1.1");
+    CHECK(FeedReadTicker24(&r, 2, &t) && t.updatedUs == 0, "none yet");
+    FeedEvent e = MakeTicker(2, 1000);
+    FeedPublish(&w, &e);
+    CHECK(FeedReadTicker24(&r, 2, &t) && t.updatedUs == 1001 && t.t.open == 1000 && t.t.high == 1005 &&
+          t.t.low == 995 && t.t.close == 1001 && t.t.volume == 3000 && t.t.quoteVolume == 7000,
+          "the snapshot holds the published statistics");
+    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.type == FEED_TICKER24 && ev.instrument == 2 &&
+          memcmp(&ev.u.ticker24, &e.u.ticker24, sizeof(FeedTicker24)) == 0, "and the ring carries the event");
+    CHECK(!FeedReadTicker24(&r, 4, &t) && !FeedReadTicker24(&r, 99, &t), "an instrument out of range: FALSE");
+    FeedSnapshot s;
+    CHECK(FeedReadSnapshot(&r, 2, &s) && s.trade.tradeId == 0 && s.kline.openTimeUs == 0,
+          "the 24 h event leaves the trade and kline snapshot alone");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
+static void TestTicker24RestartOddLock(void) {   // Review Focus 3
+    FeedWriter w; FeedReader r; FeedTicker24Snap t;
+    const wchar_t* name = TestName(L"t24odd");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedOpen(&r, name, FALSE);
+    FeedEvent e = MakeTicker(1, 50);
+    FeedPublish(&w, &e);
+    InterlockedIncrement64((LONG64 volatile*)&w.hdr->tickers24[1].lock);   // odd: died mid-publish
+    UnmapViewOfFile(w.hdr); CloseHandle(w.hMap);
+    FeedWriter w2;
+    CHECK(FeedWriterOpen(&w2, name, TEST_INS, 4), "a second writer takes the mapping over");
+    CHECK((w2.hdr->tickers24[1].lock & 1) == 0, "the restart leaves the 24 h lock even");
+    CHECK(FeedReadTicker24(&r, 1, &t) && t.updatedUs == 0, "and clears the old session's statistics");
+    FeedEvent e2 = MakeTicker(1, 60);
+    FeedPublish(&w2, &e2);
+    CHECK(FeedReadTicker24(&r, 1, &t) && t.t.open == 60, "the next statistics read back cleanly");
+    FeedClose(&r);
+    FeedWriterClose(&w2);
+}
+
+static void TestTicker24OldWriter(void) {   // Review Focus 2
+    FeedWriter w; FeedReader r; FeedTicker24Snap t;
+    const wchar_t* name = TestName(L"t24old");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedEvent e = MakeTicker(0, 5);
+    FeedPublish(&w, &e);
+    w.hdr->versionMinor = 0;   // a 1.0 writer: tickers24 is reserved space it never wrote
+    FeedOpen(&r, name, FALSE);
+    CHECK(!FeedReadTicker24(&r, 0, &t), "against a 1.0 writer FeedReadTicker24 returns FALSE");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
 static void TestSlotsAndWake(void) {
     FeedWriter w; FeedReader rs[FEED_MAX_READERS + 1];
     const wchar_t* name = TestName(L"slot");
@@ -698,6 +772,10 @@ int wmain(int argc, wchar_t** argv) {
     TestRestartOddLock();
     TestReaderBeforeWriter();
     TestReadOnlyClose();
+    TestLayout11();
+    TestTicker24Snapshot();
+    TestTicker24RestartOddLock();
+    TestTicker24OldWriter();
     TestSlotsAndWake();
     TestStatusAndHeartbeat();
     TestStress();
