@@ -14,6 +14,7 @@
 #include <limits.h>
 
 #include "chart.h"
+#include "feed.h"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -576,6 +577,13 @@ static int g_embedFails = 0;
 // Released when the message loop ends, not at exit - see WinMain.
 static HANDLE  g_mainMutex = NULL;
 static wchar_t g_mainTitle[48] = L"TickC";
+
+// The feed's mapping (phase 54): Local\TickC.Feed.1, and in the test build a
+// name of its own per exe path, like the mutex - a test run never writes
+// into the feed of the TickC the user runs. Set by MainInstanceNames.
+static wchar_t g_feedName[64] = FEED_MAPPING_NAME;
+// The feed runs (FeedStart succeeded). Main instance only.
+static BOOL    g_feedOn = FALSE;
 
 // The panel's lengths at its dpi (phase 37). Every fixed length in the
 // header, the buttons, the toolbar and the overlay is given at 96 dpi and
@@ -7167,6 +7175,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             //        checked where desktop mode cannot run (the hidden
             //        desktop has no WorkerW).
             if (wParam == 127) return lParam ? g_Ctx.chartTypeDesk : g_Ctx.chartType;
+            //   128-131  READING (phase 54): the feed - events published,
+            //        messages dropped, the connection's state (0 = no feed)
+            //        and the connections made. See FeedGetStats.
+            if (wParam >= 128 && wParam <= 131) {
+                FeedStats fs;
+                FeedGetStats(&fs);
+                if (wParam == 128) return (LRESULT)fs.published;
+                if (wParam == 129) return (LRESULT)fs.dropped;
+                if (wParam == 130) return (LRESULT)fs.state;
+                return (LRESULT)fs.connects;
+            }
             return 0;
 #endif
 
@@ -7270,6 +7289,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     return 0;
 }
 
+// The feed's instruments (phase 54): the symbols TickC has, in the same
+// order, so an instrument index is a SYMBOLS index. ASCII by construction.
+static unsigned BuildFeedInstruments(FeedInstrument* out) {
+    unsigned n = 0;
+    memset(out, 0, sizeof(FeedInstrument) * FEED_MAX_INSTRUMENTS);
+    for (int i = 0; i < SYMBOL_COUNT && n < FEED_MAX_INSTRUMENTS; ++i, ++n) {
+        for (int k = 0; SYMBOLS[i].api[k] && k < 15; ++k)   out[n].symbol[k] = (char)SYMBOLS[i].api[k];
+        for (int k = 0; SYMBOLS[i].label[k] && k < 15; ++k) out[n].label[k]  = (char)SYMBOLS[i].label[k];
+        out[n].source     = FEED_SRC_BINANCE_SPOT;
+        out[n].assetClass = FEED_ASSET_CRYPTO;
+        out[n].priceExp   = -8;
+        out[n].qtyExp     = -8;
+    }
+    return n;
+}
+
 // The main instance's mutex and window title (phase 46). "Local\": one per
 // sign-in session, as the registry and the tray are. The test build has its
 // own names, as it has its own registry key: a test run must never hand over
@@ -7287,6 +7322,7 @@ static void MainInstanceNames(wchar_t* mutexName, size_t cch) {
     }
     swprintf_s(mutexName, cch, L"Local\\TickerTest.MainInstance.%08X", h);
     swprintf_s(g_mainTitle, 48, L"TickerTest %08X", h);
+    swprintf_s(g_feedName, 64, L"Local\\TickerTest.Feed.1.%08X", h);
 #else
     wcscpy_s(mutexName, cch, L"Local\\TickC.MainInstance");
     wcscpy_s(g_mainTitle, 48, L"TickC");
@@ -7557,6 +7593,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     InitializeCriticalSection(&g_Ctx.lock);
     g_Ctx.hStopEvent = CreateEventW(NULL, TRUE,  FALSE, NULL);  // manual reset
     g_Ctx.hWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);  // auto reset
+
+    // The feed (phase 54): the main instance publishes Binance's stream into
+    // shared memory for the terminal; a duplicate never does - the ring has
+    // one writer. After the lock: FeedThread reads hSession under it. If the
+    // mapping cannot be made, TickC runs as before, without a feed. In the
+    // test build with fixtures the stream is replayed from ws_stream.jsonl,
+    // and a missing file never falls back to the network.
+    if (!g_isDuplicate) {
+        FeedInstrument ins[FEED_MAX_INSTRUMENTS];
+        FeedConfig fc;
+        memset(&fc, 0, sizeof(fc));
+        fc.mappingName     = g_feedName;
+        fc.pSession        = &g_Ctx.hSession;
+        fc.sessionLock     = &g_Ctx.lock;
+        fc.backoffMs       = NetBackoffMs;
+        fc.instruments     = ins;
+        fc.instrumentCount = BuildFeedInstruments(ins);
+#ifdef TICKER_PROBE
+        wchar_t replay[MAX_PATH];
+        if (g_fixtureDir[0]) {
+            swprintf_s(replay, MAX_PATH, L"%s\\ws_stream.jsonl", g_fixtureDir);
+            fc.replayFile = replay;
+        }
+#endif
+        g_feedOn = FeedStart(&fc);
+    }
+
     g_Ctx.hThread    = CreateThread(NULL, 0, NetworkThread, &g_Ctx, 0, NULL);
 
     // A duplicate is started from a click and must show itself at once. So,
@@ -7574,6 +7637,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+
+    // The feed stops before the main instance's name is let go (phase 54): a
+    // start in between would take the name and the mapping while this
+    // process's FeedThread still publishes - two writers. Closing its socket
+    // ends the receive at once, so this takes milliseconds, not the network
+    // thread's 10 s.
+    FeedStop();
 
     // The main instance's name is let go here, not at exit (phase 46): the
     // wait for the worker below can take seconds, and a start in that time
