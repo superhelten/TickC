@@ -603,6 +603,39 @@ static void TestParseRejects(void) {
     CHECK(Parse("", &ev) == FEED_PARSE_BAD, "an empty message");
 }
 
+static void TestParseTicker24(void) {   // Review Focus 5
+    FeedEvent ev;
+    const char* m = "{\"stream\":\"btcusdt@miniTicker\",\"data\":{\"e\":\"24hrMiniTicker\",\"E\":1727222400123,"
+                    "\"s\":\"BTCUSDT\",\"c\":\"64123.45000000\",\"o\":\"63000.00000000\",\"h\":\"64500.00000000\","
+                    "\"l\":\"62800.10000000\",\"v\":\"12345.67800000\",\"q\":\"789012345.67000000\"}}";
+    CHECK(Parse(m, &ev) == FEED_PARSE_OK, "a miniTicker parses");
+    CHECK(ev.type == FEED_TICKER24 && ev.instrument == 0 && ev.tsExchangeUs == 1727222400123000LL, "type, instrument, E in microseconds");
+    CHECK(ev.u.ticker24.close == 6412345000000LL && ev.u.ticker24.open == 6300000000000LL &&
+          ev.u.ticker24.high == 6450000000000LL && ev.u.ticker24.low == 6280010000000LL, "OHLC exact");
+    CHECK(ev.u.ticker24.volume == 1234567800000LL && ev.u.ticker24.quoteVolume == 78901234567000000LL, "volumes exact");
+    const char* r = "{\"data\":{\"q\":\"2\",\"v\":\"1\",\"l\":\"1\",\"h\":\"3\",\"o\":\"1\",\"c\":\"2\",\"X\":7,"
+                    "\"s\":\"SOLUSDT\",\"E\":5,\"e\":\"24hrMiniTicker\"},\"stream\":\"solusdt@miniTicker\"}";
+    CHECK(Parse(r, &ev) == FEED_PARSE_OK && ev.instrument == 2 && ev.u.ticker24.high == 300000000LL &&
+          ev.tsExchangeUs == 5000, "keys in another order, with an unknown field, parse the same");
+    const char* bad = "{\"stream\":\"btcusdt@miniTicker\",\"data\":{\"e\":\"24hrMiniTicker\",\"E\":1,\"s\":\"BTCUSDT\","
+                      "\"c\":\"1\",\"o\":\"1\",\"h\":\"1\",\"l\":\"1\",\"v\":\"1\"}}";
+    CHECK(Parse(bad, &ev) == FEED_PARSE_BAD, "a miniTicker without q is dropped");
+}
+
+static void TestStreamPath(void) {   // Review Focus 4
+    wchar_t out[FEED_PATH_CCH];
+    int n = FeedStreamPath(TEST_INS, 1, out, FEED_PATH_CCH);
+    CHECK(n > 0 && wcscmp(out, L"/stream?streams=btcusdt@trade/btcusdt@kline_1m/btcusdt@miniTicker") == 0,
+          "one instrument: trade, kline and miniTicker");
+    FeedInstrument big[FEED_MAX_INSTRUMENTS];
+    memset(big, 0, sizeof(big));
+    for (int i = 0; i < FEED_MAX_INSTRUMENTS; ++i) memcpy(big[i].symbol, "ABCDEFGHIJKLMNO", 15);
+    n = FeedStreamPath(big, FEED_MAX_INSTRUMENTS, out, FEED_PATH_CCH);
+    CHECK(n > 0 && n < FEED_PATH_CCH && wcsstr(out, L"abcdefghijklmno@miniTicker") != NULL,
+          "16 instruments of 15 characters fit the buffer");
+    CHECK(FeedStreamPath(big, FEED_MAX_INSTRUMENTS, out, 100) == -1, "a buffer too small: -1, no abort");
+}
+
 // Every line of the recorded stream parses, except the three bad ones at the end.
 static void FixturePath(wchar_t* out) {
     wchar_t* slash;
@@ -615,7 +648,7 @@ static void TestParseFixture(void) {
     wchar_t path[MAX_PATH];
     FILE* f;
     static char line[70000];
-    int good = 0, bad = 0, unknown = 0, lines = 0, closed = 0;
+    int good = 0, bad = 0, unknown = 0, lines = 0, closed = 0, tickers = 0;
     FixturePath(path);
     CHECK(_wfopen_s(&f, path, L"rb") == 0, "the fixture opens");
     if (!f) return;
@@ -626,14 +659,20 @@ static void TestParseFixture(void) {
         if (!n) continue;
         lines++;
         int rc = FeedParseMessage(line, n, TEST_INS, 4, 1, &ev);
-        if (rc == FEED_PARSE_OK) { good++; if (ev.type == FEED_KLINE && (ev.flags & FEED_KLINE_CLOSED)) closed++; }
+        if (rc == FEED_PARSE_OK) {
+            good++;
+            if (ev.type == FEED_KLINE && (ev.flags & FEED_KLINE_CLOSED)) closed++;
+            if (ev.type == FEED_TICKER24) tickers++;
+        }
         else if (rc == FEED_PARSE_UNKNOWN) unknown++;
         else bad++;
     }
     fclose(f);
-    printf("fixture: %d lines, %d good, %d unknown, %d bad, %d closed bars\n", lines, good, unknown, bad, closed);
+    printf("fixture: %d lines, %d good, %d unknown, %d bad, %d closed bars, %d tickers\n",
+           lines, good, unknown, bad, closed, tickers);
     CHECK(good == lines - 3 && unknown == 1 && bad == 2, "every recorded line parses; the three bad ones do not");
     CHECK(closed >= 4, "the recording holds a closed bar per symbol");
+    CHECK(tickers >= 4, "the recording holds 24 h statistics for every symbol");
 }
 
 // --- Task 6 --------------------------------------------------------------
@@ -653,7 +692,7 @@ static void TestReplay(void) {
     FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost;
     wchar_t path[MAX_PATH];
     const wchar_t* name = TestName(L"replay");
-    int good = FixtureGood(), trades = 0, klines = 0, status = 0, rc;
+    int good = FixtureGood(), trades = 0, klines = 0, tickers = 0, status = 0, rc;
     FixturePath(path);
     memset(&cfg, 0, sizeof(cfg));
     cfg.mappingName = name; cfg.replayFile = path; cfg.backoffMs = TestBackoff;
@@ -666,9 +705,11 @@ static void TestReplay(void) {
     CHECK(FeedOpen(&r, name, FALSE) == FEED_OK, "a reader opens the feed");
     FeedRewind(&r);
     while ((rc = FeedNext(&r, &ev, &lost)) == FEED_OK) {
-        if (ev.type == FEED_TRADE) trades++; else if (ev.type == FEED_KLINE) klines++; else status++;
+        if (ev.type == FEED_TRADE) trades++; else if (ev.type == FEED_KLINE) klines++;
+        else if (ev.type == FEED_TICKER24) tickers++; else status++;
     }
-    CHECK(rc == FEED_EMPTY && trades + klines == good && status == 2, "the ring: every event, CONNECTING and CONNECTED");
+    CHECK(rc == FEED_EMPTY && trades + klines + tickers == good && tickers > 0 && status == 2,
+          "the ring: every event, the 24 h ones included, CONNECTING and CONNECTED");
     int64_t hb = FeedLoadAcquire64(&r.hdr->heartbeatUs);
     Sleep(1600);
     CHECK(FeedLoadAcquire64(&r.hdr->heartbeatUs) > hb, "the heartbeat timer ticks");
@@ -718,7 +759,7 @@ static int Live(int seconds) {
     FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost;
     HINTERNET hs = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    long long trades[4] = { 0 }, klines[4] = { 0 }, latSum = 0, latN = 0;
+    long long trades[4] = { 0 }, klines[4] = { 0 }, tickers[4] = { 0 }, latSum = 0, latN = 0;
     const wchar_t* name = TestName(L"live");
     memset(&cfg, 0, sizeof(cfg));
     cfg.mappingName = name; cfg.pSession = &hs; cfg.backoffMs = TestBackoff;
@@ -732,17 +773,19 @@ static int Live(int seconds) {
         while (FeedNext(&r, &ev, &lost) == FEED_OK) {
             if (ev.type == FEED_TRADE) { trades[ev.instrument]++; latSum += ev.tsRecvUs - ev.tsExchangeUs; latN++; }
             else if (ev.type == FEED_KLINE) klines[ev.instrument]++;
+            else if (ev.type == FEED_TICKER24) tickers[ev.instrument]++;
             else printf("status %u error %d\n", ev.u.status.state, ev.u.status.error);
         }
     }
     FeedGetStats(&st);
-    for (int i = 0; i < 4; ++i) printf("%s trades %lld klines %lld\n", TEST_INS[i].symbol, trades[i], klines[i]);
+    for (int i = 0; i < 4; ++i)
+        printf("%s trades %lld klines %lld tickers %lld\n", TEST_INS[i].symbol, trades[i], klines[i], tickers[i]);
     printf("LIVE: published %ld dropped %ld connects %ld state %ld, mean latency %.1f ms\n",
            st.published, st.dropped, st.connects, st.state, latN ? latSum / 1000.0 / latN : 0.0);
     FeedClose(&r);
     FeedStop();
     WinHttpCloseHandle(hs);
-    return (st.state == FEED_ST_CONNECTED && trades[0] > 0 && klines[0] > 0) ? 0 : 1;
+    return (st.state == FEED_ST_CONNECTED && trades[0] > 0 && klines[0] > 0 && tickers[0] > 0) ? 0 : 1;
 }
 
 // --serve NAME FILE SECONDS: a replaying writer for feed_probe's tests.
@@ -785,6 +828,8 @@ int wmain(int argc, wchar_t** argv) {
     TestParseKline();
     TestParseReordered();
     TestParseRejects();
+    TestParseTicker24();
+    TestStreamPath();
     TestParseFixture();
     TestStopTwice();
     TestReplay();

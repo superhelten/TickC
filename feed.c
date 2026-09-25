@@ -351,6 +351,18 @@ int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, uns
         if (b) ev->flags = (uint16_t)(ev->flags | FEED_KLINE_CLOSED);
         return FEED_PARSE_OK;
     }
+    if (JsonIs(v, dEnd, "24hrMiniTicker")) {
+        // 1.1 (phase 55): rolling 24 h statistics; a flat object, no "k".
+        ev->type = FEED_TICKER24;
+        if (!JsonMs(JsonKey(d, dEnd, "E"), dEnd, &ev->tsExchangeUs))               return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "o"), dEnd, &ev->u.ticker24.open))        return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "h"), dEnd, &ev->u.ticker24.high))        return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "l"), dEnd, &ev->u.ticker24.low))         return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "c"), dEnd, &ev->u.ticker24.close))       return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "v"), dEnd, &ev->u.ticker24.volume))      return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "q"), dEnd, &ev->u.ticker24.quoteVolume)) return FEED_PARSE_BAD;
+        return FEED_PARSE_OK;
+    }
     return FEED_PARSE_BAD;
 }
 
@@ -460,17 +472,24 @@ static void FeedReplay(void) {
     if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
 }
 
-// "/stream?streams=btcusdt@trade/btcusdt@kline_1m/ethusdt@trade/..."
-static void FeedStreamPath(wchar_t* out, size_t cch) {
-    int n = swprintf_s(out, cch, L"/stream?streams=");
-    for (unsigned i = 0; i < g_feed.cfg.instrumentCount && n > 0; ++i) {
+// "/stream?streams=btcusdt@trade/btcusdt@kline_1m/btcusdt@miniTicker/..."
+// (phase 55: the miniTicker stream, and a length check - _snwprintf_s with
+// _TRUNCATE returns -1 instead of calling the invalid-parameter handler).
+int FeedStreamPath(const FeedInstrument* ins, unsigned count, wchar_t* out, size_t cch) {
+    int n = _snwprintf_s(out, cch, _TRUNCATE, L"/stream?streams=");
+    if (n < 0) return -1;
+    for (unsigned i = 0; i < count; ++i) {
         wchar_t sym[16];
-        const char* s = g_feed.cfg.instruments[i].symbol;
-        int k = 0;
-        for (; s[k] && k < 15; ++k) sym[k] = (wchar_t)((s[k] >= 'A' && s[k] <= 'Z') ? s[k] + 32 : s[k]);
+        const char* s = ins[i].symbol;
+        int k = 0, m;
+        for (; k < 15 && s[k]; ++k) sym[k] = (wchar_t)((s[k] >= 'A' && s[k] <= 'Z') ? s[k] + 32 : s[k]);
         sym[k] = 0;
-        n += swprintf_s(out + n, cch - (size_t)n, L"%s%s@trade/%s@kline_1m", i ? L"/" : L"", sym, sym);
+        m = _snwprintf_s(out + n, cch - (size_t)n, _TRUNCATE, L"%s%s@trade/%s@kline_1m/%s@miniTicker",
+                         i ? L"/" : L"", sym, sym, sym);
+        if (m < 0) return -1;
+        n += m;
     }
+    return n;
 }
 
 // Publishes a handle in g_feed under the lock so FeedStop can find and
@@ -518,7 +537,7 @@ static void FeedUnpublish(HINTERNET* slot, HINTERNET* hOwn) {
 // close whichever is open and cancel it at once (phase 54: FeedStop during
 // FeedConnect).
 static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
-    wchar_t path[16 + FEED_MAX_INSTRUMENTS * 48];
+    wchar_t path[FEED_PATH_CCH];
     HINTERNET hr, ws = NULL;
     DWORD status = 0, cb = sizeof(status);
     *hc = NULL;
@@ -529,7 +548,11 @@ static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
     if (!*hc) { *err = GetLastError(); return NULL; }
     if (!FeedPublishHandle(&g_feed.hConnect, *hc)) { *hc = NULL; return NULL; }
 
-    FeedStreamPath(path, sizeof(path) / sizeof(path[0]));
+    if (FeedStreamPath(g_feed.cfg.instruments, g_feed.cfg.instrumentCount, path, FEED_PATH_CCH) < 0) {
+        *err = ERROR_INSUFFICIENT_BUFFER;
+        FeedUnpublish(&g_feed.hConnect, hc);
+        return NULL;
+    }
     hr = WinHttpOpenRequest(*hc, L"GET", path, NULL, WINHTTP_NO_REFERER,
                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (!hr) {

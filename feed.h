@@ -504,6 +504,14 @@ int FeedParseFixed8(const char* s, const char* e, int64_t* out);
 int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, unsigned count,
                      int64_t recvUs, FeedEvent* ev);
 
+// The combined-stream path for count instruments (phase 55: exported so it
+// can be tested): "/stream?streams=" then, per instrument,
+// "<sym>@trade/<sym>@kline_1m/<sym>@miniTicker". Returns the characters
+// written, or -1 when it does not fit cch. FEED_PATH_CCH holds the longest:
+// 16 instruments of 15 characters need 16 + 16 * 74 plus the NUL.
+#define FEED_PATH_CCH (16 + FEED_MAX_INSTRUMENTS * 80)
+int FeedStreamPath(const FeedInstrument* ins, unsigned count, wchar_t* out, size_t cch);
+
 // ---------------------------------------------------------------------------
 // The feed thread (feed.c; TickC and the tests only).
 // ---------------------------------------------------------------------------
