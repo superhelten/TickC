@@ -381,6 +381,135 @@ static void TestDeadReader(void) {
     FeedWriterClose(&w);
 }
 
+// --- Task 5 --------------------------------------------------------------
+
+static void TestFixed8(void) {   // Review Focus 2: short decimals
+    static const struct { const char* s; int ok; int64_t v; } rows[] = {
+        { "0.00000001", 1, 1 },
+        { "1", 1, 100000000LL },
+        { "64123", 1, 6412300000000LL },
+        { "64123.4", 1, 6412340000000LL },
+        { "0.1", 1, 10000000LL },
+        { "64123.45000000", 1, 6412345000000LL },
+        { "92233720368.54775807", 1, INT64_MAX },
+        { "92233720368.54775808", 0, 0 },
+        { "92233720369", 0, 0 },
+        { "", 0, 0 },
+        { "-1.0", 0, 0 },
+        { "+1.0", 0, 0 },
+        { "1e5", 0, 0 },
+        { "1.000000001", 0, 0 },
+        { "1.2.3", 0, 0 },
+        { ".5", 0, 0 },
+        { "5.", 0, 0 },
+        { "12a", 0, 0 },
+    };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        int64_t v = -7;
+        int ok = FeedParseFixed8(rows[i].s, rows[i].s + strlen(rows[i].s), &v);
+        char what[96];
+        sprintf_s(what, sizeof(what), "Fixed8 \"%s\"", rows[i].s);
+        CHECK(ok == rows[i].ok && (!ok || v == rows[i].v), what);
+    }
+}
+
+static int Parse(const char* m, FeedEvent* ev) {
+    return FeedParseMessage(m, strlen(m), TEST_INS, 4, 777, ev);
+}
+
+static void TestParseTrade(void) {
+    FeedEvent ev;
+    const char* sell = "{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1727222400123,\"s\":\"BTCUSDT\","
+                       "\"t\":3871234567,\"p\":\"64123.45000000\",\"q\":\"0.00150000\",\"T\":1727222400121,\"m\":true,\"M\":true}}";
+    const char* buy  = "{\"stream\":\"ethusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1,\"s\":\"ETHUSDT\","
+                       "\"t\":5,\"p\":\"2500.1\",\"q\":\"3\",\"T\":1727222400999,\"m\":false,\"M\":true}}";
+    CHECK(Parse(sell, &ev) == FEED_PARSE_OK, "a trade parses");
+    CHECK(ev.type == FEED_TRADE && ev.instrument == 0 && ev.source == FEED_SRC_BINANCE_SPOT, "trade: type, instrument, source");
+    CHECK(ev.u.trade.tradeId == 3871234567ULL && ev.u.trade.price == 6412345000000LL && ev.u.trade.qty == 150000LL, "trade: id, price, qty");
+    CHECK(ev.tsExchangeUs == 1727222400121000LL && ev.tsRecvUs == 777, "trade: T in microseconds, the receive time");
+    CHECK(ev.u.trade.side == FEED_SIDE_SELL, "m=true: the seller was the aggressor");
+    CHECK(Parse(buy, &ev) == FEED_PARSE_OK && ev.instrument == 1 && ev.u.trade.side == FEED_SIDE_BUY &&
+          ev.u.trade.price == 250010000000LL && ev.u.trade.qty == 300000000LL, "m=false: BUY; short decimals");
+}
+
+static void TestParseKline(void) {
+    FeedEvent ev;
+    const char* open = "{\"stream\":\"solusdt@kline_1m\",\"data\":{\"e\":\"kline\",\"E\":1727222400500,\"s\":\"SOLUSDT\",\"k\":{"
+                       "\"t\":1727222400000,\"T\":1727222459999,\"s\":\"SOLUSDT\",\"i\":\"1m\",\"f\":1,\"L\":2,"
+                       "\"o\":\"150.10000000\",\"c\":\"150.20000000\",\"h\":\"150.30000000\",\"l\":\"150.00000000\","
+                       "\"v\":\"12.34500000\",\"n\":321,\"x\":false,\"q\":\"1851.00000000\",\"V\":\"6.1\",\"Q\":\"900.1\",\"B\":\"0\"}}}";
+    CHECK(Parse(open, &ev) == FEED_PARSE_OK, "a kline parses");
+    CHECK(ev.type == FEED_KLINE && ev.instrument == 2 && ev.flags == 0, "kline: type, instrument, open bar");
+    CHECK(ev.tsExchangeUs == 1727222400500000LL && ev.u.kline.openTimeUs == 1727222400000000LL, "kline: E and k.t in microseconds");
+    CHECK(ev.u.kline.intervalSec == 60 && ev.u.kline.tradeCount == 321, "kline: interval and trade count");
+    CHECK(ev.u.kline.open == 15010000000LL && ev.u.kline.close == 15020000000LL &&
+          ev.u.kline.high == 15030000000LL && ev.u.kline.low == 15000000000LL, "kline: OHLC");
+    CHECK(ev.u.kline.volume == 1234500000LL && ev.u.kline.quoteVolume == 185100000000LL, "kline: volume and quote volume");
+    const char* closed = "{\"stream\":\"solusdt@kline_1m\",\"data\":{\"e\":\"kline\",\"E\":1,\"s\":\"SOLUSDT\",\"k\":{"
+                         "\"t\":60000,\"i\":\"1m\",\"o\":\"1\",\"c\":\"1\",\"h\":\"1\",\"l\":\"1\",\"v\":\"0\",\"n\":0,\"x\":true,\"q\":\"0\"}}}";
+    CHECK(Parse(closed, &ev) == FEED_PARSE_OK && (ev.flags & FEED_KLINE_CLOSED), "x=true: FEED_KLINE_CLOSED");
+    const char* fiveMin = "{\"stream\":\"solusdt@kline_5m\",\"data\":{\"e\":\"kline\",\"E\":1,\"s\":\"SOLUSDT\",\"k\":{"
+                          "\"t\":60000,\"i\":\"5m\",\"o\":\"1\",\"c\":\"1\",\"h\":\"1\",\"l\":\"1\",\"v\":\"0\",\"n\":0,\"x\":true,\"q\":\"0\"}}}";
+    CHECK(Parse(fiveMin, &ev) == FEED_PARSE_BAD, "another interval than 1m is rejected");
+}
+
+static void TestParseReordered(void) {   // Review Focus 1
+    FeedEvent ev;
+    const char* m = "{\"data\":{\"k\":{\"x\":true,\"q\":\"2\",\"n\":7,\"v\":\"1\",\"l\":\"1\",\"h\":\"3\",\"c\":\"2\",\"o\":\"1\","
+                    "\"i\":\"1m\",\"X\":\"new\",\"t\":120000,\"s\":\"BNBUSDT\"},\"s\":\"BNBUSDT\",\"E\":5,\"e\":\"kline\",\"Z\":0},"
+                    "\"stream\":\"bnbusdt@kline_1m\"}";
+    CHECK(Parse(m, &ev) == FEED_PARSE_OK && ev.instrument == 3 && ev.u.kline.openTimeUs == 120000000LL &&
+          ev.u.kline.high == 300000000LL && ev.u.kline.tradeCount == 7 && ev.tsExchangeUs == 5000 &&
+          (ev.flags & FEED_KLINE_CLOSED), "keys in another order, with unknown fields, parse the same");
+}
+
+static void TestParseRejects(void) {
+    FeedEvent ev;
+    CHECK(Parse("{\"stream\":\"xrpusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1,\"s\":\"XRPUSDT\",\"t\":1,\"p\":\"1\",\"q\":\"1\",\"T\":1,\"m\":true}}", &ev)
+          == FEED_PARSE_UNKNOWN, "an unknown symbol");
+    CHECK(Parse("{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1,\"s\":\"BTCUSDT\",\"t\":1,\"p\":\"1e5\",\"q\":\"1\",\"T\":1,\"m\":true}}", &ev)
+          == FEED_PARSE_BAD, "an exponent price");
+    CHECK(Parse("{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1,\"s\":\"BTCUSDT\",\"t\":1,\"q\":\"1\",\"T\":1,\"m\":true}}", &ev)
+          == FEED_PARSE_BAD, "a missing price");
+    CHECK(Parse("{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1,\"s\":\"BTCUSDT\",\"t\":3,\"p\":\"64123.4", &ev)
+          == FEED_PARSE_BAD, "a truncated message");
+    CHECK(Parse("{\"result\":null,\"id\":1}", &ev) == FEED_PARSE_BAD, "a non-event message");
+    CHECK(Parse("", &ev) == FEED_PARSE_BAD, "an empty message");
+}
+
+// Every line of the recorded stream parses, except the three bad ones at the end.
+static void FixturePath(wchar_t* out) {
+    wchar_t* slash;
+    GetModuleFileNameW(NULL, out, MAX_PATH);
+    slash = wcsrchr(out, L'\\');
+    wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - out), L"fixtures\\ws_stream.jsonl");
+}
+
+static void TestParseFixture(void) {
+    wchar_t path[MAX_PATH];
+    FILE* f;
+    static char line[70000];
+    int good = 0, bad = 0, unknown = 0, lines = 0, closed = 0;
+    FixturePath(path);
+    CHECK(_wfopen_s(&f, path, L"rb") == 0, "the fixture opens");
+    if (!f) return;
+    while (fgets(line, sizeof(line), f)) {
+        size_t n = strlen(line);
+        FeedEvent ev;
+        while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
+        if (!n) continue;
+        lines++;
+        int rc = FeedParseMessage(line, n, TEST_INS, 4, 1, &ev);
+        if (rc == FEED_PARSE_OK) { good++; if (ev.type == FEED_KLINE && (ev.flags & FEED_KLINE_CLOSED)) closed++; }
+        else if (rc == FEED_PARSE_UNKNOWN) unknown++;
+        else bad++;
+    }
+    fclose(f);
+    printf("fixture: %d lines, %d good, %d unknown, %d bad, %d closed bars\n", lines, good, unknown, bad, closed);
+    CHECK(good == lines - 3 && unknown == 1 && bad == 2, "every recorded line parses; the three bad ones do not");
+    CHECK(closed >= 4, "the recording holds a closed bar per symbol");
+}
+
 int wmain(int argc, wchar_t** argv) {
     if (argc >= 3 && wcscmp(argv[1], L"--child-claim") == 0) return ChildClaim(argv[2]);
     TestLayout();
@@ -396,6 +525,12 @@ int wmain(int argc, wchar_t** argv) {
     TestStatusAndHeartbeat();
     TestStress();
     TestDeadReader();
+    TestFixed8();
+    TestParseTrade();
+    TestParseKline();
+    TestParseReordered();
+    TestParseRejects();
+    TestParseFixture();
     printf("%d checks, %d failed\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }

@@ -383,3 +383,12 @@ void FeedSetConn(FeedWriter* w, int state, int32_t error, int64_t retryAtUs);
 void FeedHeartbeat(FeedWriter* w);
 void FeedSweepReaders(FeedWriter* w);
 void FeedWriterClose(FeedWriter* w);
+
+// The parser (feed.c). FeedParseFixed8: a decimal string -> an exact int64
+// at 10^-8; 1 on success. FeedParseMessage: one combined-stream message ->
+// one event, FEED_PARSE_OK, FEED_PARSE_BAD or FEED_PARSE_UNKNOWN (a symbol
+// not in the table).
+enum { FEED_PARSE_OK = 1, FEED_PARSE_BAD = 0, FEED_PARSE_UNKNOWN = -1 };
+int FeedParseFixed8(const char* s, const char* e, int64_t* out);
+int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, unsigned count,
+                     int64_t recvUs, FeedEvent* ev);

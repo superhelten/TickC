@@ -165,3 +165,174 @@ void FeedWriterClose(FeedWriter* w) {
     if (w->hMap) CloseHandle(w->hMap);
     memset(w, 0, sizeof(*w));
 }
+
+// ---------------------------------------------------------------------------
+// The parser
+// ---------------------------------------------------------------------------
+// Binance's combined stream: {"stream":"btcusdt@trade","data":{...}}. Values
+// are found by key, never by position (spec: Parsing), within the bounds of
+// the object they belong to. Numbers in quotes are decimals with at most 8
+// places, parsed exactly into fixed point; times are milliseconds.
+
+#define FEED_MS_MAX 9223372036854775ULL   // ms * 1000 still fits an int64
+
+// Finds "key": in [p, end) and returns the first byte of its value.
+static const char* JsonKey(const char* p, const char* end, const char* key) {
+    size_t n = strlen(key);
+    for (; p + n + 3 <= end; ++p) {
+        if (p[0] == '"' && memcmp(p + 1, key, n) == 0 && p[1 + n] == '"' && p[2 + n] == ':') {
+            const char* v = p + n + 3;
+            while (v < end && *v == ' ') ++v;
+            return (v < end) ? v : NULL;
+        }
+    }
+    return NULL;
+}
+
+// The end (one past the '}') of the object that starts at p, or NULL.
+static const char* JsonObjectEnd(const char* p, const char* end) {
+    int depth = 0;
+    BOOL inStr = FALSE;
+    for (; p < end; ++p) {
+        if (inStr) { if (*p == '"') inStr = FALSE; continue; }
+        if (*p == '"') inStr = TRUE;
+        else if (*p == '{') ++depth;
+        else if (*p == '}' && --depth == 0) return p + 1;
+    }
+    return NULL;
+}
+
+// A quoted string's contents (Binance's values carry no escapes).
+static BOOL JsonString(const char* v, const char* end, const char** s, const char** e) {
+    const char* q;
+    if (!v || v >= end || *v != '"') return FALSE;
+    for (q = v + 1; q < end && *q != '"'; ++q) {}
+    if (q >= end) return FALSE;
+    *s = v + 1;
+    *e = q;
+    return TRUE;
+}
+
+static BOOL JsonU64(const char* v, const char* end, uint64_t* out) {
+    uint64_t x = 0;
+    const char* p = v;
+    if (!v) return FALSE;
+    for (; p < end && *p >= '0' && *p <= '9'; ++p) {
+        if (x > (UINT64_MAX - 9) / 10) return FALSE;
+        x = x * 10 + (uint64_t)(*p - '0');
+    }
+    if (p == v) return FALSE;
+    *out = x;
+    return TRUE;
+}
+
+static BOOL JsonBool(const char* v, const char* end, int* out) {
+    if (v && end - v >= 4 && memcmp(v, "true", 4) == 0)  { *out = 1; return TRUE; }
+    if (v && end - v >= 5 && memcmp(v, "false", 5) == 0) { *out = 0; return TRUE; }
+    return FALSE;
+}
+
+static BOOL JsonFixed8(const char* v, const char* end, int64_t* out) {
+    const char *s, *e;
+    return JsonString(v, end, &s, &e) && FeedParseFixed8(s, e, out);
+}
+
+static BOOL JsonIs(const char* v, const char* end, const char* want) {
+    const char *s, *e;
+    size_t n = strlen(want);
+    return JsonString(v, end, &s, &e) && (size_t)(e - s) == n && memcmp(s, want, n) == 0;
+}
+
+static BOOL JsonMs(const char* v, const char* end, int64_t* us) {
+    uint64_t ms;
+    if (!JsonU64(v, end, &ms) || ms > FEED_MS_MAX) return FALSE;
+    *us = (int64_t)ms * 1000;
+    return TRUE;
+}
+
+// Digits, then optionally a dot and 1-8 digits; nothing else. No sign, no
+// exponent. The largest value is INT64_MAX at 10^-8, 92233720368.54775807.
+int FeedParseFixed8(const char* s, const char* e, int64_t* out) {
+    uint64_t ip = 0, fp = 0;
+    int id = 0, fd = 0;
+    const char* p = s;
+    for (; p < e && *p >= '0' && *p <= '9'; ++p, ++id) {
+        if (ip > 92233720368ULL) return 0;
+        ip = ip * 10 + (uint64_t)(*p - '0');
+    }
+    if (id == 0) return 0;
+    if (p < e && *p == '.') {
+        for (++p; p < e && *p >= '0' && *p <= '9'; ++p, ++fd) {
+            if (fd == 8) return 0;
+            fp = fp * 10 + (uint64_t)(*p - '0');
+        }
+        if (fd == 0) return 0;
+    }
+    if (p != e) return 0;
+    for (; fd < 8; ++fd) fp *= 10;
+    if (ip > 92233720368ULL || (ip == 92233720368ULL && fp > 54775807ULL)) return 0;
+    *out = (int64_t)(ip * 100000000ULL + fp);
+    return 1;
+}
+
+int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, unsigned count,
+                     int64_t recvUs, FeedEvent* ev) {
+    const char* end = msg + len;
+    const char *d, *dEnd, *v, *s0, *s1;
+    uint64_t u;
+    int b;
+    unsigned i;
+
+    d = JsonKey(msg, end, "data");
+    if (!d || *d != '{' || !(dEnd = JsonObjectEnd(d, end))) return FEED_PARSE_BAD;
+    memset(ev, 0, sizeof(*ev));
+    ev->source   = FEED_SRC_BINANCE_SPOT;
+    ev->tsRecvUs = recvUs;
+
+    // The symbol. "s" is also inside "k" for a kline; both carry the same one.
+    if (!JsonString(JsonKey(d, dEnd, "s"), dEnd, &s0, &s1)) return FEED_PARSE_BAD;
+    for (i = 0; i < count; ++i) {
+        size_t n = strlen(ins[i].symbol);
+        if ((size_t)(s1 - s0) == n && memcmp(s0, ins[i].symbol, n) == 0) break;
+    }
+    if (i == count) return FEED_PARSE_UNKNOWN;
+    ev->instrument = (uint16_t)i;
+
+    v = JsonKey(d, dEnd, "e");
+    if (JsonIs(v, dEnd, "trade")) {
+        ev->type = FEED_TRADE;
+        if (!JsonU64(JsonKey(d, dEnd, "t"), dEnd, &u)) return FEED_PARSE_BAD;
+        ev->u.trade.tradeId = u;
+        if (!JsonFixed8(JsonKey(d, dEnd, "p"), dEnd, &ev->u.trade.price)) return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "q"), dEnd, &ev->u.trade.qty))   return FEED_PARSE_BAD;
+        if (!JsonMs(JsonKey(d, dEnd, "T"), dEnd, &ev->tsExchangeUs))      return FEED_PARSE_BAD;
+        if (!JsonBool(JsonKey(d, dEnd, "m"), dEnd, &b))                   return FEED_PARSE_BAD;
+        ev->u.trade.side = (uint8_t)(b ? FEED_SIDE_SELL : FEED_SIDE_BUY);
+        return FEED_PARSE_OK;
+    }
+    if (JsonIs(v, dEnd, "kline")) {
+        const char *k = JsonKey(d, dEnd, "k"), *kEnd;
+        if (!k || *k != '{' || !(kEnd = JsonObjectEnd(k, dEnd))) return FEED_PARSE_BAD;
+        ev->type = FEED_KLINE;
+        // "E" is looked for outside "k": search the part of data before and
+        // after the kline object, so a key inside it is never taken.
+        v = JsonKey(d, k, "E");
+        if (!v) v = JsonKey(kEnd, dEnd, "E");
+        if (!JsonMs(v, dEnd, &ev->tsExchangeUs)) return FEED_PARSE_BAD;
+        if (!JsonIs(JsonKey(k, kEnd, "i"), kEnd, "1m")) return FEED_PARSE_BAD;
+        ev->u.kline.intervalSec = 60;
+        if (!JsonMs(JsonKey(k, kEnd, "t"), kEnd, &ev->u.kline.openTimeUs))         return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(k, kEnd, "o"), kEnd, &ev->u.kline.open))           return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(k, kEnd, "h"), kEnd, &ev->u.kline.high))           return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(k, kEnd, "l"), kEnd, &ev->u.kline.low))            return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(k, kEnd, "c"), kEnd, &ev->u.kline.close))          return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(k, kEnd, "v"), kEnd, &ev->u.kline.volume))         return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(k, kEnd, "q"), kEnd, &ev->u.kline.quoteVolume))    return FEED_PARSE_BAD;
+        if (!JsonU64(JsonKey(k, kEnd, "n"), kEnd, &u) || u > UINT32_MAX)           return FEED_PARSE_BAD;
+        ev->u.kline.tradeCount = (uint32_t)u;
+        if (!JsonBool(JsonKey(k, kEnd, "x"), kEnd, &b)) return FEED_PARSE_BAD;
+        if (b) ev->flags = (uint16_t)(ev->flags | FEED_KLINE_CLOSED);
+        return FEED_PARSE_OK;
+    }
+    return FEED_PARSE_BAD;
+}
