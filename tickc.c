@@ -3002,12 +3002,28 @@ static BOOL EnsureBackBuffer(AppContext* ctx, HDC ref, int W, int H) {
     return TRUE;
 }
 
+// x^2.4 for x in [0, 1], the sRGB curve's exponent, without the CRT's pow:
+// pow() pulled 23 KB into the exe (262 656 -> 285 696 bytes, measured - the
+// story of AlertRound in chart.c again). x^2.4 = a * y with a = x^2 and
+// y^5 = a, and Newton finds y from 1 down: the fifth root of a number in
+// (0, 1] is at most 1, and Newton on a convex function converges from above.
+static double WmPow24(double x) {
+    if (x <= 0.0) return 0.0;
+    double a = x * x, y = 1.0;
+    for (int i = 0; i < 64; ++i) {
+        double ny = (4.0 * y + a / (y * y * y * y)) / 5.0;
+        if (fabs(ny - y) < 1e-15) { y = ny; break; }
+        y = ny;
+    }
+    return a * y;
+}
+
 // Phase 53: WCAG's relative luminance and contrast ratio, for the
 // watermark's step on the mountain's fill.
 static double WmLuminance(COLORREF c) {
     double ch[3] = { GetRValue(c) / 255.0, GetGValue(c) / 255.0, GetBValue(c) / 255.0 };
     for (int i = 0; i < 3; ++i)
-        ch[i] = (ch[i] <= 0.03928) ? ch[i] / 12.92 : pow((ch[i] + 0.055) / 1.055, 2.4);
+        ch[i] = (ch[i] <= 0.03928) ? ch[i] / 12.92 : WmPow24((ch[i] + 0.055) / 1.055);
     return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
 }
 
