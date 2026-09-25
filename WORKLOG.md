@@ -5051,7 +5051,51 @@ needed.
 `docs/specs/2026-09-25-feed-daemon-design.md`, `README.md`, `WORKLOG.md`
 (this section).
 
-No new pitfalls this phase; the last stays 180, at the end of phase 54.
+**Final review fixes.** The final review's one Important issue: a restart
+window that hands readers torn seqlock data. `FeedWriterOpen` evened a lock
+a dead writer left odd (a writer that died between `FeedPublish`'s two
+increments) before clearing the table, which closed that writer's critical
+section and opened a new one; a reader positioned between the close and the
+reopen saw an even lock over the still half-written payload and passed both
+seqlock checks with torn data. The reviewer measured it over 100k restarts:
+11 080 torn `tickers24` reads and 1 939 torn `snapshots` reads on x86; 14 072
+and 16 503 on x64. The fix (`feed.c` `FeedWriterOpen`, both tables): only
+increment when the lock is already even - a clean exit, or a 1.0 writer's
+untouched zeroed `tickers24` - so an odd lock is left alone and the restart
+continues that same critical section into the clear, instead of closing and
+reopening it; the closing increment after the clear is the only place the
+lock goes back to even either way. 0 torn reads over 1M restarts on each
+architecture with the fix. `tests/feed_test.c` gained `TestRestartRace`: 20k
+simulated mid-publish deaths and restarts, a reader thread attached
+throughout, spinning on both `FeedReadSnapshot` and `FeedReadTicker24`. RED,
+against the pre-fix code: `t24 ok 429992 torn 438, snap ok 431675 torn 10`
+in 266 ms - proof the window is real and the check is not vacuous (both
+tables got hundreds of thousands of TRUE reads). GREEN, with the fix: `torn
+0` on both tables, three runs on x86 and one on x64, 167 checks each run (161
++ `TestRestartRace`'s 4 checks + `TestStreamPath`'s new guard check), 0
+failed.
+
+Folded in: `feed.h:41-44`'s and the two specs' "a 1.0 reader skips it"
+reworded to say it receives `FEED_TICKER24` as an unknown type and must
+ignore it, not reject it (a 1.0 reader does not skip the slot - its `Check`
+falls through to `status`, task 3's own evidence above); the ring-slot type
+comment gains `FEED_TICKER24`; `feed.c`'s header says "snapshot tables",
+plural; `FeedStreamPath` now rejects `cch == 0` or `out == NULL` before its
+first `_snwprintf_s` (that call's own `_TRUNCATE` handling still reaches the
+invalid-parameter handler when the buffer cannot hold even a NUL); the
+spec's Risks section gains an accepted entry for the combined stream path
+(Binance rejecting it stops trades and klines too, not just the 24 h
+statistics; TickC's own UI is unaffected, since it uses REST); the README's
+`(change, high, low, volume)` is reworded so `change` is not listed as a
+field. The Axiom spec's own copy of the "a 1.0 reader" sentence is fixed in
+Axiom's repo, in its own commit.
+
+Verified: `feed_test.exe` 167 checks, 0 failed, three x86 runs and one x64
+run, no warnings. `feed_probe --check` against `tests/golden/feed.txt`:
+PASS, golden unchanged. `shot_p54.ps1 -Part all`: 29/29. `build_size.bat`:
+see the commit for the exact bytes.
+
+Pitfall 181, the last of this phase.
 
 ---
 
@@ -6388,6 +6432,16 @@ No new pitfalls this phase; the last stays 180, at the end of phase 54.
     (`shot_range`'s "R goes back to the range's home") can still flake once
     in 21 - rerun a lone failure before concluding it is a regression, and
     never run a second hidden-desktop script while one is in flight.
+181. **Evening an odd seqlock before taking it opens a torn window**
+    (final review, phase 55): a restart's `FeedWriterOpen` evened a lock a
+    dead writer left odd, then took it again to clear the table - closing
+    that writer's unfinished critical section and opening a new one. A
+    reader positioned between the close and the reopen saw an even lock
+    over the still half-written payload and accepted it as clean; measured
+    at 11 080-16 503 torn reads per 100k restarts. An odd lock means held -
+    continue the critical section instead of opening a new one: only
+    increment when the lock is already even, so an odd lock stays odd
+    through the clear and only goes back to even once, after it.
 
 ---
 
