@@ -235,12 +235,15 @@ C_ASSERT((FEED_SLOT_COUNT & (FEED_SLOT_COUNT - 1)) == 0);
 
 // Slot s lives at FEED_HEADER_SIZE + (s & (FEED_SLOT_COUNT - 1)) * FEED_SLOT_SIZE.
 
-// ARM64 needs a real barrier between a copy and its re-check; x64 keeps load
-// order, so a compiler barrier is enough there.
+// The fences around a copy that a sequence number guards: LOAD between the
+// reader's copy and its re-check, STORE between the writer's slot copy and
+// its release of seq. See "Atomic 64-bit access".
 #if defined(_M_ARM64)
-  #define FEED_LOAD_FENCE() __dmb(_ARM64_BARRIER_ISHLD)
+  #define FEED_LOAD_FENCE()  __dmb(_ARM64_BARRIER_ISHLD)
+  #define FEED_STORE_FENCE() _ReadWriteBarrier()
 #else
-  #define FEED_LOAD_FENCE() _ReadWriteBarrier()
+  #define FEED_LOAD_FENCE()  do { _ReadWriteBarrier(); _mm_lfence(); _ReadWriteBarrier(); } while (0)
+  #define FEED_STORE_FENCE() do { _ReadWriteBarrier(); _mm_sfence(); _ReadWriteBarrier(); } while (0)
 #endif
 ```
 
@@ -269,6 +272,15 @@ static __inline void    FeedStoreRelease64(volatile int64_t* p, int64_t v);
   for an 8-byte-aligned address, with `_ReadWriteBarrier()` after a load and
   before a store (x86 keeps the order of loads and of stores; the barrier
   stops the compiler). SSE2 is MSVC's default on x86.
+- x86 and x64, the slot copy: `memcpy` may compile to a fast-string
+  operation (`rep movs`, as it does in the x86 build), and the SDM (Vol. 3A,
+  8.2.4.1) relaxes the order of the accesses inside one. So the reader puts
+  an `LFENCE` after its copy, before the re-check of `seq`
+  (`FEED_LOAD_FENCE`), and the writer an `SFENCE` after its copy, before the
+  release of `seq` (`FEED_STORE_FENCE`). They are a guard, not the fix of a
+  seen failure; each costs about 2 ns. x64 gets them too, because the rules
+  and the `memcpy` are the same there. ARM64 already has `dmb ishld` on the
+  reader and a store-release on the writer.
 - Not `InterlockedCompareExchange64(p, 0, 0)` as a load: it writes, and a
   reader may have mapped the region read-only.
 
@@ -310,7 +322,7 @@ Only `FeedThread` publishes.
 s = hdr->writeSeq                              // the writer's own; a plain read
 1. update the instrument's snapshot            // BEFORE the ring: see Resync
 2. InterlockedExchange64(&slot->seq, FEED_SEQ_BUSY)   // a full barrier
-3. copy the fields after seq (tsExchangeUs .. u)
+3. copy the fields after seq (tsExchangeUs .. u); FEED_STORE_FENCE()
 4. FeedStoreRelease64(&slot->seq, s)               // the contents before the number
 5. FeedStoreRelease64(&hdr->writeSeq, s + 1)
 6. SetEvent on each reader slot with ready == 1
@@ -322,7 +334,7 @@ Status events have no instrument and skip step 1. The writer also stores
 ### The reader, `FeedNext`
 
 ```
-want = r->next
+want = max(r->next, 1)
 w = FeedLoadAcquire64(&hdr->writeSeq)
 if want >= w                   -> FEED_EMPTY
 if w - want > FEED_SLOT_COUNT  -> FEED_LAPPED
@@ -332,6 +344,10 @@ FEED_LOAD_FENCE()
 if FeedLoadNoFence64(&slot->seq) != want        -> FEED_LAPPED   // overwritten during the copy
 r->next = want + 1             -> FEED_OK
 ```
+
+A position below 1 starts at event 1, as `FeedRewind` does, because seq 0
+(a slot never written) and `FEED_SEQ_BUSY` (-1, a slot being written) must
+never match `want`.
 
 On `FEED_LAPPED` the reader reports how many events it lost and resyncs (below).
 It does not try to catch up: it would only be lapped again, and the terminal
@@ -421,6 +437,7 @@ enum { FEED_OK = 0, FEED_EMPTY, FEED_LAPPED, FEED_NEW_SESSION,
        FEED_NO_WRITER, FEED_BAD_VERSION, FEED_NO_SLOT };
 
 int   FeedOpen(FeedReader* r, const wchar_t* name, BOOL wakeups);
+void  FeedRewind(FeedReader* r);           // start at the oldest event still in the ring
 int   FeedNext(FeedReader* r, FeedEvent* ev, int64_t* lost);
 BOOL  FeedReadSnapshot(const FeedReader* r, unsigned instrument, FeedSnapshot* out);
 DWORD FeedWait(FeedReader* r, DWORD ms);   // WAIT_OBJECT_0 = data, +1 = writer gone, WAIT_TIMEOUT
