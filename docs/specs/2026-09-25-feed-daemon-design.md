@@ -519,7 +519,7 @@ Kline (`data`):
 |---|---|
 | `TickC.exe --daemon`, no TickC running | A main instance without a tray icon, panel or desktop surface. It creates the hidden main window with the main title (for the hand-over below) and starts `FeedThread`. `NetworkThread` is not started: nothing shows its price. |
 | `--daemon` while a normal TickC runs | Exits silently with code 0: the feed already runs. It takes the `--autostart` path in the mutex check, so it does not hand over and the running TickC's panel does not come forward. |
-| A normal start while the daemon runs | The existing hand-over (`HandOverToMainInstance`) posts `WM_APP_SHOW`. The daemon **becomes a normal TickC**: it adds the tray icon, starts `NetworkThread` and opens the panel. This is also how a daemon is stopped: show it, then Exit from the tray menu. |
+| A normal start while the daemon runs | The existing hand-over (`HandOverToMainInstance`) posts `WM_APP_SHOW`. The daemon **becomes a normal TickC**: it adds the tray icon, starts `NetworkThread`, and then does what a plain start does with the saved configuration: the desktop surface if desktop mode is saved, the panel otherwise. The daemon reads the configuration (`LoadConfig`) at start for this. This is also how a daemon is stopped: show it, then Exit from the tray menu. |
 | `--daemon` combined with `--dup` or `--desktop-mode` | `--daemon` wins; the others are ignored. |
 | Explorer restarts (`TaskbarCreated`) | A daemon adds no tray icon. Once it has become a normal TickC, the icon is re-added as today. |
 | Sign-in | Autostart is not changed by this phase. |
