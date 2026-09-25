@@ -4792,7 +4792,7 @@ desktop mode and the REST fetches, untouched.
 lines, 32 768 of them (the ring), behind a 4096-byte header with a
 snapshot table (one `FeedSnapshot` per instrument, a seqlock) and up to 8
 reader slots. Prices and quantities are `int64_t` at `10^-8`, not
-`double`, so parsing a Binance decimal string is exact. On x86 TickC's own
+`double`, so parsing a Binance decimal string is exact. On x86 `winnt.h`'s
 `ReadAcquire64`/`WriteRelease64` would split an 8-byte access into two
 32-bit moves (pitfall 175), so `feed.h` has its own SSE2 `movq` helpers for
 every field one side writes while the other reads. The reader API
@@ -4886,11 +4886,11 @@ failed (`stress: fast ok 3000000 lapped 0; slow ok 78000 lapped 38; edge ok
 unknown, 2 bad, 8 closed bars`). `chart_golden.exe`: 73/73, the engine
 untouched by this phase. `golden.ps1 -Hidden` against a `main`-branch
 reference build (`d32a285`, in a worktree) and against this phase's test
-build: `Compare-Object` on the seven panel/desktop capture hashes printed
-nothing - identical. `regress53.ps1` (the 16 accumulated regression
-scripts), run twice: a first run overlapped with this task's own builds
-above and showed two failures from that contention (`shot_p52` 7 of 14,
-`shot_theme` 6 of 14); a second, clean run showed one (`shot_range` 1 of
+build: `Compare-Object` on the seven panel capture hashes printed nothing -
+identical. `regress53.ps1` (the 16 accumulated regression scripts), run
+twice: a first run overlapped with this task's own builds above and
+showed two failures from that contention (`shot_p52` 7 of 14, `shot_theme`
+6 of 23); a second, clean run showed one (`shot_range` 1 of
 21, "R goes back to the range's home", a timing-sensitive easing check,
 unrelated code). Every failing script passed cleanly on an isolated rerun
 right after - `shot_p52` 14/14, `shot_theme` (folded into the clean run,
