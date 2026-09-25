@@ -414,3 +414,23 @@ enum { FEED_PARSE_OK = 1, FEED_PARSE_BAD = 0, FEED_PARSE_UNKNOWN = -1 };
 int FeedParseFixed8(const char* s, const char* e, int64_t* out);
 int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, unsigned count,
                      int64_t recvUs, FeedEvent* ev);
+
+// ---------------------------------------------------------------------------
+// The feed thread (feed.c; TickC and the tests only).
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    const wchar_t*        mappingName;     // NULL = FEED_MAPPING_NAME
+    const wchar_t*        replayFile;      // NULL = the network; else a .jsonl replayed through the parser
+    void**                pSession;        // a HINTERNET*: the app's WinHTTP session, read under *sessionLock
+    CRITICAL_SECTION*     sessionLock;     // may be NULL (tests)
+    DWORD               (*backoffMs)(int failures, ULONGLONG seed);
+    const FeedInstrument* instruments;
+    unsigned              instrumentCount;
+} FeedConfig;
+
+typedef struct { LONG published, dropped, connects, state; } FeedStats;
+
+BOOL FeedStart(const FeedConfig* cfg);   // FALSE: no mapping; nothing started
+void FeedStop(void);                     // safe to call when not started
+void FeedGetStats(FeedStats* out);

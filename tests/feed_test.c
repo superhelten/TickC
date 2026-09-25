@@ -8,6 +8,8 @@
 #include "feed.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <winhttp.h>
+#pragma comment(lib, "winhttp.lib")
 
 static int g_checks = 0, g_fails = 0;
 #define CHECK(cond, what) do { g_checks++; \
@@ -534,8 +536,120 @@ static void TestParseFixture(void) {
     CHECK(closed >= 4, "the recording holds a closed bar per symbol");
 }
 
+// --- Task 6 --------------------------------------------------------------
+
+static DWORD TestBackoff(int failures, ULONGLONG seed) { (void)failures; (void)seed; return 200; }
+
+static int FixtureGood(void) {   // lines that parse = all but the last three
+    wchar_t path[MAX_PATH]; FILE* f; static char line[70000]; int n = 0;
+    FixturePath(path);
+    if (_wfopen_s(&f, path, L"rb") != 0) return -1;
+    while (fgets(line, sizeof(line), f)) if (line[0] == '{') n++;
+    fclose(f);
+    return n - 3;
+}
+
+static void TestReplay(void) {
+    FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost;
+    wchar_t path[MAX_PATH];
+    const wchar_t* name = TestName(L"replay");
+    int good = FixtureGood(), trades = 0, klines = 0, status = 0, rc;
+    FixturePath(path);
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.mappingName = name; cfg.replayFile = path; cfg.backoffMs = TestBackoff;
+    cfg.instruments = TEST_INS; cfg.instrumentCount = 4;
+    CHECK(FeedStart(&cfg), "FeedStart with a replay file");
+    ULONGLONG t0 = GetTickCount64();
+    do { Sleep(20); FeedGetStats(&st); } while (st.published + st.dropped < good + 3 && GetTickCount64() - t0 < 5000);
+    CHECK(st.published == good && st.dropped == 3, "every good line published, the three bad ones dropped");
+    CHECK(st.connects == 1 && st.state == FEED_ST_CONNECTED, "a replay is one connection, CONNECTED");
+    CHECK(FeedOpen(&r, name, FALSE) == FEED_OK, "a reader opens the feed");
+    FeedRewind(&r);
+    while ((rc = FeedNext(&r, &ev, &lost)) == FEED_OK) {
+        if (ev.type == FEED_TRADE) trades++; else if (ev.type == FEED_KLINE) klines++; else status++;
+    }
+    CHECK(rc == FEED_EMPTY && trades + klines == good && status == 2, "the ring: every event, CONNECTING and CONNECTED");
+    int64_t hb = FeedLoadAcquire64(&r.hdr->heartbeatUs);
+    Sleep(1600);
+    CHECK(FeedLoadAcquire64(&r.hdr->heartbeatUs) > hb, "the heartbeat timer ticks");
+    FeedStop();
+    CHECK(FeedNext(&r, &ev, &lost) == FEED_NO_WRITER, "after FeedStop: FEED_NO_WRITER");
+    FeedClose(&r);
+    FeedGetStats(&st);
+    CHECK(st.state == 0, "stopped: no state");
+}
+
+static void TestReplayMissing(void) {
+    FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost; int rc;
+    const wchar_t* name = TestName(L"missing");
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.mappingName = name; cfg.replayFile = L"C:\\no\\such\\ws_stream.jsonl"; cfg.backoffMs = TestBackoff;
+    cfg.instruments = TEST_INS; cfg.instrumentCount = 4;
+    CHECK(FeedStart(&cfg), "FeedStart with a missing replay file still starts");
+    Sleep(300);
+    FeedGetStats(&st);
+    CHECK(st.state == FEED_ST_DISCONNECTED && st.connects == 0 && st.published == 0, "a missing file: DISCONNECTED, never the network");
+    FeedOpen(&r, name, FALSE);
+    FeedRewind(&r);
+    while ((rc = FeedNext(&r, &ev, &lost)) == FEED_OK && ev.u.status.state != FEED_ST_DISCONNECTED) {}
+    CHECK(rc == FEED_OK && ev.u.status.error == ERROR_PATH_NOT_FOUND, "the status carries the error");
+    FeedClose(&r);
+    FeedStop();
+}
+
+static void TestStopTwice(void) {
+    FeedStop();   // not started: must return at once
+    CHECK(TRUE, "FeedStop without FeedStart returns");
+}
+
+// --live N: the real Binance, by hand. Prints what arrived per symbol.
+static int Live(int seconds) {
+    FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost;
+    HINTERNET hs = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    long long trades[4] = { 0 }, klines[4] = { 0 }, latSum = 0, latN = 0;
+    const wchar_t* name = TestName(L"live");
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.mappingName = name; cfg.pSession = &hs; cfg.backoffMs = TestBackoff;
+    cfg.instruments = TEST_INS; cfg.instrumentCount = 4;
+    if (!hs || !FeedStart(&cfg)) { printf("LIVE: no start\n"); return 1; }
+    FeedOpen(&r, name, TRUE);
+    FeedRewind(&r);
+    ULONGLONG t0 = GetTickCount64();
+    while (GetTickCount64() - t0 < (ULONGLONG)seconds * 1000) {
+        FeedWait(&r, 500);
+        while (FeedNext(&r, &ev, &lost) == FEED_OK) {
+            if (ev.type == FEED_TRADE) { trades[ev.instrument]++; latSum += ev.tsRecvUs - ev.tsExchangeUs; latN++; }
+            else if (ev.type == FEED_KLINE) klines[ev.instrument]++;
+            else printf("status %u error %d\n", ev.u.status.state, ev.u.status.error);
+        }
+    }
+    FeedGetStats(&st);
+    for (int i = 0; i < 4; ++i) printf("%s trades %lld klines %lld\n", TEST_INS[i].symbol, trades[i], klines[i]);
+    printf("LIVE: published %ld dropped %ld connects %ld state %ld, mean latency %.1f ms\n",
+           st.published, st.dropped, st.connects, st.state, latN ? latSum / 1000.0 / latN : 0.0);
+    FeedClose(&r);
+    FeedStop();
+    WinHttpCloseHandle(hs);
+    return (st.state == FEED_ST_CONNECTED && trades[0] > 0 && klines[0] > 0) ? 0 : 1;
+}
+
+// --serve NAME FILE SECONDS: a replaying writer for feed_probe's tests.
+static int Serve(const wchar_t* name, const wchar_t* file, int seconds) {
+    FeedConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.mappingName = name; cfg.replayFile = file; cfg.backoffMs = TestBackoff;
+    cfg.instruments = TEST_INS; cfg.instrumentCount = 4;
+    if (!FeedStart(&cfg)) return 1;
+    Sleep((DWORD)seconds * 1000);
+    FeedStop();
+    return 0;
+}
+
 int wmain(int argc, wchar_t** argv) {
     if (argc >= 3 && wcscmp(argv[1], L"--child-claim") == 0) return ChildClaim(argv[2]);
+    if (argc >= 3 && wcscmp(argv[1], L"--live") == 0) return Live(_wtoi(argv[2]));
+    if (argc >= 5 && wcscmp(argv[1], L"--serve") == 0) return Serve(argv[2], argv[3], _wtoi(argv[4]));
     TestLayout();
     TestAtomics();
     TestRoundTrip();
@@ -556,6 +670,9 @@ int wmain(int argc, wchar_t** argv) {
     TestParseReordered();
     TestParseRejects();
     TestParseFixture();
+    TestStopTwice();
+    TestReplay();
+    TestReplayMissing();
     printf("%d checks, %d failed\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }

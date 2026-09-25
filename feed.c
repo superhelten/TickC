@@ -337,3 +337,297 @@ int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, uns
     }
     return FEED_PARSE_BAD;
 }
+
+// ---------------------------------------------------------------------------
+// FeedThread
+// ---------------------------------------------------------------------------
+// One per process. It owns the WebSocket; FeedStop may close it from outside,
+// under g_feed.lock, which cancels a pending receive at once (measured in
+// task 1). The heartbeat is a thread-pool timer that writes heartbeatUs and
+// nothing else: it means "the writer process lives", whatever the line does.
+
+#define FEED_MSG_MAX       65536
+#define FEED_RECV_MS       10000     // silence longer than this: the line is dead
+#define FEED_STABLE_MS     60000     // a connection this old resets the backoff
+
+static struct {
+    BOOL             running;
+    FeedWriter       w;
+    FeedConfig       cfg;
+    wchar_t          replay[MAX_PATH];
+    CRITICAL_SECTION lock;           // guards hWs
+    HINTERNET        hWs;
+    HANDLE           hStop, hThread;
+    PTP_TIMER        timer;
+    ULONGLONG        lastSweep;
+    volatile LONG    published, dropped, connects;
+    volatile LONG64  lastMsgTick;    // GetTickCount64() of the last message read
+} g_feed;
+
+static char g_feedBuf[FEED_MSG_MAX];
+
+static void FeedMaybeSweep(void) {
+    ULONGLONG now = GetTickCount64();
+    if (now - g_feed.lastSweep < 1000) return;
+    g_feed.lastSweep = now;
+    FeedSweepReaders(&g_feed.w);
+}
+
+static void FeedHandleMessage(const char* msg, size_t len) {
+    FeedEvent ev;
+    if (FeedParseMessage(msg, len, g_feed.cfg.instruments, g_feed.cfg.instrumentCount, FeedNowUs(), &ev)
+        == FEED_PARSE_OK) {
+        FeedPublish(&g_feed.w, &ev);
+        InterlockedIncrement(&g_feed.published);
+    } else {
+        InterlockedIncrement(&g_feed.dropped);
+    }
+    FeedMaybeSweep();
+}
+
+// TRUE when stop was asked within ms; sweeps the reader slots once a second.
+static BOOL FeedWaitStop(DWORD ms) {
+    for (;;) {
+        DWORD step = ms < 1000 ? ms : 1000;
+        if (WaitForSingleObject(g_feed.hStop, step) == WAIT_OBJECT_0) return TRUE;
+        FeedMaybeSweep();
+        if (ms <= step) return FALSE;
+        ms -= step;
+    }
+}
+
+// The test build's stand-in for the socket: every line of a .jsonl through
+// the same parser, then idle. A missing file is a failed connection that is
+// never retried - a test build with fixtures must not reach the network.
+static void FeedReplay(void) {
+    HANDLE f, m = NULL;
+    const char *p = NULL, *line, *end;
+    DWORD size = 0, err = 0;
+    FeedSetConn(&g_feed.w, FEED_ST_CONNECTING, 0, 0);
+    f = CreateFileW(g_feed.replay, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) err = GetLastError();
+    else {
+        size = GetFileSize(f, NULL);
+        if (size && size != INVALID_FILE_SIZE) m = CreateFileMappingW(f, NULL, PAGE_READONLY, 0, 0, NULL);
+        if (m) p = (const char*)MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0);
+        if (!p) err = GetLastError() ? GetLastError() : ERROR_HANDLE_EOF;
+    }
+    if (!p) {
+        FeedSetConn(&g_feed.w, FEED_ST_DISCONNECTED, (int32_t)err, 0);
+    } else {
+        InterlockedIncrement(&g_feed.connects);
+        FeedSetConn(&g_feed.w, FEED_ST_CONNECTED, 0, 0);
+        for (line = p, end = p + size; line < end; ) {
+            const char* nl = (const char*)memchr(line, '\n', (size_t)(end - line));
+            const char* le = nl ? nl : end;
+            size_t n = (size_t)(le - line);
+            if (n && line[n - 1] == '\r') --n;
+            if (n) FeedHandleMessage(line, n);
+            line = nl ? nl + 1 : end;
+        }
+        UnmapViewOfFile(p);
+    }
+    if (m) CloseHandle(m);
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+}
+
+// "/stream?streams=btcusdt@trade/btcusdt@kline_1m/ethusdt@trade/..."
+static void FeedStreamPath(wchar_t* out, size_t cch) {
+    int n = swprintf_s(out, cch, L"/stream?streams=");
+    for (unsigned i = 0; i < g_feed.cfg.instrumentCount && n > 0; ++i) {
+        wchar_t sym[16];
+        const char* s = g_feed.cfg.instruments[i].symbol;
+        int k = 0;
+        for (; s[k] && k < 15; ++k) sym[k] = (wchar_t)((s[k] >= 'A' && s[k] <= 'Z') ? s[k] + 32 : s[k]);
+        sym[k] = 0;
+        n += swprintf_s(out + n, cch - (size_t)n, L"%s%s@trade/%s@kline_1m", i ? L"/" : L"", sym, sym);
+    }
+}
+
+// Connects and upgrades. The 10 s receive timeout goes on this request's
+// handle, not on the session, which keeps 5 s for the REST fetches.
+static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
+    wchar_t path[512];
+    HINTERNET hr, ws = NULL;
+    DWORD status = 0, cb = sizeof(status);
+    *hc = NULL;
+    if (g_feed.cfg.sessionLock) EnterCriticalSection(g_feed.cfg.sessionLock);
+    if (g_feed.cfg.pSession && *g_feed.cfg.pSession)
+        *hc = WinHttpConnect(*g_feed.cfg.pSession, L"stream.binance.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (g_feed.cfg.sessionLock) LeaveCriticalSection(g_feed.cfg.sessionLock);
+    if (!*hc) { *err = GetLastError(); return NULL; }
+    FeedStreamPath(path, 512);
+    hr = WinHttpOpenRequest(*hc, L"GET", path, NULL, WINHTTP_NO_REFERER,
+                            WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hr) { *err = GetLastError(); return NULL; }
+    WinHttpSetOption(hr, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
+    WinHttpSetTimeouts(hr, 5000, 5000, 5000, FEED_RECV_MS);
+    if (WinHttpSendRequest(hr, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(hr, NULL) &&
+        WinHttpQueryHeaders(hr, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &cb, WINHTTP_NO_HEADER_INDEX) &&
+        status == 101) {
+        ws = WinHttpWebSocketCompleteUpgrade(hr, 0);
+    }
+    if (!ws) *err = status && status != 101 ? status : GetLastError();
+    WinHttpCloseHandle(hr);
+    return ws;
+}
+
+// Reads messages until the socket fails, closes or is closed by FeedStop.
+// Returns the reason: a WinHTTP error or the WebSocket close status.
+static DWORD FeedReceiveLoop(HINTERNET ws) {
+    DWORD len = 0;
+    BOOL over = FALSE;
+    for (;;) {
+        DWORD got = 0, e;
+        WINHTTP_WEB_SOCKET_BUFFER_TYPE bt;
+        e = WinHttpWebSocketReceive(ws, g_feedBuf + len, FEED_MSG_MAX - len, &got, &bt);
+        if (e != NO_ERROR) return e;
+        if (bt == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
+            USHORT st = 0;
+            DWORD cb = 0;
+            WinHttpWebSocketQueryCloseStatus(ws, &st, NULL, 0, &cb);
+            return st ? st : ERROR_WINHTTP_CONNECTION_ERROR;
+        }
+        len += got;
+        InterlockedExchange64(&g_feed.lastMsgTick, (LONG64)GetTickCount64());
+        if (bt == WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE ||
+            bt == WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE) {
+            if (len == FEED_MSG_MAX) { over = TRUE; len = 0; }   // too big: dropped when it ends
+            continue;
+        }
+        if (bt == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE && !over) FeedHandleMessage(g_feedBuf, len);
+        else InterlockedIncrement(&g_feed.dropped);
+        over = FALSE;
+        len = 0;
+    }
+}
+
+static DWORD WINAPI FeedThread(LPVOID unused) {
+    int failures = 0;
+    (void)unused;
+    if (g_feed.replay[0]) {
+        FeedReplay();
+        while (!FeedWaitStop(1000)) {}
+        return 0;
+    }
+    for (;;) {
+        HINTERNET hc = NULL, ws;
+        DWORD err = 0, wait;
+        ULONGLONG t0;
+        if (WaitForSingleObject(g_feed.hStop, 0) == WAIT_OBJECT_0) break;
+        FeedSetConn(&g_feed.w, FEED_ST_CONNECTING, 0, 0);
+        t0 = GetTickCount64();
+        ws = FeedConnect(&hc, &err);
+        if (ws) {
+            BOOL stopped;
+            EnterCriticalSection(&g_feed.lock);
+            stopped = (WaitForSingleObject(g_feed.hStop, 0) == WAIT_OBJECT_0);
+            if (!stopped) g_feed.hWs = ws;
+            LeaveCriticalSection(&g_feed.lock);
+            if (stopped) { WinHttpCloseHandle(ws); if (hc) WinHttpCloseHandle(hc); break; }
+            InterlockedIncrement(&g_feed.connects);
+            InterlockedExchange64(&g_feed.lastMsgTick, (LONG64)GetTickCount64());
+            FeedSetConn(&g_feed.w, FEED_ST_CONNECTED, 0, 0);
+            err = FeedReceiveLoop(ws);
+            EnterCriticalSection(&g_feed.lock);
+            if (g_feed.hWs) { WinHttpCloseHandle(g_feed.hWs); g_feed.hWs = NULL; }
+            LeaveCriticalSection(&g_feed.lock);
+        }
+        if (hc) WinHttpCloseHandle(hc);
+        if (WaitForSingleObject(g_feed.hStop, 0) == WAIT_OBJECT_0) break;
+        // A connection that held a minute (Binance's 24 h cut) goes again at
+        // once; anything shorter backs off on TickC's curve.
+        if (ws && GetTickCount64() - t0 >= FEED_STABLE_MS) {
+            failures = 0;
+            wait = 0;
+        } else {
+            if (failures < 32) failures++;
+            wait = g_feed.cfg.backoffMs(failures, GetTickCount64());
+        }
+        FeedSetConn(&g_feed.w, FEED_ST_DISCONNECTED, (int32_t)err, wait ? FeedNowUs() + (int64_t)wait * 1000 : 0);
+        if (wait && FeedWaitStop(wait)) break;
+    }
+    return 0;
+}
+
+static VOID CALLBACK FeedTick(PTP_CALLBACK_INSTANCE inst, PVOID ctx, PTP_TIMER timer) {
+    (void)inst; (void)ctx; (void)timer;
+    FeedHeartbeat(&g_feed.w);
+    // Task 1 measured it: no timeout bounds a WebSocket receive, so a dead
+    // line is closed from here after FEED_RECV_MS of silence, which ends the
+    // receive the same way FeedStop does.
+    EnterCriticalSection(&g_feed.lock);
+    if (g_feed.hWs && GetTickCount64() - (ULONGLONG)InterlockedCompareExchange64(&g_feed.lastMsgTick, 0, 0) > FEED_RECV_MS) {
+        WinHttpCloseHandle(g_feed.hWs);
+        g_feed.hWs = NULL;
+    }
+    LeaveCriticalSection(&g_feed.lock);
+}
+
+BOOL FeedStart(const FeedConfig* cfg) {
+    FILETIME due;
+    if (g_feed.running) return TRUE;
+    memset(&g_feed, 0, sizeof(g_feed));
+    g_feed.cfg = *cfg;
+    if (cfg->replayFile) wcscpy_s(g_feed.replay, MAX_PATH, cfg->replayFile);
+    g_feed.cfg.replayFile = NULL;
+    if (!FeedWriterOpen(&g_feed.w, cfg->mappingName, cfg->instruments, cfg->instrumentCount)) return FALSE;
+    g_feed.cfg.instruments = g_feed.w.hdr->instruments;   // the copy in the header outlives the caller's
+    InitializeCriticalSection(&g_feed.lock);
+    g_feed.hStop = CreateEventW(NULL, TRUE, FALSE, NULL);
+    g_feed.timer = CreateThreadpoolTimer(FeedTick, NULL, NULL);
+    if (g_feed.timer) {
+        ULARGE_INTEGER t;
+        t.QuadPart = (ULONGLONG)-10000000LL;   // 1 s from now, relative
+        due.dwLowDateTime = t.LowPart;
+        due.dwHighDateTime = t.HighPart;
+        SetThreadpoolTimer(g_feed.timer, &due, 1000, 0);
+    }
+    g_feed.hThread = g_feed.hStop ? CreateThread(NULL, 0, FeedThread, NULL, 0, NULL) : NULL;
+    if (!g_feed.hThread) {
+        if (g_feed.timer) { SetThreadpoolTimer(g_feed.timer, NULL, 0, 0); WaitForThreadpoolTimerCallbacks(g_feed.timer, TRUE); CloseThreadpoolTimer(g_feed.timer); }
+        if (g_feed.hStop) CloseHandle(g_feed.hStop);
+        DeleteCriticalSection(&g_feed.lock);
+        FeedWriterClose(&g_feed.w);
+        memset(&g_feed, 0, sizeof(g_feed));
+        return FALSE;
+    }
+    g_feed.running = TRUE;
+    return TRUE;
+}
+
+// Stop, close the socket (which ends a pending receive), wait up to 10 s,
+// stop the heartbeat, say DISCONNECTED and unmap. A thread that did not end
+// keeps its resources; the process exit is moments away (as NetworkThread).
+void FeedStop(void) {
+    BOOL done;
+    if (!g_feed.running) return;
+    SetEvent(g_feed.hStop);
+    EnterCriticalSection(&g_feed.lock);
+    if (g_feed.hWs) { WinHttpCloseHandle(g_feed.hWs); g_feed.hWs = NULL; }
+    LeaveCriticalSection(&g_feed.lock);
+    done = (WaitForSingleObject(g_feed.hThread, 10000) == WAIT_OBJECT_0);
+    if (g_feed.timer) {
+        SetThreadpoolTimer(g_feed.timer, NULL, 0, 0);
+        WaitForThreadpoolTimerCallbacks(g_feed.timer, TRUE);
+        CloseThreadpoolTimer(g_feed.timer);
+        g_feed.timer = NULL;
+    }
+    g_feed.running = FALSE;
+    if (!done) return;
+    CloseHandle(g_feed.hThread);
+    CloseHandle(g_feed.hStop);
+    DeleteCriticalSection(&g_feed.lock);
+    FeedSetConn(&g_feed.w, FEED_ST_DISCONNECTED, 0, 0);
+    FeedWriterClose(&g_feed.w);
+    memset(&g_feed, 0, sizeof(g_feed));
+}
+
+void FeedGetStats(FeedStats* out) {
+    out->published = g_feed.published;
+    out->dropped   = g_feed.dropped;
+    out->connects  = g_feed.connects;
+    out->state     = (g_feed.running && g_feed.w.hdr) ? g_feed.w.hdr->connState : 0;
+}
