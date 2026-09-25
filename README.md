@@ -2,7 +2,7 @@
 
 A crypto price ticker for the Windows tray, written in plain C against the Win32 API.
 Three source files. No runtime, no installer, no dependencies beyond what ships with Windows.
-The whole thing compiles to a single exe of about 269 KB.
+The whole thing compiles to a single exe of about 275 KB.
 
 I built it because I wanted the BTC price in the corner of my screen without keeping
 a browser tab open, and without a 150 MB Electron app. It grew from there.
