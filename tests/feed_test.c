@@ -255,6 +255,153 @@ static void TestReadOnlyClose(void) {   // Review Focus 4
     FeedWriterClose(&w);
 }
 
+// --- Phase 55: feed 1.1, the 24 h statistics -----------------------------
+
+static FeedEvent MakeTicker(unsigned ins, int64_t n) {
+    FeedEvent ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = FEED_TICKER24; ev.instrument = (uint16_t)ins; ev.source = FEED_SRC_BINANCE_SPOT;
+    ev.tsExchangeUs = n; ev.tsRecvUs = n + 1;
+    ev.u.ticker24.open = n; ev.u.ticker24.high = n + 5; ev.u.ticker24.low = n - 5;
+    ev.u.ticker24.close = n + 1; ev.u.ticker24.volume = 3 * n; ev.u.ticker24.quoteVolume = 7 * n;
+    return ev;
+}
+
+static void TestLayout11(void) {
+    CHECK(FEED_VERSION_MAJOR == 1 && FEED_VERSION_MINOR == 1, "feed 1.1");
+    CHECK(sizeof(FeedTicker24) == 48 && sizeof(FeedTicker24Snap) == 64, "the 24 h sizes");
+    CHECK(offsetof(FeedHeader, tickers24) == 3072 && sizeof(FeedHeader) == 4096, "tickers24 fills the old reserved space");
+    CHECK(offsetof(FeedEvent, u) + sizeof(FeedTicker24) <= FEED_SLOT_SIZE, "the payload fits the slot");
+}
+
+static void TestTicker24Snapshot(void) {
+    FeedWriter w; FeedReader r; FeedEvent ev; FeedTicker24Snap t; int64_t lost;
+    const wchar_t* name = TestName(L"t24");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedOpen(&r, name, FALSE);
+    CHECK(r.hdr->versionMinor == 1, "the writer says 1.1");
+    CHECK(FeedReadTicker24(&r, 2, &t) && t.updatedUs == 0, "none yet");
+    FeedEvent e = MakeTicker(2, 1000);
+    FeedPublish(&w, &e);
+    CHECK(FeedReadTicker24(&r, 2, &t) && t.updatedUs == 1001 && t.t.open == 1000 && t.t.high == 1005 &&
+          t.t.low == 995 && t.t.close == 1001 && t.t.volume == 3000 && t.t.quoteVolume == 7000,
+          "the snapshot holds the published statistics");
+    CHECK(FeedNext(&r, &ev, &lost) == FEED_OK && ev.type == FEED_TICKER24 && ev.instrument == 2 &&
+          memcmp(&ev.u.ticker24, &e.u.ticker24, sizeof(FeedTicker24)) == 0, "and the ring carries the event");
+    CHECK(!FeedReadTicker24(&r, 4, &t) && !FeedReadTicker24(&r, 99, &t), "an instrument out of range: FALSE");
+    FeedSnapshot s;
+    CHECK(FeedReadSnapshot(&r, 2, &s) && s.trade.tradeId == 0 && s.kline.openTimeUs == 0,
+          "the 24 h event leaves the trade and kline snapshot alone");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
+static void TestTicker24RestartOddLock(void) {   // Review Focus 3
+    FeedWriter w; FeedReader r; FeedTicker24Snap t;
+    const wchar_t* name = TestName(L"t24odd");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedOpen(&r, name, FALSE);
+    FeedEvent e = MakeTicker(1, 50);
+    FeedPublish(&w, &e);
+    InterlockedIncrement64((LONG64 volatile*)&w.hdr->tickers24[1].lock);   // odd: died mid-publish
+    UnmapViewOfFile(w.hdr); CloseHandle(w.hMap);
+    FeedWriter w2;
+    CHECK(FeedWriterOpen(&w2, name, TEST_INS, 4), "a second writer takes the mapping over");
+    CHECK((w2.hdr->tickers24[1].lock & 1) == 0, "the restart leaves the 24 h lock even");
+    CHECK(FeedReadTicker24(&r, 1, &t) && t.updatedUs == 0, "and clears the old session's statistics");
+    FeedEvent e2 = MakeTicker(1, 60);
+    FeedPublish(&w2, &e2);
+    CHECK(FeedReadTicker24(&r, 1, &t) && t.t.open == 60, "the next statistics read back cleanly");
+    FeedClose(&r);
+    FeedWriterClose(&w2);
+}
+
+static void TestTicker24OldWriter(void) {   // Review Focus 2
+    FeedWriter w; FeedReader r; FeedTicker24Snap t;
+    const wchar_t* name = TestName(L"t24old");
+    FeedWriterOpen(&w, name, TEST_INS, 4);
+    FeedEvent e = MakeTicker(0, 5);
+    FeedPublish(&w, &e);
+    w.hdr->versionMinor = 0;   // a 1.0 writer: tickers24 is reserved space it never wrote
+    FeedOpen(&r, name, FALSE);
+    CHECK(!FeedReadTicker24(&r, 0, &t), "against a 1.0 writer FeedReadTicker24 returns FALSE");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
+// --- Final review fixes (phase 55): the restart race ----------------------
+// A writer that dies between FeedPublish's two increments leaves a table's
+// lock odd and its payload half old, half new. FeedWriterOpen used to even
+// that lock before clearing the table - closing the dead writer's critical
+// section and opening a fresh one - which left a window where a reader saw
+// an even lock over the still half-written payload and accepted it as
+// clean. The fix continues the odd lock's critical section into the clear
+// instead of closing and reopening it. This runs the crash-and-restart over
+// and over with a reader thread attached throughout, on both tables, and
+// checks it never sees that torn state. RED/GREEN counts: WORKLOG, "Final
+// review fixes".
+static volatile LONG   g_raceDone;
+static volatile LONG64 g_raceOk24, g_raceTorn24, g_raceOkS, g_raceTornS;
+
+static DWORD WINAPI RestartRaceReader(void* p) {
+    FeedReader* r = (FeedReader*)p;
+    FeedTicker24Snap t;
+    FeedSnapshot s;
+    while (!g_raceDone) {
+        if (FeedReadTicker24(r, 0, &t)) {
+            g_raceOk24++;
+            if (t.t.open != t.t.close) g_raceTorn24++;   // a clean state has open == close
+        }
+        if (FeedReadSnapshot(r, 0, &s)) {
+            g_raceOkS++;
+            if (s.trade.price != s.trade.qty) g_raceTornS++;   // a clean state has price == qty
+        }
+    }
+    return 0;
+}
+
+static void TestRestartRace(void) {
+    FeedWriter w;
+    FeedReader r;
+    HANDLE th;
+    const int iters = 20000;
+    ULONGLONG t0, ms;
+    const wchar_t* name = TestName(L"race");
+    g_raceDone = 0; g_raceOk24 = 0; g_raceTorn24 = 0; g_raceOkS = 0; g_raceTornS = 0;
+    CHECK(FeedWriterOpen(&w, name, TEST_INS, 4), "the restart race's first writer opens");
+    // The reader attaches, read-only, before the loop starts, so it holds
+    // the mapping alive across every writer close/reopen below (as
+    // TestRestartOddLock does): no window where a fresh, zeroed mapping
+    // could replace it and make the test vacuous.
+    CHECK(FeedOpen(&r, name, FALSE) == FEED_OK, "the restart race's reader attaches");
+    th = CreateThread(NULL, 0, RestartRaceReader, &r, 0, NULL);
+    t0 = GetTickCount64();
+    for (int i = 0; i < iters; ++i) {
+        FeedTicker24Snap* t = &w.hdr->tickers24[0];
+        FeedSnapshot* s = &w.hdr->snapshots[0];
+        // A writer dies between FeedPublish's two increments: the lock is
+        // odd and the payload half old, half new.
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        t->t.open = 111; t->t.high = 111; t->t.low = 111;
+        t->t.close = 222; t->t.volume = 222; t->t.quoteVolume = 222;
+        InterlockedIncrement64((LONG64 volatile*)&s->lock);
+        s->trade.price = 111; s->trade.qty = 222;
+        UnmapViewOfFile(w.hdr); CloseHandle(w.hMap);
+        if (!FeedWriterOpen(&w, name, TEST_INS, 4)) { CHECK(FALSE, "the restart race's reopen"); break; }
+    }
+    ms = GetTickCount64() - t0;
+    InterlockedExchange(&g_raceDone, 1);
+    WaitForSingleObject(th, INFINITE);
+    CloseHandle(th);
+    printf("restart race: %d iters in %llu ms, t24 ok %lld torn %lld, snap ok %lld torn %lld\n",
+           iters, ms, g_raceOk24, g_raceTorn24, g_raceOkS, g_raceTornS);
+    CHECK(g_raceTorn24 == 0, "no torn read of the 24h table across the restart race");
+    CHECK(g_raceTornS == 0, "no torn read of the trade/kline snapshot across the restart race");
+    CHECK(g_raceOk24 > 0 && g_raceOkS > 0, "the reader got TRUE reads on both tables (not vacuous)");
+    FeedClose(&r);
+    FeedWriterClose(&w);
+}
+
 static void TestSlotsAndWake(void) {
     FeedWriter w; FeedReader rs[FEED_MAX_READERS + 1];
     const wchar_t* name = TestName(L"slot");
@@ -529,6 +676,40 @@ static void TestParseRejects(void) {
     CHECK(Parse("", &ev) == FEED_PARSE_BAD, "an empty message");
 }
 
+static void TestParseTicker24(void) {   // Review Focus 5
+    FeedEvent ev;
+    const char* m = "{\"stream\":\"btcusdt@miniTicker\",\"data\":{\"e\":\"24hrMiniTicker\",\"E\":1727222400123,"
+                    "\"s\":\"BTCUSDT\",\"c\":\"64123.45000000\",\"o\":\"63000.00000000\",\"h\":\"64500.00000000\","
+                    "\"l\":\"62800.10000000\",\"v\":\"12345.67800000\",\"q\":\"789012345.67000000\"}}";
+    CHECK(Parse(m, &ev) == FEED_PARSE_OK, "a miniTicker parses");
+    CHECK(ev.type == FEED_TICKER24 && ev.instrument == 0 && ev.tsExchangeUs == 1727222400123000LL, "type, instrument, E in microseconds");
+    CHECK(ev.u.ticker24.close == 6412345000000LL && ev.u.ticker24.open == 6300000000000LL &&
+          ev.u.ticker24.high == 6450000000000LL && ev.u.ticker24.low == 6280010000000LL, "OHLC exact");
+    CHECK(ev.u.ticker24.volume == 1234567800000LL && ev.u.ticker24.quoteVolume == 78901234567000000LL, "volumes exact");
+    const char* r = "{\"data\":{\"q\":\"2\",\"v\":\"1\",\"l\":\"1\",\"h\":\"3\",\"o\":\"1\",\"c\":\"2\",\"X\":7,"
+                    "\"s\":\"SOLUSDT\",\"E\":5,\"e\":\"24hrMiniTicker\"},\"stream\":\"solusdt@miniTicker\"}";
+    CHECK(Parse(r, &ev) == FEED_PARSE_OK && ev.instrument == 2 && ev.u.ticker24.high == 300000000LL &&
+          ev.tsExchangeUs == 5000, "keys in another order, with an unknown field, parse the same");
+    const char* bad = "{\"stream\":\"btcusdt@miniTicker\",\"data\":{\"e\":\"24hrMiniTicker\",\"E\":1,\"s\":\"BTCUSDT\","
+                      "\"c\":\"1\",\"o\":\"1\",\"h\":\"1\",\"l\":\"1\",\"v\":\"1\"}}";
+    CHECK(Parse(bad, &ev) == FEED_PARSE_BAD, "a miniTicker without q is dropped");
+}
+
+static void TestStreamPath(void) {   // Review Focus 4
+    wchar_t out[FEED_PATH_CCH];
+    int n = FeedStreamPath(TEST_INS, 1, out, FEED_PATH_CCH);
+    CHECK(n > 0 && wcscmp(out, L"/stream?streams=btcusdt@trade/btcusdt@kline_1m/btcusdt@miniTicker") == 0,
+          "one instrument: trade, kline and miniTicker");
+    FeedInstrument big[FEED_MAX_INSTRUMENTS];
+    memset(big, 0, sizeof(big));
+    for (int i = 0; i < FEED_MAX_INSTRUMENTS; ++i) memcpy(big[i].symbol, "ABCDEFGHIJKLMNO", 15);
+    n = FeedStreamPath(big, FEED_MAX_INSTRUMENTS, out, FEED_PATH_CCH);
+    CHECK(n > 0 && n < FEED_PATH_CCH && wcsstr(out, L"abcdefghijklmno@miniTicker") != NULL,
+          "16 instruments of 15 characters fit the buffer");
+    CHECK(FeedStreamPath(big, FEED_MAX_INSTRUMENTS, out, 100) == -1, "a buffer too small: -1, no abort");
+    CHECK(FeedStreamPath(TEST_INS, 1, out, 0) == -1, "cch 0: -1, no abort (phase 55)");
+}
+
 // Every line of the recorded stream parses, except the three bad ones at the end.
 static void FixturePath(wchar_t* out) {
     wchar_t* slash;
@@ -541,7 +722,7 @@ static void TestParseFixture(void) {
     wchar_t path[MAX_PATH];
     FILE* f;
     static char line[70000];
-    int good = 0, bad = 0, unknown = 0, lines = 0, closed = 0;
+    int good = 0, bad = 0, unknown = 0, lines = 0, closed = 0, tickers = 0;
     FixturePath(path);
     CHECK(_wfopen_s(&f, path, L"rb") == 0, "the fixture opens");
     if (!f) return;
@@ -552,14 +733,20 @@ static void TestParseFixture(void) {
         if (!n) continue;
         lines++;
         int rc = FeedParseMessage(line, n, TEST_INS, 4, 1, &ev);
-        if (rc == FEED_PARSE_OK) { good++; if (ev.type == FEED_KLINE && (ev.flags & FEED_KLINE_CLOSED)) closed++; }
+        if (rc == FEED_PARSE_OK) {
+            good++;
+            if (ev.type == FEED_KLINE && (ev.flags & FEED_KLINE_CLOSED)) closed++;
+            if (ev.type == FEED_TICKER24) tickers++;
+        }
         else if (rc == FEED_PARSE_UNKNOWN) unknown++;
         else bad++;
     }
     fclose(f);
-    printf("fixture: %d lines, %d good, %d unknown, %d bad, %d closed bars\n", lines, good, unknown, bad, closed);
+    printf("fixture: %d lines, %d good, %d unknown, %d bad, %d closed bars, %d tickers\n",
+           lines, good, unknown, bad, closed, tickers);
     CHECK(good == lines - 3 && unknown == 1 && bad == 2, "every recorded line parses; the three bad ones do not");
     CHECK(closed >= 4, "the recording holds a closed bar per symbol");
+    CHECK(tickers >= 4, "the recording holds 24 h statistics for every symbol");
 }
 
 // --- Task 6 --------------------------------------------------------------
@@ -579,7 +766,7 @@ static void TestReplay(void) {
     FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost;
     wchar_t path[MAX_PATH];
     const wchar_t* name = TestName(L"replay");
-    int good = FixtureGood(), trades = 0, klines = 0, status = 0, rc;
+    int good = FixtureGood(), trades = 0, klines = 0, tickers = 0, status = 0, rc;
     FixturePath(path);
     memset(&cfg, 0, sizeof(cfg));
     cfg.mappingName = name; cfg.replayFile = path; cfg.backoffMs = TestBackoff;
@@ -592,9 +779,11 @@ static void TestReplay(void) {
     CHECK(FeedOpen(&r, name, FALSE) == FEED_OK, "a reader opens the feed");
     FeedRewind(&r);
     while ((rc = FeedNext(&r, &ev, &lost)) == FEED_OK) {
-        if (ev.type == FEED_TRADE) trades++; else if (ev.type == FEED_KLINE) klines++; else status++;
+        if (ev.type == FEED_TRADE) trades++; else if (ev.type == FEED_KLINE) klines++;
+        else if (ev.type == FEED_TICKER24) tickers++; else status++;
     }
-    CHECK(rc == FEED_EMPTY && trades + klines == good && status == 2, "the ring: every event, CONNECTING and CONNECTED");
+    CHECK(rc == FEED_EMPTY && trades + klines + tickers == good && tickers > 0 && status == 2,
+          "the ring: every event, the 24 h ones included, CONNECTING and CONNECTED");
     int64_t hb = FeedLoadAcquire64(&r.hdr->heartbeatUs);
     Sleep(1600);
     CHECK(FeedLoadAcquire64(&r.hdr->heartbeatUs) > hb, "the heartbeat timer ticks");
@@ -644,7 +833,7 @@ static int Live(int seconds) {
     FeedConfig cfg; FeedStats st; FeedReader r; FeedEvent ev; int64_t lost;
     HINTERNET hs = WinHttpOpen(L"TickC/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    long long trades[4] = { 0 }, klines[4] = { 0 }, latSum = 0, latN = 0;
+    long long trades[4] = { 0 }, klines[4] = { 0 }, tickers[4] = { 0 }, latSum = 0, latN = 0;
     const wchar_t* name = TestName(L"live");
     memset(&cfg, 0, sizeof(cfg));
     cfg.mappingName = name; cfg.pSession = &hs; cfg.backoffMs = TestBackoff;
@@ -658,17 +847,19 @@ static int Live(int seconds) {
         while (FeedNext(&r, &ev, &lost) == FEED_OK) {
             if (ev.type == FEED_TRADE) { trades[ev.instrument]++; latSum += ev.tsRecvUs - ev.tsExchangeUs; latN++; }
             else if (ev.type == FEED_KLINE) klines[ev.instrument]++;
+            else if (ev.type == FEED_TICKER24) tickers[ev.instrument]++;
             else printf("status %u error %d\n", ev.u.status.state, ev.u.status.error);
         }
     }
     FeedGetStats(&st);
-    for (int i = 0; i < 4; ++i) printf("%s trades %lld klines %lld\n", TEST_INS[i].symbol, trades[i], klines[i]);
+    for (int i = 0; i < 4; ++i)
+        printf("%s trades %lld klines %lld tickers %lld\n", TEST_INS[i].symbol, trades[i], klines[i], tickers[i]);
     printf("LIVE: published %ld dropped %ld connects %ld state %ld, mean latency %.1f ms\n",
            st.published, st.dropped, st.connects, st.state, latN ? latSum / 1000.0 / latN : 0.0);
     FeedClose(&r);
     FeedStop();
     WinHttpCloseHandle(hs);
-    return (st.state == FEED_ST_CONNECTED && trades[0] > 0 && klines[0] > 0) ? 0 : 1;
+    return (st.state == FEED_ST_CONNECTED && trades[0] > 0 && klines[0] > 0 && tickers[0] > 0) ? 0 : 1;
 }
 
 // --serve NAME FILE SECONDS: a replaying writer for feed_probe's tests.
@@ -698,6 +889,11 @@ int wmain(int argc, wchar_t** argv) {
     TestRestartOddLock();
     TestReaderBeforeWriter();
     TestReadOnlyClose();
+    TestLayout11();
+    TestTicker24Snapshot();
+    TestTicker24RestartOddLock();
+    TestTicker24OldWriter();
+    TestRestartRace();
     TestSlotsAndWake();
     TestStatusAndHeartbeat();
     TestStress();
@@ -707,6 +903,8 @@ int wmain(int argc, wchar_t** argv) {
     TestParseKline();
     TestParseReordered();
     TestParseRejects();
+    TestParseTicker24();
+    TestStreamPath();
     TestParseFixture();
     TestStopTwice();
     TestReplay();

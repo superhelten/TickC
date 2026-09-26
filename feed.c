@@ -1,5 +1,5 @@
 // feed.c - the TickC feed's writer (phase 54): the ring and the snapshot
-// table in shared memory, the Binance message parser, and FeedThread, which
+// tables in shared memory, the Binance message parser, and FeedThread, which
 // reads Binance's WebSocket stream and publishes it. The contract - the
 // layout and the reader - is feed.h. One writer per mapping: only TickC's
 // main instance starts the feed.
@@ -47,15 +47,27 @@ BOOL FeedWriterOpen(FeedWriter* w, const wchar_t* name, const FeedInstrument* in
     memcpy(h->instruments, ins, count * sizeof(FeedInstrument));
     for (unsigned i = 0; i < FEED_MAX_INSTRUMENTS; ++i) {
         FeedSnapshot* s = &h->snapshots[i];
+        FeedTicker24Snap* t = &h->tickers24[i];
         // A writer that died between FeedPublish's two increments left the
-        // lock odd; even it first so the pair below lands back on even,
-        // not inverted for the rest of this session.
-        if (FeedLoadNoFence64(&s->lock) & 1) InterlockedIncrement64((LONG64 volatile*)&s->lock);
-        InterlockedIncrement64((LONG64 volatile*)&s->lock);
+        // lock odd: that writer is still "inside" the critical section, mid
+        // write. The restart continues that same section instead of closing
+        // it and opening a new one - closing it first (evening the odd lock
+        // before the clear) would let a reader positioned between the close
+        // and the reopen see an even lock over the still half-written
+        // payload and accept it as clean. So only an already-even lock (a
+        // clean exit, or a 1.0 writer's untouched, zeroed 24 h table) gets
+        // the opening increment below; either way the closing increment,
+        // after the clear, is the only place the lock goes back to even
+        // (phase 55: measured torn reads without this, see WORKLOG).
+        if (!(FeedLoadNoFence64(&s->lock) & 1)) InterlockedIncrement64((LONG64 volatile*)&s->lock);
         s->updatedUs = 0;
         memset(&s->trade, 0, sizeof(s->trade));
         memset(&s->kline, 0, sizeof(s->kline));
         InterlockedIncrement64((LONG64 volatile*)&s->lock);
+        if (!(FeedLoadNoFence64(&t->lock) & 1)) InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        t->updatedUs = 0;
+        memset(&t->t, 0, sizeof(t->t));
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
     }
     h->writerPid = GetCurrentProcessId();
     InterlockedExchange(&h->connState, 0);
@@ -103,6 +115,15 @@ void FeedPublish(FeedWriter* w, const FeedEvent* ev) {
         if (ev->type == FEED_TRADE) s->trade = ev->u.trade;
         else                        s->kline = ev->u.kline;
         InterlockedIncrement64((LONG64 volatile*)&s->lock);   // even again
+    }
+    else if (ev->instrument < h->instrumentCount && ev->type == FEED_TICKER24) {
+        // 1.1 (phase 55): the 24 h table, before the ring for the same
+        // reason as the snapshot above.
+        FeedTicker24Snap* t = &h->tickers24[ev->instrument];
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
+        t->updatedUs = ev->tsRecvUs;
+        t->t = ev->u.ticker24;
+        InterlockedIncrement64((LONG64 volatile*)&t->lock);
     }
     seq  = FeedLoadNoFence64(&h->writeSeq);   // only this thread writes it
     slot = FeedSlot(w, seq);
@@ -335,6 +356,18 @@ int FeedParseMessage(const char* msg, size_t len, const FeedInstrument* ins, uns
         if (b) ev->flags = (uint16_t)(ev->flags | FEED_KLINE_CLOSED);
         return FEED_PARSE_OK;
     }
+    if (JsonIs(v, dEnd, "24hrMiniTicker")) {
+        // 1.1 (phase 55): rolling 24 h statistics; a flat object, no "k".
+        ev->type = FEED_TICKER24;
+        if (!JsonMs(JsonKey(d, dEnd, "E"), dEnd, &ev->tsExchangeUs))               return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "o"), dEnd, &ev->u.ticker24.open))        return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "h"), dEnd, &ev->u.ticker24.high))        return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "l"), dEnd, &ev->u.ticker24.low))         return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "c"), dEnd, &ev->u.ticker24.close))       return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "v"), dEnd, &ev->u.ticker24.volume))      return FEED_PARSE_BAD;
+        if (!JsonFixed8(JsonKey(d, dEnd, "q"), dEnd, &ev->u.ticker24.quoteVolume)) return FEED_PARSE_BAD;
+        return FEED_PARSE_OK;
+    }
     return FEED_PARSE_BAD;
 }
 
@@ -444,17 +477,30 @@ static void FeedReplay(void) {
     if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
 }
 
-// "/stream?streams=btcusdt@trade/btcusdt@kline_1m/ethusdt@trade/..."
-static void FeedStreamPath(wchar_t* out, size_t cch) {
-    int n = swprintf_s(out, cch, L"/stream?streams=");
-    for (unsigned i = 0; i < g_feed.cfg.instrumentCount && n > 0; ++i) {
+// "/stream?streams=btcusdt@trade/btcusdt@kline_1m/btcusdt@miniTicker/..."
+// (phase 55: the miniTicker stream, and a length check - _snwprintf_s with
+// _TRUNCATE returns -1 instead of calling the invalid-parameter handler).
+// cch 0 or out NULL is rejected before that first call, for the same reason
+// (final review, phase 55): _snwprintf_s's own _TRUNCATE handling still
+// reaches the invalid-parameter handler when the buffer cannot hold even a
+// NUL, so the guard has to come first, not fall out of the length check.
+int FeedStreamPath(const FeedInstrument* ins, unsigned count, wchar_t* out, size_t cch) {
+    int n;
+    if (cch == 0 || out == NULL) return -1;
+    n = _snwprintf_s(out, cch, _TRUNCATE, L"/stream?streams=");
+    if (n < 0) return -1;
+    for (unsigned i = 0; i < count; ++i) {
         wchar_t sym[16];
-        const char* s = g_feed.cfg.instruments[i].symbol;
-        int k = 0;
-        for (; s[k] && k < 15; ++k) sym[k] = (wchar_t)((s[k] >= 'A' && s[k] <= 'Z') ? s[k] + 32 : s[k]);
+        const char* s = ins[i].symbol;
+        int k = 0, m;
+        for (; k < 15 && s[k]; ++k) sym[k] = (wchar_t)((s[k] >= 'A' && s[k] <= 'Z') ? s[k] + 32 : s[k]);
         sym[k] = 0;
-        n += swprintf_s(out + n, cch - (size_t)n, L"%s%s@trade/%s@kline_1m", i ? L"/" : L"", sym, sym);
+        m = _snwprintf_s(out + n, cch - (size_t)n, _TRUNCATE, L"%s%s@trade/%s@kline_1m/%s@miniTicker",
+                         i ? L"/" : L"", sym, sym, sym);
+        if (m < 0) return -1;
+        n += m;
     }
+    return n;
 }
 
 // Publishes a handle in g_feed under the lock so FeedStop can find and
@@ -502,7 +548,7 @@ static void FeedUnpublish(HINTERNET* slot, HINTERNET* hOwn) {
 // close whichever is open and cancel it at once (phase 54: FeedStop during
 // FeedConnect).
 static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
-    wchar_t path[16 + FEED_MAX_INSTRUMENTS * 48];
+    wchar_t path[FEED_PATH_CCH];
     HINTERNET hr, ws = NULL;
     DWORD status = 0, cb = sizeof(status);
     *hc = NULL;
@@ -513,7 +559,11 @@ static HINTERNET FeedConnect(HINTERNET* hc, DWORD* err) {
     if (!*hc) { *err = GetLastError(); return NULL; }
     if (!FeedPublishHandle(&g_feed.hConnect, *hc)) { *hc = NULL; return NULL; }
 
-    FeedStreamPath(path, sizeof(path) / sizeof(path[0]));
+    if (FeedStreamPath(g_feed.cfg.instruments, g_feed.cfg.instrumentCount, path, FEED_PATH_CCH) < 0) {
+        *err = ERROR_INSUFFICIENT_BUFFER;
+        FeedUnpublish(&g_feed.hConnect, hc);
+        return NULL;
+    }
     hr = WinHttpOpenRequest(*hc, L"GET", path, NULL, WINHTTP_NO_REFERER,
                             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (!hr) {
